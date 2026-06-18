@@ -4,12 +4,13 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Read version from pubspec.yaml
-def pubspecFile = file("../../pubspec.yaml")
-def pubspecContent = pubspecFile.exists() ? pubspecFile.text : "version: 1.0.0+1"
-def versionMatch = (pubspecContent =~ /version:\s*(\d+\.\d+\.\d+)\+(\d+)/)
-def pubspecVersion = versionMatch ? versionMatch[0][1] : "1.0.0"
-def pubspecBuild = versionMatch ? versionMatch[0][2].toInteger() : 1
+val localProperties = java.util.Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+val flutterVersionCode = localProperties.getProperty("flutter.versionCode")?.toIntOrNull() ?: 1
+val flutterVersionName = localProperties.getProperty("flutter.versionName") ?: "1.0.0"
 
 android {
     namespace = "com.termuxforge.app"
@@ -28,8 +29,8 @@ android {
         applicationId = "com.termuxforge.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = pubspecBuild
-        versionName = pubspecVersion
+        versionCode = flutterVersionCode
+        versionName = flutterVersionName
         multiDexEnabled = true
     }
 
