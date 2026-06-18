@@ -1,0 +1,16 @@
+"""
+TermuxForge Python Bridge Requirements
+========================================
+
+Production dependencies for the Python bridge server.
+Install with: pip install -r requirements.txt
+"""
+
+# WebSocket server
+websockets>=12.0,<14.0
+
+# Async HTTP client (used for MCP HTTP transport, media APIs)
+aiohttp>=3.9,<4.0
+
+# Async file I/O (optional, for file operations)
+aiofiles>=23.0,<25.0

@@ -1,0 +1,89 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.32.x"
+  JAVA_VERSION: "17"
+
+jobs:
+  build-release:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          echo "version=$TAG" >> $GITHUB_OUTPUT
+          echo "Building version: $TAG"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Run dart analyze
+        run: dart analyze
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Rename APK with version
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk \
+             build/app/outputs/flutter-apk/termux-forge-${{ steps.version.outputs.version }}.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "TermuxForge v${{ steps.version.outputs.version }}"
+          body: |
+            ## TermuxForge v${{ steps.version.outputs.version }}
+
+            ### Changes
+            See [CHANGELOG.md](CHANGELOG.md) for details.
+
+            ### Installation
+            1. Download `termux-forge-${{ steps.version.outputs.version }}.apk`
+            2. Install on your Android device
+            3. Open the app and follow the setup wizard
+
+            ### Requirements
+            - Android 7.0+ (API 24)
+            - Termux installed
+          files: |
+            build/app/outputs/flutter-apk/termux-forge-${{ steps.version.outputs.version }}.apk
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+
+      - name: Release summary
+        run: |
+          echo "## Release v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Release created successfully" >> $GITHUB_STEP_SUMMARY
+          SIZE=$(du -h build/app/outputs/flutter-apk/termux-forge-${{ steps.version.outputs.version }}.apk | cut -f1)
+          echo "📦 APK Size: $SIZE" >> $GITHUB_STEP_SUMMARY

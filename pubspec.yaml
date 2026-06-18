@@ -1,0 +1,113 @@
+name: termux_forge
+description: "TermuxForge — Mobile Agentic Flutter + Termux IDE"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Material Design
+  cupertino_icons: ^1.0.8
+  google_fonts: ^6.2.1
+  flutter_animate: ^4.5.2
+  animations: ^2.0.11
+  
+  # State Management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+  
+  # Navigation
+  go_router: ^14.8.1
+  
+  # Database / Storage
+  isar: ^4.0.0-dev.14
+  isar_flutter_libs: ^4.0.0-dev.14
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.5.3
+  path_provider: ^2.1.5
+  
+  # Networking
+  dio: ^5.8.0+1
+  web_socket_channel: ^3.0.2
+  
+  # Code Editor
+  re_editor: ^0.9.0
+  re_highlight: ^0.2.0
+  
+  # Terminal
+  xterm: ^4.0.0
+  
+  # File Explorer
+  flutter_fancy_tree_view: ^1.6.0
+  file_picker: ^8.1.7
+  
+  # MCP
+  # mcp_dart: ^2.2.0  # Will uncomment when available
+  
+  # Utilities
+  uuid: ^4.5.1
+  intl: ^0.20.2
+  collection: ^1.19.1
+  equatable: ^2.0.7
+  freezed_annotation: ^3.0.0
+  json_annotation: ^4.9.0
+  logger: ^2.5.0
+  
+  # Platform
+  permission_handler: ^11.3.1
+  share_plus: ^10.1.4
+  url_launcher: ^6.3.1
+  
+  # Markdown
+  flutter_markdown: ^0.7.7+2
+  
+  # Charts for dashboards
+  fl_chart: ^0.70.2
+  
+  # Icons
+  flutter_vector_icons: ^2.0.0
+  
+  # Search
+  fuzzy: ^0.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  riverpod_generator: ^2.6.3
+  build_runner: ^2.4.15
+  freezed: ^3.0.0
+  json_serializable: ^6.9.4
+  isar_generator: ^4.0.0-dev.14
+  mockito: ^5.4.6
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/fonts/
+    - assets/icons/
+    - assets/templates/
+  
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+        - asset: assets/fonts/JetBrainsMono-Bold.ttf
+          weight: 700

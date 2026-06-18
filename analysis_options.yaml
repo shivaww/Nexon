@@ -1,0 +1,99 @@
+# Dart analysis options for TermuxForge
+# https://dart.dev/tools/analysis
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+  errors:
+    # Promote some warnings to errors
+    missing_return: error
+    missing_required_param: error
+    dead_code: warning
+    unused_import: warning
+    unused_local_variable: warning
+    unnecessary_null_comparison: warning
+
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/*.mocks.dart"
+    - "build/**"
+    - ".dart_tool/**"
+    - "lib/generated/**"
+
+linter:
+  rules:
+    # ── Style ─────────────────────────────────────────────────────
+    - always_declare_return_types
+    - always_put_required_named_parameters_first
+    - annotate_overrides
+    - avoid_empty_else
+    - avoid_init_to_null
+    - avoid_print
+    - avoid_redundant_argument_values
+    - avoid_relative_lib_imports
+    - avoid_return_types_on_setters
+    - avoid_unnecessary_containers
+    - avoid_unused_constructor_parameters
+    - avoid_void_async
+    - cancel_subscriptions
+    - close_sinks
+    - constant_identifier_names
+    - curly_braces_in_flow_control_structures
+    - directives_ordering
+    - empty_catches
+    - empty_constructor_bodies
+    - exhaustive_cases
+
+    # ── Documentation ─────────────────────────────────────────────
+    - package_api_docs
+    - slash_for_doc_comments
+
+    # ── Effective Dart ────────────────────────────────────────────
+    - prefer_adjacent_string_concatenation
+    - prefer_collection_literals
+    - prefer_conditional_assignment
+    - prefer_const_constructors
+    - prefer_const_constructors_in_immutables
+    - prefer_const_declarations
+    - prefer_const_literals_to_create_immutables
+    - prefer_expression_function_bodies
+    - prefer_final_fields
+    - prefer_final_in_for_each
+    - prefer_final_locals
+    - prefer_for_elements_to_map_fromIterable
+    - prefer_generic_function_type_aliases
+    - prefer_if_null_operators
+    - prefer_initializing_formals
+    - prefer_interpolation_to_compose_strings
+    - prefer_is_empty
+    - prefer_is_not_empty
+    - prefer_is_not_operator
+    - prefer_null_aware_operators
+    - prefer_single_quotes
+    - prefer_spread_collections
+    - prefer_typing_uninitialized_variables
+
+    # ── Flutter-specific ──────────────────────────────────────────
+    - sized_box_for_whitespace
+    - sort_child_properties_last
+    - use_build_context_synchronously
+    - use_colored_box
+    - use_decorated_box
+    - use_full_hex_values_for_flutter_colors
+    - use_key_in_widget_constructors
+    - use_super_parameters
+
+    # ── Safety ────────────────────────────────────────────────────
+    - no_duplicate_case_values
+    - no_logic_in_create_state
+    - null_closures
+    - throw_in_finally
+    - unnecessary_statements
+    - unrelated_type_equality_checks
+    - valid_regexps
