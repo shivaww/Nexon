@@ -26,12 +26,13 @@ subprojects {
             if (android != null) {
                 android.compileSdk = 35
                 if (android.namespace == null) {
-                val manifestFile = proj.file("src/main/AndroidManifest.xml")
-                if (manifestFile.exists()) {
-                    val content = manifestFile.readText()
-                    val matcher = java.util.regex.Pattern.compile("""package="([^"]+)"""").matcher(content)
-                    if (matcher.find()) {
-                        android.namespace = matcher.group(1)
+                    val manifestFile = proj.file("src/main/AndroidManifest.xml")
+                    if (manifestFile.exists()) {
+                        val content = manifestFile.readText()
+                        val matcher = java.util.regex.Pattern.compile("""package="([^"]+)"""").matcher(content)
+                        if (matcher.find()) {
+                            android.namespace = matcher.group(1)
+                        }
                     }
                 }
             }
