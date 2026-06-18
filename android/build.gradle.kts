@@ -20,11 +20,11 @@ subprojects {
 }
 
 subprojects {
-    afterEvaluate {
+    val configureNamespace: (Project) -> Unit = { proj ->
         try {
-            val android = extensions.findByName("android") as? com.android.build.gradle.LibraryExtension
+            val android = proj.extensions.findByName("android") as? com.android.build.gradle.LibraryExtension
             if (android != null && android.namespace == null) {
-                val manifestFile = file("src/main/AndroidManifest.xml")
+                val manifestFile = proj.file("src/main/AndroidManifest.xml")
                 if (manifestFile.exists()) {
                     val content = manifestFile.readText()
                     val matcher = java.util.regex.Pattern.compile("""package="([^"]+)"""").matcher(content)
@@ -34,5 +34,11 @@ subprojects {
                 }
             }
         } catch (ignored: Exception) {}
+    }
+
+    if (state.executed) {
+        configureNamespace(this)
+    } else {
+        afterEvaluate { configureNamespace(this) }
     }
 }
