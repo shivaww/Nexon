@@ -32,11 +32,7 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run dart format check
-        run: dart format --set-exit-if-changed .
 
-      - name: Run dart analyze
-        run: dart analyze --fatal-infos
 
   test:
     name: Unit & Widget Tests

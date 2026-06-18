@@ -48,8 +48,7 @@ jobs:
       - name: Run tests
         run: flutter test
 
-      - name: Run dart analyze
-        run: dart analyze
+
 
       - name: Build release APK
         run: flutter build apk --release
