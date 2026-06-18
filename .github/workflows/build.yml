@@ -93,11 +93,17 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release || true
 
+      - name: Find generated APKs
+        run: |
+          find . -name "*.apk"
+          mkdir -p apk_output
+          find . -name "*.apk" -exec cp {} apk_output/ \;
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
-          path: build/**/outputs/**/*.apk
+          path: apk_output/*.apk
           retention-days: 14
 
       - name: Build summary
