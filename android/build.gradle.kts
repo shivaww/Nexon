@@ -23,7 +23,9 @@ subprojects {
     val configureNamespace: (Project) -> Unit = { proj ->
         try {
             val android = proj.extensions.findByName("android") as? com.android.build.gradle.LibraryExtension
-            if (android != null && android.namespace == null) {
+            if (android != null) {
+                android.compileSdk = 35
+                if (android.namespace == null) {
                 val manifestFile = proj.file("src/main/AndroidManifest.xml")
                 if (manifestFile.exists()) {
                     val content = manifestFile.readText()
