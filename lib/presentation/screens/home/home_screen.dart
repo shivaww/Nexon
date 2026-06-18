@@ -218,8 +218,8 @@ class _HomeScreenState extends State<HomeScreen>
         IconButton(
           icon: Icon(
             _showRightSidebar
-                ? Icons.right_panel_open_rounded
-                : Icons.right_panel_close_rounded,
+                ? Icons.keyboard_double_arrow_right_rounded
+                : Icons.keyboard_double_arrow_left_rounded,
             size: 20,
           ),
           onPressed: () =>

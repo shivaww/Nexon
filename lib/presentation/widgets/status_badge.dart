@@ -145,6 +145,6 @@ class _PulsingDot extends StatelessWidget {
     )
         .animate(onPlay: (c) => c.repeat(reverse: true))
         .scaleXY(end: 1.4, duration: 800.ms, curve: Curves.easeInOut)
-        .fadeOut(begin: 1, end: 0.5, duration: 800.ms);
+        .fade(end: 0.5, duration: 800.ms);
   }
 }
