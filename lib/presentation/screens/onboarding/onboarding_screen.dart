@@ -15,6 +15,7 @@ import 'package:go_router/go_router.dart';
 import 'package:termux_forge/core/theme/app_colors.dart';
 import 'package:termux_forge/presentation/widgets/glass_card.dart';
 import 'package:termux_forge/presentation/widgets/status_badge.dart';
+import 'package:termux_forge/services/storage/app_storage.dart';
 
 /// The onboarding wizard screen.
 class OnboardingScreen extends StatefulWidget {
@@ -51,7 +52,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         curve: Curves.easeOutCubic,
       );
     } else {
-      // Complete onboarding.
+      // Complete onboarding and persist.
+      AppStorage.saveOnboarded(true);
       context.go('/');
     }
   }
@@ -137,7 +139,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       )
                     else
                       TextButton(
-                        onPressed: () => context.go('/'),
+                        onPressed: () {
+                          AppStorage.saveOnboarded(true);
+                          context.go('/');
+                        },
                         child: const Text('Skip'),
                       ),
                     const Spacer(),

@@ -1,49 +1,97 @@
 /// TermuxForge — Chat Screen
 ///
-/// Agent chat interface with message bubbles, markdown rendering,
-/// code blocks with "Apply" buttons, streaming text animation,
-/// tool call indicators, and cost tracking per message.
+/// Functional LLM chat interface that:
+/// - Loads the first configured provider from AppStorage
+/// - Sends messages to the provider's OpenAI-compatible /chat/completions endpoint
+/// - Streams responses via SSE (Server-Sent Events)
+/// - Supports per-mode system prompts (code, architect, debug, ask, review, plan)
+/// - Persists chat history in shared_preferences via AppStorage
+/// - Renders markdown in assistant messages with code highlighting
 library;
 
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:termux_forge/core/theme/app_colors.dart';
-import 'package:termux_forge/presentation/widgets/agent_avatar.dart';
 import 'package:termux_forge/presentation/widgets/forge_app_bar.dart';
 import 'package:termux_forge/presentation/widgets/glass_card.dart';
-import 'package:termux_forge/presentation/widgets/mode_selector.dart';
-import 'package:termux_forge/presentation/widgets/status_badge.dart';
+import 'package:termux_forge/services/storage/app_storage.dart';
 
-/// A single chat message model (local UI model).
+// ─────────────────────────────────────────────────
+//  Constants
+// ─────────────────────────────────────────────────
+
+const _kSystemPrompts = <String, String>{
+  'code':
+      'You are an expert programmer. Write clean, efficient code. Explain your approach briefly.',
+  'architect':
+      'You are a software architect. Design scalable systems and explain trade-offs.',
+  'debug':
+      'You are a debugging expert. Analyze errors systematically and provide fixes.',
+  'ask':
+      'You are a helpful AI assistant. Answer questions clearly and concisely.',
+  'review':
+      'You are a code reviewer. Analyze code for bugs, performance, and best practices.',
+  'plan':
+      'You are a project planner. Break down tasks, estimate effort, and create actionable plans.',
+};
+
+const _kModes = ['code', 'architect', 'debug', 'ask', 'review', 'plan'];
+
+const _kModeIcons = <String, IconData>{
+  'code': Icons.code_rounded,
+  'architect': Icons.architecture_rounded,
+  'debug': Icons.bug_report_rounded,
+  'ask': Icons.chat_rounded,
+  'review': Icons.rate_review_rounded,
+  'plan': Icons.assignment_rounded,
+};
+
+// ─────────────────────────────────────────────────
+//  Chat Message Model
+// ─────────────────────────────────────────────────
+
 class _ChatMessage {
-  const _ChatMessage({
+  _ChatMessage({
     required this.role,
     required this.content,
     required this.timestamp,
-    this.agentType = 'orchestrator',
-    this.model,
-    this.toolCalls = const [],
-    this.fileRefs = const [],
-    this.cost,
     this.isStreaming = false,
   });
 
-  final String role; // 'user' | 'agent'
-  final String content;
+  final String role; // 'user' | 'assistant'
+  String content;
   final DateTime timestamp;
-  final String agentType;
-  final String? model;
-  final List<String> toolCalls;
-  final List<String> fileRefs;
-  final double? cost;
-  final bool isStreaming;
+  bool isStreaming;
+
+  Map<String, dynamic> toJson() => {
+        'role': role,
+        'content': content,
+        'timestamp': timestamp.toIso8601String(),
+      };
+
+  factory _ChatMessage.fromJson(Map<String, dynamic> json) => _ChatMessage(
+        role: json['role'] as String,
+        content: json['content'] as String,
+        timestamp: DateTime.parse(json['timestamp'] as String),
+      );
+
+  /// Convert to the OpenAI messages format.
+  Map<String, String> toApiMessage() => {
+        'role': role,
+        'content': content,
+      };
 }
 
-/// The agent chat screen.
+// ─────────────────────────────────────────────────
+//  Chat Screen
+// ─────────────────────────────────────────────────
+
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -54,71 +102,365 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
-  String _currentMode = 'code';
-  String _selectedAgent = 'orchestrator';
 
-  // Demo messages.
-  final List<_ChatMessage> _messages = [
-    _ChatMessage(
-      role: 'user',
-      content: 'Create a Flutter login screen with email and password fields.',
-      timestamp: DateTime.now().subtract(const Duration(minutes: 5)),
-    ),
-    _ChatMessage(
-      role: 'agent',
-      content:
-          "I'll create a beautiful login screen for you. Let me set up the "
-          "file structure first.\n\n"
-          "```dart\n"
-          "class LoginScreen extends StatefulWidget {\n"
-          "  const LoginScreen({super.key});\n\n"
-          "  @override\n"
-          "  State<LoginScreen> createState() => _LoginScreenState();\n"
-          "}\n"
-          "```\n\n"
-          "I've created the login screen with:\n"
-          "- Email text field with validation\n"
-          "- Password field with visibility toggle\n"
-          "- Animated submit button\n"
-          "- Error handling",
-      timestamp: DateTime.now().subtract(const Duration(minutes: 4)),
-      agentType: 'coder',
-      model: 'Claude 4 Sonnet',
-      toolCalls: ['write_file', 'read_file'],
-      fileRefs: ['lib/screens/login_screen.dart'],
-      cost: 0.0023,
-    ),
-  ];
+  // Provider state
+  Map<String, dynamic>? _provider;
+  String? _apiKey;
+  String? _modelName;
+  bool _providerLoading = true;
+  String? _providerError;
+
+  // Chat state
+  final List<_ChatMessage> _messages = [];
+  String _currentMode = 'ask';
+  bool _isGenerating = false;
+  HttpClient? _httpClient;
+  StreamSubscription<dynamic>? _activeStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _httpClient = HttpClient();
+    _loadInitialState();
+  }
+
+  Future<void> _loadInitialState() async {
+    await Future.wait([
+      _loadProvider(),
+      _loadMode(),
+      _loadMessages(),
+    ]);
+  }
+
+  Future<void> _loadProvider() async {
+    try {
+      final providers = await AppStorage.loadProviders();
+      if (providers.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _providerLoading = false;
+            _providerError = 'No API provider configured';
+          });
+        }
+        return;
+      }
+
+      final provider = providers.first;
+      final providerId = provider['id'] as String? ?? '';
+      final apiKey = await AppStorage.getApiKey(providerId);
+
+      if (apiKey == null || apiKey.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _providerLoading = false;
+            _providerError = 'No API key found for ${provider['name'] ?? providerId}';
+          });
+        }
+        return;
+      }
+
+      // Determine model name — use 'defaultModel' or 'models' list or provider name
+      String modelName = 'gpt-3.5-turbo';
+      if (provider['defaultModel'] != null) {
+        modelName = provider['defaultModel'] as String;
+      } else if (provider['models'] is List && (provider['models'] as List).isNotEmpty) {
+        modelName = (provider['models'] as List).first.toString();
+      } else if (provider['model'] != null) {
+        modelName = provider['model'] as String;
+      }
+
+      if (mounted) {
+        setState(() {
+          _provider = provider;
+          _apiKey = apiKey;
+          _modelName = modelName;
+          _providerLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _providerLoading = false;
+          _providerError = 'Failed to load provider: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _loadMode() async {
+    final mode = await AppStorage.getSelectedMode();
+    if (mounted && _kSystemPrompts.containsKey(mode)) {
+      setState(() => _currentMode = mode);
+    }
+  }
+
+  Future<void> _loadMessages() async {
+    try {
+      final saved = await AppStorage.loadChatMessages();
+      if (mounted && saved.isNotEmpty) {
+        setState(() {
+          _messages.addAll(saved.map((m) => _ChatMessage.fromJson(m)));
+        });
+        _scrollToBottom();
+      }
+    } catch (_) {
+      // Corrupted data — start fresh
+    }
+  }
+
+  Future<void> _saveMessages() async {
+    final data = _messages
+        .where((m) => !m.isStreaming || m.content.isNotEmpty)
+        .map((m) => m.toJson())
+        .toList();
+    await AppStorage.saveChatMessages(data);
+  }
 
   @override
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
+    _activeStream?.cancel();
+    _httpClient?.close(force: true);
     super.dispose();
   }
 
-  void _sendMessage() {
+  // ─────────────────────────────────────────────────
+  //  Send Message & Stream Response
+  // ─────────────────────────────────────────────────
+
+  Future<void> _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isGenerating) return;
+    if (_provider == null || _apiKey == null) return;
+
+    // Add user message
+    final userMsg = _ChatMessage(
+      role: 'user',
+      content: text,
+      timestamp: DateTime.now(),
+    );
+
     setState(() {
-      _messages.add(_ChatMessage(
-        role: 'user',
-        content: text,
-        timestamp: DateTime.now(),
-      ));
+      _messages.add(userMsg);
       _controller.clear();
+      _isGenerating = true;
     });
-    // Scroll to bottom.
-    Future.delayed(const Duration(milliseconds: 100), () {
+    _scrollToBottom();
+    await _saveMessages();
+
+    // Add placeholder assistant message
+    final assistantMsg = _ChatMessage(
+      role: 'assistant',
+      content: '',
+      timestamp: DateTime.now(),
+      isStreaming: true,
+    );
+    setState(() => _messages.add(assistantMsg));
+    _scrollToBottom();
+
+    try {
+      await _streamCompletion(assistantMsg);
+    } catch (e) {
+      setState(() {
+        assistantMsg.content = _formatError(e);
+        assistantMsg.isStreaming = false;
+        _isGenerating = false;
+      });
+    }
+    await _saveMessages();
+  }
+
+  Future<void> _streamCompletion(_ChatMessage assistantMsg) async {
+    final baseUrl = (_provider!['baseUrl'] as String? ?? '').replaceAll(RegExp(r'/+$'), '');
+    final endpoint = '$baseUrl/chat/completions';
+
+    // Build messages array with system prompt
+    final apiMessages = <Map<String, String>>[
+      {'role': 'system', 'content': _kSystemPrompts[_currentMode] ?? _kSystemPrompts['ask']!},
+      ..._messages
+          .where((m) => !m.isStreaming && m.content.isNotEmpty)
+          .map((m) => m.toApiMessage()),
+    ];
+
+    final body = jsonEncode({
+      'model': _modelName,
+      'messages': apiMessages,
+      'stream': true,
+    });
+
+    final uri = Uri.parse(endpoint);
+    final request = await _httpClient!.openUrl('POST', uri);
+    request.headers.set('Authorization', 'Bearer $_apiKey');
+    request.headers.set('Content-Type', 'application/json');
+    request.headers.set('Accept', 'text/event-stream');
+    request.add(utf8.encode(body));
+
+    final response = await request.close();
+
+    if (response.statusCode != 200) {
+      final errorBody = await response.transform(utf8.decoder).join();
+      String errorMsg;
+      try {
+        final errorJson = jsonDecode(errorBody) as Map<String, dynamic>;
+        errorMsg = (errorJson['error'] is Map)
+            ? (errorJson['error']['message'] ?? errorBody).toString()
+            : errorBody;
+      } catch (_) {
+        errorMsg = errorBody;
+      }
+      throw HttpException('API error ${response.statusCode}: $errorMsg');
+    }
+
+    // Parse SSE stream
+    final completer = Completer<void>();
+    String buffer = '';
+
+    _activeStream = response.transform(utf8.decoder).listen(
+      (chunk) {
+        buffer += chunk;
+        final lines = buffer.split('\n');
+        // Keep the last potentially incomplete line in the buffer
+        buffer = lines.removeLast();
+
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty) continue;
+          if (!trimmed.startsWith('data: ')) continue;
+
+          final data = trimmed.substring(6);
+          if (data == '[DONE]') continue;
+
+          try {
+            final json = jsonDecode(data) as Map<String, dynamic>;
+            final choices = json['choices'] as List<dynamic>?;
+            if (choices != null && choices.isNotEmpty) {
+              final delta = (choices[0] as Map<String, dynamic>)['delta'] as Map<String, dynamic>?;
+              if (delta != null && delta['content'] != null) {
+                final token = delta['content'] as String;
+                if (mounted) {
+                  setState(() {
+                    assistantMsg.content += token;
+                  });
+                  _scrollToBottom();
+                }
+              }
+            }
+          } catch (_) {
+            // Skip malformed JSON chunks
+          }
+        }
+      },
+      onDone: () {
+        if (mounted) {
+          setState(() {
+            assistantMsg.isStreaming = false;
+            _isGenerating = false;
+          });
+        }
+        _activeStream = null;
+        if (!completer.isCompleted) completer.complete();
+      },
+      onError: (Object error) {
+        if (mounted) {
+          setState(() {
+            if (assistantMsg.content.isEmpty) {
+              assistantMsg.content = _formatError(error);
+            }
+            assistantMsg.isStreaming = false;
+            _isGenerating = false;
+          });
+        }
+        _activeStream = null;
+        if (!completer.isCompleted) completer.complete();
+      },
+      cancelOnError: true,
+    );
+
+    return completer.future;
+  }
+
+  String _formatError(Object error) {
+    final msg = error.toString();
+    if (msg.contains('SocketException') || msg.contains('Connection refused')) {
+      return '⚠️ **Connection failed**\n\nCould not reach the API server. Please check:\n- Your internet connection\n- The provider\'s base URL is correct\n- The API server is running';
+    }
+    if (msg.contains('HandshakeException') || msg.contains('CERTIFICATE')) {
+      return '⚠️ **SSL/TLS Error**\n\nCould not establish a secure connection. The server\'s certificate may be invalid.';
+    }
+    if (msg.contains('401') || msg.contains('Unauthorized')) {
+      return '⚠️ **Authentication failed**\n\nYour API key appears to be invalid or expired. Go to **Models** settings to update it.';
+    }
+    if (msg.contains('429') || msg.contains('rate limit')) {
+      return '⚠️ **Rate limited**\n\nToo many requests. Please wait a moment and try again.';
+    }
+    if (msg.contains('API error')) {
+      return '⚠️ **API Error**\n\n${msg.replaceFirst('HttpException: ', '')}';
+    }
+    return '⚠️ **Error**\n\n$msg';
+  }
+
+  void _stopGeneration() {
+    _activeStream?.cancel();
+    _activeStream = null;
+    setState(() {
+      _isGenerating = false;
+      if (_messages.isNotEmpty && _messages.last.isStreaming) {
+        _messages.last.isStreaming = false;
+        if (_messages.last.content.isEmpty) {
+          _messages.last.content = '*(Generation stopped)*';
+        }
+      }
+    });
+    _saveMessages();
+  }
+
+  void _clearChat() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.backgroundSecondary,
+        title: const Text('Clear Chat'),
+        content: const Text('Delete all messages in this conversation?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() => _messages.clear());
+              _saveMessages();
+            },
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onModeChanged(String mode) {
+    setState(() => _currentMode = mode);
+    AppStorage.saveSelectedMode(mode);
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
         );
       }
     });
   }
+
+  // ─────────────────────────────────────────────────
+  //  Build
+  // ─────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -126,86 +468,153 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: ForgeAppBar(
         title: 'Chat',
         currentMode: _currentMode,
-        currentModel: 'Claude 4 Sonnet',
+        currentModel: _modelName,
         showBackButton: true,
-        onModeTap: () => _showModeSelector(context),
-      ),
-      body: Column(
-        children: [
-          // ── Agent selector + mode bar ──
-          _buildHeaderBar(context),
-
-          // ── Message list ──
-          Expanded(
-            child: _messages.isEmpty
-                ? _buildEmptyState(context)
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                    itemCount: _messages.length,
-                    itemBuilder: (_, i) => _MessageBubble(
-                      message: _messages[i],
-                      isLast: i == _messages.length - 1,
-                    ).animate().fadeIn(
-                      delay: Duration(milliseconds: i * 50),
-                      duration: 250.ms,
-                    ),
-                  ),
-          ),
-
-          // ── Input bar ──
-          _buildInputBar(context),
+        actions: [
+          if (_messages.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded, size: 20),
+              onPressed: _clearChat,
+              tooltip: 'Clear chat',
+            ),
         ],
+      ),
+      body: _providerLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _providerError != null
+              ? _buildNoProviderState(context)
+              : Column(
+                  children: [
+                    _buildModeChips(context),
+                    Expanded(
+                      child: _messages.isEmpty
+                          ? _buildEmptyState(context)
+                          : _buildMessageList(context),
+                    ),
+                    _buildInputBar(context),
+                  ],
+                ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────
+  //  No Provider State
+  // ─────────────────────────────────────────────────
+
+  Widget _buildNoProviderState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: GlassCard(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.cloud_off_rounded,
+                  size: 48,
+                  color: AppColors.warning,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'No API Configured',
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _providerError ?? 'Add an API provider to start chatting.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: () => Navigator.pushNamed(context, '/models'),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Configure Provider'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.accentBlue,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildHeaderBar(BuildContext context) {
+  // ─────────────────────────────────────────────────
+  //  Mode Chip Bar
+  // ─────────────────────────────────────────────────
+
+  Widget _buildModeChips(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
         color: AppColors.backgroundSecondary,
         border: Border(bottom: BorderSide(color: AppColors.borderSubtle)),
       ),
-      child: Row(
-        children: [
-          // Agent selector.
-          InkWell(
-            borderRadius: BorderRadius.circular(20),
-            onTap: () => _showAgentSelector(context),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AgentAvatar(
-                  agentType: _selectedAgent,
-                  size: AvatarSize.small,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  _selectedAgent.toUpperCase(),
-                  style: const TextStyle(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: _kModes.map((mode) {
+            final isSelected = mode == _currentMode;
+            final color = AppColors.modeColor(mode);
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: FilterChip(
+                selected: isSelected,
+                label: Text(
+                  mode[0].toUpperCase() + mode.substring(1),
+                  style: TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    color: isSelected ? color : AppColors.textSecondary,
                   ),
                 ),
-                const Icon(Icons.arrow_drop_down_rounded, size: 18),
-              ],
-            ),
-          ),
-          const Spacer(),
-          // Battle mode toggle.
-          IconButton(
-            icon: const Icon(Icons.compare_arrows_rounded, size: 18),
-            onPressed: () {},
-            tooltip: 'Battle Mode',
-          ),
-        ],
+                avatar: Icon(
+                  _kModeIcons[mode] ?? Icons.circle,
+                  size: 16,
+                  color: isSelected ? color : AppColors.textTertiary,
+                ),
+                selectedColor: color.withValues(alpha: 0.15),
+                backgroundColor: AppColors.backgroundTertiary,
+                side: BorderSide(
+                  color: isSelected ? color.withValues(alpha: 0.4) : AppColors.borderSubtle,
+                  width: isSelected ? 1.2 : 0.5,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                showCheckmark: false,
+                onSelected: (_) => _onModeChanged(mode),
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            );
+          }).toList(),
+        ),
       ),
     );
   }
+
+  // ─────────────────────────────────────────────────
+  //  Empty State
+  // ─────────────────────────────────────────────────
 
   Widget _buildEmptyState(BuildContext context) {
     return Center(
@@ -218,10 +627,10 @@ class _ChatScreenState extends State<ChatScreen> {
               gradient: AppColors.cardGradient,
               shape: BoxShape.circle,
             ),
-            child: const Icon(
-              Icons.chat_bubble_outline_rounded,
+            child: Icon(
+              _kModeIcons[_currentMode] ?? Icons.chat_bubble_outline_rounded,
               size: 48,
-              color: AppColors.accentBlue,
+              color: AppColors.modeColor(_currentMode),
             ),
           ),
           const SizedBox(height: 20),
@@ -230,15 +639,40 @@ class _ChatScreenState extends State<ChatScreen> {
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 8),
-          Text(
-            'Ask the agent to write code, debug, or explain concepts.',
-            style: Theme.of(context).textTheme.bodyMedium,
-            textAlign: TextAlign.center,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 48),
+            child: Text(
+              'Using $_modelName in ${_currentMode.toUpperCase()} mode',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+              textAlign: TextAlign.center,
+            ),
           ),
         ],
       ),
     );
   }
+
+  // ─────────────────────────────────────────────────
+  //  Message List
+  // ─────────────────────────────────────────────────
+
+  Widget _buildMessageList(BuildContext context) {
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      itemCount: _messages.length,
+      itemBuilder: (_, i) => _MessageBubble(
+        message: _messages[i],
+        modelName: _modelName,
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────
+  //  Input Bar
+  // ─────────────────────────────────────────────────
 
   Widget _buildInputBar(BuildContext context) {
     return Container(
@@ -255,22 +689,18 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Attach button.
-          IconButton(
-            icon: const Icon(Icons.attach_file_rounded, size: 20),
-            onPressed: () {},
-            tooltip: 'Attach file',
-          ),
-          // Text field.
           Expanded(
             child: TextField(
               controller: _controller,
               maxLines: 5,
               minLines: 1,
+              enabled: !_isGenerating,
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _sendMessage(),
               decoration: InputDecoration(
-                hintText: 'Message ${_selectedAgent}...',
+                hintText: _isGenerating
+                    ? 'Generating response...'
+                    : 'Message ($_currentMode mode)...',
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 10,
@@ -282,82 +712,40 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           const SizedBox(width: 8),
-          // Send button.
-          IconButton.filled(
-            onPressed: _sendMessage,
-            icon: const Icon(Icons.send_rounded, size: 18),
-          ),
+          _isGenerating
+              ? IconButton.filled(
+                  onPressed: _stopGeneration,
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppColors.error.withValues(alpha: 0.2),
+                  ),
+                  icon: const Icon(
+                    Icons.stop_rounded,
+                    size: 20,
+                    color: AppColors.error,
+                  ),
+                )
+              : IconButton.filled(
+                  onPressed: _sendMessage,
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                ),
         ],
-      ),
-    );
-  }
-
-  void _showModeSelector(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SizedBox(
-        height: 420,
-        child: ModeSelector(
-          currentMode: _currentMode,
-          scrollDirection: Axis.vertical,
-          onModeChanged: (m) {
-            setState(() => _currentMode = m);
-            Navigator.pop(ctx);
-          },
-        ),
-      ),
-    );
-  }
-
-  void _showAgentSelector(BuildContext context) {
-    final agents = [
-      'orchestrator',
-      'coder',
-      'architect',
-      'debugger',
-      'reviewer',
-      'devops',
-      'researcher',
-      'tester',
-      'documenter',
-      'security',
-    ];
-
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => ListView.builder(
-        shrinkWrap: true,
-        padding: const EdgeInsets.all(8),
-        itemCount: agents.length,
-        itemBuilder: (_, i) {
-          final agent = agents[i];
-          return ListTile(
-            leading: AgentAvatar(agentType: agent, size: AvatarSize.small),
-            title: Text(agent[0].toUpperCase() + agent.substring(1)),
-            selected: agent == _selectedAgent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            onTap: () {
-              setState(() => _selectedAgent = agent);
-              Navigator.pop(ctx);
-            },
-          );
-        },
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────────
-//  Message Bubble
+//  Message Bubble Widget
 // ─────────────────────────────────────────────────
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, this.isLast = false});
+  const _MessageBubble({
+    required this.message,
+    this.modelName,
+  });
 
   final _ChatMessage message;
-  final bool isLast;
+  final String? modelName;
 
   bool get _isUser => message.role == 'user';
 
@@ -371,9 +759,18 @@ class _MessageBubble extends StatelessWidget {
             _isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           if (!_isUser) ...[
-            AgentAvatar(
-              agentType: message.agentType,
-              size: AvatarSize.small,
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                gradient: AppColors.accentGlow,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.auto_awesome_rounded,
+                size: 16,
+                color: Colors.white,
+              ),
             ),
             const SizedBox(width: 10),
           ],
@@ -382,7 +779,7 @@ class _MessageBubble extends StatelessWidget {
               crossAxisAlignment:
                   _isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
-                // Agent name + model badge.
+                // Agent label + model
                 if (!_isUser)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
@@ -390,30 +787,42 @@ class _MessageBubble extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          message.agentType[0].toUpperCase() +
-                              message.agentType.substring(1),
+                          'Assistant',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.agentColor(message.agentType),
+                            color: AppColors.accentBlue,
                           ),
                         ),
-                        if (message.model != null) ...[
+                        if (modelName != null) ...[
                           const SizedBox(width: 8),
-                          StatusBadge(
-                            label: message.model!,
-                            color: AppColors.accentPurple,
-                            size: BadgeSize.small,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.accentPurple.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              modelName!,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: AppColors.accentPurple,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
                           ),
                         ],
                       ],
                     ),
                   ),
 
-                // Message body.
+                // Message body
                 Container(
                   constraints: BoxConstraints(
-                    maxWidth: MediaQuery.sizeOf(context).width * 0.75,
+                    maxWidth: MediaQuery.sizeOf(context).width * 0.78,
                   ),
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
@@ -433,86 +842,203 @@ class _MessageBubble extends StatelessWidget {
                       width: 0.5,
                     ),
                   ),
-                  child: MarkdownBody(
-                    data: message.content,
-                    selectable: true,
-                    styleSheet: MarkdownStyleSheet.fromTheme(
-                      Theme.of(context),
-                    ).copyWith(
-                      p: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textPrimary,
-                        height: 1.5,
-                      ),
-                      code: GoogleFonts.jetBrainsMono(
-                        fontSize: 13,
-                        color: AppColors.accentBlue,
-                        backgroundColor: AppColors.backgroundPrimary,
-                      ),
-                      codeblockDecoration: BoxDecoration(
-                        color: AppColors.backgroundPrimary,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: AppColors.borderSubtle),
-                      ),
-                      codeblockPadding: const EdgeInsets.all(12),
-                    ),
-                  ),
+                  child: message.isStreaming && message.content.isEmpty
+                      ? _buildTypingIndicator()
+                      : _isUser
+                          ? SelectableText(
+                              message.content,
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: AppColors.textPrimary,
+                                    height: 1.5,
+                                  ),
+                            )
+                          : _buildMarkdownBody(context),
                 ),
 
-                // ── Tool calls ──
-                if (message.toolCalls.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 4,
-                    children: message.toolCalls.map((tool) {
-                      return StatusBadge(
-                        label: tool,
-                        color: AppColors.accentTeal,
-                        size: BadgeSize.small,
-                        icon: Icons.build_rounded,
-                      );
-                    }).toList(),
-                  ),
-                ],
-
-                // ── File references ──
-                if (message.fileRefs.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 4,
-                    children: message.fileRefs.map((file) {
-                      return ActionChip(
-                        avatar: const Icon(
-                          Icons.insert_drive_file_outlined,
-                          size: 14,
+                // Streaming indicator
+                if (message.isStreaming && message.content.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5,
+                            color: AppColors.accentBlue,
+                          ),
                         ),
-                        label: Text(
-                          file.split('/').last,
-                          style: const TextStyle(fontSize: 11),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'Generating...',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppColors.textTertiary,
+                          ),
                         ),
-                        onPressed: () {
-                          // TODO: Open file in editor.
-                        },
-                        visualDensity: VisualDensity.compact,
-                      );
-                    }).toList(),
-                  ),
-                ],
-
-                // ── Cost ──
-                if (message.cost != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    '\$${message.cost!.toStringAsFixed(4)}',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: AppColors.textTertiary,
+                      ],
                     ),
                   ),
-                ],
+
+                // Timestamp
+                if (!message.isStreaming)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _formatTime(message.timestamp),
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: AppColors.textTertiary,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
+          if (_isUser) ...[
+            const SizedBox(width: 10),
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: AppColors.accentBlue.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.person_rounded,
+                size: 16,
+                color: AppColors.accentBlue,
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildTypingIndicator() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (i) {
+        return Padding(
+          padding: EdgeInsets.only(left: i > 0 ? 4 : 0),
+          child: _PulsingDot(delay: Duration(milliseconds: i * 200)),
+        );
+      }),
+    );
+  }
+
+  Widget _buildMarkdownBody(BuildContext context) {
+    return MarkdownBody(
+      data: message.content,
+      selectable: true,
+      styleSheet: MarkdownStyleSheet.fromTheme(
+        Theme.of(context),
+      ).copyWith(
+        p: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.textPrimary,
+              height: 1.5,
+            ),
+        code: GoogleFonts.jetBrainsMono(
+          fontSize: 13,
+          color: AppColors.accentBlue,
+          backgroundColor: AppColors.backgroundPrimary,
+        ),
+        codeblockDecoration: BoxDecoration(
+          color: AppColors.backgroundPrimary,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.borderSubtle),
+        ),
+        codeblockPadding: const EdgeInsets.all(12),
+        blockquoteDecoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(
+              color: AppColors.accentBlue.withValues(alpha: 0.5),
+              width: 3,
+            ),
+          ),
+        ),
+        blockquotePadding: const EdgeInsets.only(left: 12),
+        h1: Theme.of(context).textTheme.titleLarge?.copyWith(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+        h2: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+        h3: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+        listBullet: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+            ),
+      ),
+    );
+  }
+
+  String _formatTime(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+}
+
+// ─────────────────────────────────────────────────
+//  Pulsing Dot (typing indicator)
+// ─────────────────────────────────────────────────
+
+class _PulsingDot extends StatefulWidget {
+  const _PulsingDot({this.delay = Duration.zero});
+  final Duration delay;
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _animation = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+    Future.delayed(widget.delay, () {
+      if (mounted) _ctrl.repeat(reverse: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (_, __) => Opacity(
+        opacity: _animation.value,
+        child: Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: AppColors.accentBlue,
+            shape: BoxShape.circle,
+          ),
+        ),
       ),
     );
   }

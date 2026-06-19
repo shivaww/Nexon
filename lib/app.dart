@@ -1,10 +1,7 @@
 /// TermuxForge — Root Application Widget
 ///
-/// Configures [MaterialApp.router] with:
-/// - GoRouter navigation
-/// - Material 3 dark/light themes
-/// - Google Fonts typography
-/// - Global error handling
+/// Configures [MaterialApp.router] with GoRouter navigation,
+/// Material 3 dark theme, and Google Fonts typography.
 library;
 
 import 'package:flutter/material.dart';
@@ -15,12 +12,12 @@ import 'package:termux_forge/core/theme/app_theme.dart';
 import 'package:go_router/go_router.dart';
 
 /// Root widget for the TermuxForge application.
-///
-/// Uses [ConsumerStatefulWidget] to access Riverpod providers for
-/// theme mode and onboarding state.
 class TermuxForgeApp extends ConsumerStatefulWidget {
   /// Creates the [TermuxForgeApp].
-  const TermuxForgeApp({super.key});
+  const TermuxForgeApp({super.key, this.isOnboarded = false});
+
+  /// Whether the user has completed onboarding.
+  final bool isOnboarded;
 
   @override
   ConsumerState<TermuxForgeApp> createState() => _TermuxForgeAppState();
@@ -32,8 +29,7 @@ class _TermuxForgeAppState extends ConsumerState<TermuxForgeApp> {
   @override
   void initState() {
     super.initState();
-    // TODO: Read isOnboarded from shared_preferences or Isar.
-    _router = createRouter(isOnboarded: false);
+    _router = createRouter(isOnboarded: widget.isOnboarded);
   }
 
   @override
@@ -44,9 +40,6 @@ class _TermuxForgeAppState extends ConsumerState<TermuxForgeApp> {
 
   @override
   Widget build(BuildContext context) {
-    // TODO: Watch a themeMode provider for live toggling.
-    // final themeMode = ref.watch(themeModeProvider);
-
     return MaterialApp.router(
       title: 'TermuxForge',
       debugShowCheckedModeBanner: false,
@@ -54,14 +47,13 @@ class _TermuxForgeAppState extends ConsumerState<TermuxForgeApp> {
       // ── Theme ──
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.dark, // Default to dark.
+      themeMode: ThemeMode.dark,
 
       // ── Router ──
       routerConfig: _router,
 
       // ── Global error widget ──
       builder: (context, child) {
-        // Wrap in a global error boundary.
         ErrorWidget.builder = (details) => _AppErrorWidget(details: details);
         return child ?? const SizedBox.shrink();
       },
