@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -382,11 +383,20 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await _saveSessions();
   }
 
-  static const String searchSystemPrompt =
-      "You have access to a web search tool. If you need to search the web for information to answer the user's request, "
-      "you MUST output a single search query in the format: [SEARCH_REQUEST: your search query] and stop generating further text. "
-      "Do not explain that you are searching, just output the request tag. "
-      "Once the search results are provided to you, use them to formulate your final response.";
+  static const String mcpAndSearchSystemPrompt =
+      "You have access to a web search tool and local Termux file system tools.\n"
+      "If you need to search the web, output a single line: [SEARCH_REQUEST: your search query] and stop generating.\n"
+      "If you need to use the local file system MCP server, output a single line: [MCP_REQUEST: {\"method\": \"...\", \"params\": {...}}] and stop generating.\n"
+      "MCP methods available:\n"
+      "- file_read: params {path: string}\n"
+      "- file_write: params {path: string, content: string}\n"
+      "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
+      "- file_delete: params {path: string}\n"
+      "- dir_list: params {path: string}\n"
+      "- dir_create: params {path: string}\n"
+      "- code_search: params {path: string, query: string}\n"
+      "- file_search: params {path: string, pattern: string}\n"
+      "Once results are provided, continue your response.";
 
   Future<void> _sendMessage() async {
     final prompt = _messageController.text.trim();
@@ -464,7 +474,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final List<ChatMessage> historyForApi = [
           if (_searchSettings.enabled)
-            const ChatMessage(role: MessageRole.system, text: searchSystemPrompt),
+            const ChatMessage(role: MessageRole.system, text: mcpAndSearchSystemPrompt),
           ..._sessions[sessionIndex].messages
               .take(assistantMessageIndex)
               .toList(),
@@ -550,14 +560,15 @@ class _ChatHomePageState extends State<ChatHomePage> {
           _scrollToBottom();
         }
 
-        // Check if LLM requested web search
         final searchRegex = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]');
-        final match = searchRegex.firstMatch(fullText);
-        if (_searchSettings.enabled && match != null) {
-          final query = match.group(1)?.trim() ?? '';
+        final mcpRegex = RegExp(r'\[MCP_REQUEST:\s*(\{.*?\})\s*\]', dotAll: true);
+        final searchMatch = searchRegex.firstMatch(fullText);
+        final mcpMatch = mcpRegex.firstMatch(fullText);
+
+        if (_searchSettings.enabled && searchMatch != null) {
+          final query = searchMatch.group(1)?.trim() ?? '';
           searchCount++;
 
-          // Display search tag in UI
           setState(() {
             final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
             if (assistantMessageIndex < msgs.length) {
@@ -570,18 +581,67 @@ class _ChatHomePageState extends State<ChatHomePage> {
             }
           });
 
-          // Perform actual search
-          final searchResult = await _chatClient.searchWeb(
+          final searchResultRaw = await _chatClient.searchWeb(
             query,
             _searchSettings.provider,
             _searchSettings.apiKey,
             googleCx: _searchSettings.googleCx,
           );
+          
+          String searchResult = searchResultRaw;
+          if (searchResult.length > 4000) {
+            searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
+          }
 
-          // Append search result as a system message
           final resultsMessage = ChatMessage(
             role: MessageRole.system,
             text: "Web Search results for '$query':\n\n$searchResult",
+          );
+
+          setState(() {
+            _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+              messages: [..._sessions[sessionIndex].messages, resultsMessage],
+            );
+          });
+
+          if (targetSessionId == _activeSessionId) {
+            _scrollToBottom();
+          }
+        } else if (mcpMatch != null) {
+          final jsonString = mcpMatch.group(1)?.trim() ?? '';
+          searchCount++;
+
+          setState(() {
+            final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+            if (assistantMessageIndex < msgs.length) {
+              msgs[assistantMessageIndex] = ChatMessage(
+                role: MessageRole.assistant,
+                text: '[MCP_REQUEST: $jsonString]',
+                reasoning: reasoningText,
+              );
+              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+            }
+          });
+
+          String mcpResult = '';
+          try {
+            final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+            final request = await client.postUrl(Uri.parse('http://127.0.0.1:8390/mcp'));
+            request.headers.contentType = ContentType.json;
+            request.write(jsonString);
+            final response = await request.close();
+            final body = await response.transform(utf8.decoder).join();
+            mcpResult = body;
+            if (mcpResult.length > 6000) {
+              mcpResult = mcpResult.substring(0, 6000) + '\n\n...[truncated due to length]';
+            }
+          } catch (e) {
+            mcpResult = '{"error": "$e"}';
+          }
+
+          final resultsMessage = ChatMessage(
+            role: MessageRole.system,
+            text: "MCP Result:\n\n$mcpResult",
           );
 
           setState(() {
@@ -2133,6 +2193,8 @@ class Composer extends StatelessWidget {
 }
 
 bool modelHasVision(String modelName) {
+  if (ChatClient.modelsWithVision.contains(modelName)) return true;
+
   final lower = modelName.toLowerCase();
   if (lower.contains('deepseek-r1') || lower.contains('llama-3.3')) {
     return false; // Specifically disable vision for these large language-only models if they accidentally match
@@ -2277,7 +2339,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       );
       if (result != null && result.files.single.path != null) {
         final file = File(result.files.single.path!);
-        final text = await file.readAsString();
+        final ext = result.files.single.extension?.toLowerCase();
+        String text = '';
+        
+        if (ext == 'pdf') {
+          final PdfDocument document = PdfDocument(inputBytes: await file.readAsBytes());
+          text = PdfTextExtractor(document).extractText();
+          document.dispose();
+        } else {
+          text = await file.readAsString();
+        }
+        
         widget.onFileAttached(AttachedFile(name: result.files.single.name, content: text));
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2790,7 +2862,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
   late final TextEditingController _baseUrlController;
   late final TextEditingController _modelController;
   late final TextEditingController _maxTokensController;
-  late final TextEditingController _fallbackKeysController;
+  final List<TextEditingController> _fallbackControllers = [];
   List<String> _models = [];
   var _fetching = false;
 
@@ -2803,9 +2875,11 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
     _maxTokensController = TextEditingController(
       text: widget.settings.maxTokens.toString(),
     );
-    _fallbackKeysController = TextEditingController(
-      text: widget.settings.fallbackApiKeys.join('\n'),
-    );
+    for (final key in widget.settings.fallbackApiKeys) {
+      if (key.trim().isNotEmpty) {
+        _fallbackControllers.add(TextEditingController(text: key));
+      }
+    }
     _models = widget.cachedModels;
   }
 
@@ -2815,7 +2889,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
     _baseUrlController.dispose();
     _modelController.dispose();
     _maxTokensController.dispose();
-    _fallbackKeysController.dispose();
+    for (final c in _fallbackControllers) c.dispose();
     super.dispose();
   }
 
@@ -2854,17 +2928,53 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
             ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _fallbackKeysController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Fallback API keys (one per line)',
-              helperText: 'Keys to rotate if limits (402, 429) are reached.',
-              prefixIcon: Icon(Icons.vpn_key),
-              border: OutlineInputBorder(),
-            ),
+          Row(
+            children: [
+              const Text('Fallback API Keys', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF3B3027))),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.add_circle, color: Color(0xFF7B4E2E)),
+                onPressed: () {
+                  setState(() {
+                    _fallbackControllers.add(TextEditingController());
+                  });
+                },
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
+          ..._fallbackControllers.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final controller = entry.value;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: 'Fallback Key ${idx + 1}',
+                        prefixIcon: const Icon(Icons.vpn_key),
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                    onPressed: () {
+                      setState(() {
+                        _fallbackControllers[idx].dispose();
+                        _fallbackControllers.removeAt(idx);
+                      });
+                    },
+                  ),
+                ],
+              ),
+            );
+          }),
+          const SizedBox(height: 4),
           TextField(
             controller: _baseUrlController,
             decoration: const InputDecoration(
@@ -2951,9 +3061,8 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
                         baseUrl: _baseUrlController.text.trim(),
                         model: _modelController.text.trim(),
                         maxTokens: parsedMaxTokens.clamp(1, 131072).toInt(),
-                        fallbackApiKeys: _fallbackKeysController.text
-                            .split('\n')
-                            .map((e) => e.trim())
+                        fallbackApiKeys: _fallbackControllers
+                            .map((c) => c.text.trim())
                             .where((e) => e.isNotEmpty)
                             .toList(),
                       ),
@@ -3254,6 +3363,8 @@ class ProviderAvatar extends StatelessWidget {
 }
 
 class ChatClient {
+  static final Set<String> modelsWithVision = {};
+
   Future<List<String>> fetchModels(
     ProviderDefinition provider,
     ProviderSettings settings,
@@ -3274,7 +3385,17 @@ class ChatClient {
         return data
             .map((item) {
               if (item is String) return item;
-              if (item is Map) return item['id']?.toString() ?? '';
+              if (item is Map) {
+                final id = item['id']?.toString() ?? '';
+                final arch = item['architecture'];
+                if (arch is Map) {
+                  final modality = arch['modality']?.toString().toLowerCase() ?? '';
+                  if (modality.contains('image') || modality.contains('vision')) {
+                    ChatClient.modelsWithVision.add(id);
+                  }
+                }
+                return id;
+              }
               return '';
             })
             .where((model) => model.trim().isNotEmpty)
