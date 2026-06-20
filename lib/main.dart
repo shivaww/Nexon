@@ -679,6 +679,16 @@ class _ChatHomePageState extends State<ChatHomePage> {
             });
             _saveSessions();
           },
+          onFileAttached: (file) {
+            setState(() {
+              final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              if (sessionIndex != -1) {
+                final list = List<AttachedFile>.from(_sessions[sessionIndex].attachedFiles)..add(file);
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedFiles: list);
+              }
+            });
+            _saveSessions();
+          },
           onProviderChanged: (newProviderId) async {
             final nextProvider = providerCatalog.firstWhere((p) => p.id == newProviderId);
             final nextSettings = _settings[newProviderId] ?? ProviderSettings.defaults(nextProvider);
@@ -840,6 +850,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
                 onPlusPressed: _openPlusBottomSheet,
                 attachedImages: activeSession.attachedImagesBase64,
                 onRemoveImage: _removeImage,
+                attachedFiles: activeSession.attachedFiles,
+                onRemoveFile: _removeFile,
                 onEditUserMessage: _editUserMessage,
               ),
             ),
@@ -966,6 +978,8 @@ class ChatSurface extends StatelessWidget {
     required this.onPlusPressed,
     required this.attachedImages,
     required this.onRemoveImage,
+    required this.attachedFiles,
+    required this.onRemoveFile,
     required this.onEditUserMessage,
     super.key,
   });
@@ -983,6 +997,8 @@ class ChatSurface extends StatelessWidget {
   final VoidCallback onPlusPressed;
   final List<String> attachedImages;
   final ValueChanged<int> onRemoveImage;
+  final List<AttachedFile> attachedFiles;
+  final ValueChanged<int> onRemoveFile;
   final ValueChanged<int> onEditUserMessage;
 
   @override
@@ -1035,6 +1051,8 @@ class ChatSurface extends StatelessWidget {
             onPlusPressed: onPlusPressed,
             attachedImages: attachedImages,
             onRemoveImage: onRemoveImage,
+            attachedFiles: attachedFiles,
+            onRemoveFile: onRemoveFile,
           ),
         ],
       ),
@@ -1884,6 +1902,8 @@ class Composer extends StatelessWidget {
     required this.onPlusPressed,
     required this.attachedImages,
     required this.onRemoveImage,
+    required this.attachedFiles,
+    required this.onRemoveFile,
     super.key,
   });
 
@@ -1893,6 +1913,8 @@ class Composer extends StatelessWidget {
   final VoidCallback onPlusPressed;
   final List<String> attachedImages;
   final ValueChanged<int> onRemoveImage;
+  final List<AttachedFile> attachedFiles;
+  final ValueChanged<int> onRemoveFile;
 
   @override
   Widget build(BuildContext context) {
@@ -1901,6 +1923,45 @@ class Composer extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (attachedFiles.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: SizedBox(
+                height: 36,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: attachedFiles.length,
+                  itemBuilder: (context, idx) {
+                    final file = attachedFiles[idx];
+                    return Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0EBE1),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: const Color(0xFFDCCBB8)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.insert_drive_file, size: 14, color: Color(0xFF7B4E2E)),
+                          const SizedBox(width: 6),
+                          Text(
+                            file.name,
+                            style: const TextStyle(fontSize: 12, color: Color(0xFF4A3424), fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: () => onRemoveFile(idx),
+                            child: const Icon(Icons.close, size: 14, color: Color(0xFF7B4E2E)),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
           if (attachedImages.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
@@ -2050,6 +2111,8 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.searchSettings,
     required this.onSearchSettingsChanged,
     required this.onImageAttached,
+    required this.onFileAttached,
+
     required this.onProviderChanged,
     required this.onModelChanged,
     required this.onMaxTokensChanged,
@@ -2065,6 +2128,8 @@ class MediaAndModelSheet extends StatefulWidget {
   final SearchSettings searchSettings;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
   final ValueChanged<String> onImageAttached;
+  final ValueChanged<AttachedFile> onFileAttached;
+
   final ValueChanged<String> onProviderChanged;
   final ValueChanged<String> onModelChanged;
   final ValueChanged<int> onMaxTokensChanged;
@@ -2150,6 +2215,32 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to pick image: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'txt', 'md', 'json', 'py', 'dart', 'js', 'html', 'css', 'yaml', 'yml'],
+        allowMultiple: false,
+      );
+      if (result != null && result.files.single.path != null) {
+        final file = File(result.files.single.path!);
+        final text = await file.readAsString();
+        widget.onFileAttached(AttachedFile(name: result.files.single.name, content: text));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Document attached successfully')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to read document: $e')),
         );
       }
     }
@@ -2253,12 +2344,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 _buildMediaItem(
                   Icons.insert_drive_file_outlined,
                   'Document',
-                  isEnabled: false,
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Document attachment is not supported yet.')),
-                    );
-                  },
+                  isEnabled: true,
+                  onTap: _pickFile,
                 ),
                 _buildMediaItem(
                   Icons.mic_none_outlined,
@@ -3127,7 +3214,7 @@ class ChatClient {
     try {
       final uri = Uri.parse('${_baseUrl(provider, settings)}/models');
       final request = await client.getUrl(uri);
-      _setHeaders(request, provider, settings, stream: false);
+      _setHeaders(request, provider, settings, settings.apiKey, stream: false);
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -3186,11 +3273,19 @@ class ChatClient {
             'model': model,
             'messages': messages
                 .map((message) {
+                  String finalText = message.text;
+                  if (message.files.isNotEmpty) {
+                    finalText += '\n\n';
+                    for (final file in message.files) {
+                      finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+                    }
+                  }
+
                   if (message.images.isNotEmpty) {
                     return {
                       'role': message.role.apiName,
                       'content': [
-                        {'type': 'text', 'text': message.text},
+                        {'type': 'text', 'text': finalText},
                         ...message.images.map((img) => {
                               'type': 'image_url',
                               'image_url': {
@@ -3202,7 +3297,7 @@ class ChatClient {
                   }
                   return {
                     'role': message.role.apiName,
-                    'content': message.text,
+                    'content': finalText,
                   };
                 })
                 .toList(),
@@ -3261,11 +3356,19 @@ class ChatClient {
             'model': model,
             'messages': messages
                 .map((message) {
+                  String finalText = message.text;
+                  if (message.files.isNotEmpty) {
+                    finalText += '\n\n';
+                    for (final file in message.files) {
+                      finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+                    }
+                  }
+
                   if (message.images.isNotEmpty) {
                     return {
                       'role': message.role.apiName,
                       'content': [
-                        {'type': 'text', 'text': message.text},
+                        {'type': 'text', 'text': finalText},
                         ...message.images.map((img) => {
                               'type': 'image_url',
                               'image_url': {
@@ -3277,7 +3380,7 @@ class ChatClient {
                   }
                   return {
                     'role': message.role.apiName,
-                    'content': message.text,
+                    'content': finalText,
                   };
                 })
                 .toList(),
@@ -3335,11 +3438,11 @@ class ChatClient {
               }
             }
           } catch (_) {
-            // Ignore JSON decode errors of partial/empty lines
           }
         }
-        break; // Successfully streamed, do not try next key
       }
+      break; // Successfully streamed, do not try next key
+    }
     } finally {
       client.close(force: true);
     }
@@ -3624,6 +3727,19 @@ enum MessageRole {
   final String apiName;
 }
 
+class AttachedFile {
+  final String name;
+  final String content;
+
+  const AttachedFile({required this.name, required this.content});
+
+  Map<String, dynamic> toJson() => {'name': name, 'content': content};
+  factory AttachedFile.fromJson(Map<String, dynamic> json) => AttachedFile(
+    name: json['name']?.toString() ?? '',
+    content: json['content']?.toString() ?? '',
+  );
+}
+
 class ChatMessage {
   const ChatMessage({
     required this.role,
@@ -3631,6 +3747,7 @@ class ChatMessage {
     this.isError = false,
     this.reasoning = '',
     this.images = const [],
+    this.files = const [],
   });
 
   final MessageRole role;
@@ -3638,6 +3755,7 @@ class ChatMessage {
   final bool isError;
   final String reasoning;
   final List<String> images;
+  final List<AttachedFile> files;
 }
 
 class ChatSession {
@@ -3648,6 +3766,7 @@ class ChatSession {
   final String model;
   final int? maxTokens;
   final List<String> attachedImagesBase64;
+  final List<AttachedFile> attachedFiles;
 
   ChatSession({
     required this.id,
@@ -3657,6 +3776,7 @@ class ChatSession {
     required this.model,
     this.maxTokens,
     this.attachedImagesBase64 = const [],
+    this.attachedFiles = const [],
   });
 
   ChatSession copyWith({
@@ -3667,6 +3787,7 @@ class ChatSession {
     String? model,
     int? maxTokens,
     List<String>? attachedImagesBase64,
+    List<AttachedFile>? attachedFiles,
   }) {
     return ChatSession(
       id: id ?? this.id,
@@ -3676,6 +3797,7 @@ class ChatSession {
       model: model ?? this.model,
       maxTokens: maxTokens ?? this.maxTokens,
       attachedImagesBase64: attachedImagesBase64 ?? this.attachedImagesBase64,
+      attachedFiles: attachedFiles ?? this.attachedFiles,
     );
   }
 
@@ -3688,11 +3810,13 @@ class ChatSession {
           'isError': m.isError,
           'reasoning': m.reasoning,
           'images': m.images,
+          'files': m.files.map((f) => f.toJson()).toList(),
         }).toList(),
         'providerId': providerId,
         'model': model,
         'maxTokens': maxTokens,
         'attachedImagesBase64': attachedImagesBase64,
+        'attachedFiles': attachedFiles.map((f) => f.toJson()).toList(),
       };
 
   factory ChatSession.fromJson(Map<String, dynamic> json) {
@@ -3706,6 +3830,7 @@ class ChatSession {
                   isError: m['isError'] as bool? ?? false,
                   reasoning: m['reasoning']?.toString() ?? '',
                   images: (m['images'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+                  files: (m['files'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
                 ))
             .toList() ??
         [];
@@ -3717,6 +3842,7 @@ class ChatSession {
       model: json['model']?.toString() ?? '',
       maxTokens: json['maxTokens'] as int?,
       attachedImagesBase64: (json['attachedImagesBase64'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+      attachedFiles: (json['attachedFiles'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
     );
   }
 }
