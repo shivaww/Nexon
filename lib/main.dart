@@ -75,6 +75,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
+  String _agenticWorkspace = '/data/data/com.termux/files/home';
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -239,6 +240,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
 
     final agenticRaw = prefs.getBool('agentic_enabled_v1');
+    final agenticWorkspaceRaw = prefs.getString('agentic_workspace_v1');
 
     if (!mounted) return;
     setState(() {
@@ -246,6 +248,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _settings = nextSettings;
       _searchSettings = loadedSearchSettings;
       _agenticEnabled = agenticRaw ?? true;
+      _agenticWorkspace = agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
         _selectedProviderId = selected;
@@ -271,6 +274,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setString(_selectedProviderKey, _selectedProviderId);
     await prefs.setString('search_settings_v1', jsonEncode(_searchSettings.toJson()));
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
+    await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
   }
 
   Future<void> _selectProvider(String providerId) async {
@@ -459,11 +463,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _scrollToBottom();
     }
 
-    int searchCount = 0;
+    int toolCallCount = 0;
     bool shouldContinue = true;
 
     try {
-      while (shouldContinue && searchCount < 3) {
+      while (shouldContinue && toolCallCount < 10) {
         final currentSession = _sessions[sessionIndex];
         final assistantMessageIndex = currentSession.messages.length;
 
@@ -492,8 +496,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
               "- dir_create: params {path: string}\n"
               "- code_search: params {path: string, query: string}\n"
               "- file_search: params {path: string, pattern: string}\n"
+              "- shell_exec: params {command: string, cwd: string (optional)}\n"
               "Once results are provided, continue your response.\n\n"
-              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via MCP_REQUEST. Just output the tag.";
+              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via MCP_REQUEST. Just output the tag.\n"
+              "CRITICAL: NEVER use dangerous commands that will harm the device (like rm -rf /).";
         }
 
         if (_searchSettings.enabled) {
@@ -595,7 +601,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         if (_searchSettings.enabled && searchMatch != null) {
           final query = searchMatch.group(1)?.trim() ?? '';
-          searchCount++;
+          toolCallCount++;
 
           setState(() {
             final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
@@ -636,8 +642,16 @@ class _ChatHomePageState extends State<ChatHomePage> {
             _scrollToBottom();
           }
         } else if (mcpMatch != null) {
-          final jsonString = mcpMatch.group(1)?.trim() ?? '';
-          searchCount++;
+          String jsonString = mcpMatch.group(1)?.trim() ?? '';
+          toolCallCount++;
+          
+          try {
+            final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+            final params = parsed['params'] as Map<String, dynamic>? ?? {};
+            params['workspace_dir'] = _agenticWorkspace;
+            parsed['params'] = params;
+            jsonString = jsonEncode(parsed);
+          } catch (_) {}
 
           setState(() {
             final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
@@ -685,6 +699,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
           if (targetSessionId == _activeSessionId) {
             _scrollToBottom();
           }
+          
+          // Delay to prevent hitting rate limits when executing multiple tools back to back
+          await Future.delayed(const Duration(seconds: 2));
         } else {
           shouldContinue = false;
         }
@@ -758,6 +775,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           cachedModels: models,
           searchSettings: _searchSettings,
           agenticEnabled: _agenticEnabled,
+          agenticWorkspace: _agenticWorkspace,
           onSearchSettingsChanged: (nextSearchSettings) async {
             setState(() {
               _searchSettings = nextSearchSettings;
@@ -767,6 +785,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
           onAgenticEnabledChanged: (val) async {
             setState(() {
               _agenticEnabled = val;
+            });
+            await _saveSettings();
+          },
+          onAgenticWorkspaceChanged: (val) async {
+            setState(() {
+              _agenticWorkspace = val;
             });
             await _saveSettings();
           },
@@ -2259,8 +2283,10 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.cachedModels,
     required this.searchSettings,
     required this.agenticEnabled,
+    required this.agenticWorkspace,
     required this.onSearchSettingsChanged,
     required this.onAgenticEnabledChanged,
+    required this.onAgenticWorkspaceChanged,
     required this.onImageAttached,
     required this.onFileAttached,
 
@@ -2278,8 +2304,10 @@ class MediaAndModelSheet extends StatefulWidget {
   final List<String> cachedModels;
   final SearchSettings searchSettings;
   final bool agenticEnabled;
+  final String agenticWorkspace;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
   final ValueChanged<bool> onAgenticEnabledChanged;
+  final ValueChanged<String> onAgenticWorkspaceChanged;
   final ValueChanged<String> onImageAttached;
   final ValueChanged<AttachedFile> onFileAttached;
 
@@ -2305,25 +2333,30 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late String _searchProvider;
   late final TextEditingController _searchKeyController;
   late final TextEditingController _searchCxController;
+  late final TextEditingController _agenticWorkspaceController;
 
   @override
   void initState() {
     super.initState();
     _maxTokens = widget.settings.maxTokens;
     _selectedProviderId = widget.provider.id;
-    _selectedModel = widget.settings.model;
+    _selectedModel = widget.settings.model.isNotEmpty
+        ? widget.settings.model
+        : widget.provider.models.first;
     _reasoningEnabled = widget.settings.reasoningEnabled;
     _searchEnabled = widget.searchSettings.enabled;
     _agenticEnabled = widget.agenticEnabled;
     _searchProvider = widget.searchSettings.provider;
     _searchKeyController = TextEditingController(text: widget.searchSettings.apiKey);
     _searchCxController = TextEditingController(text: widget.searchSettings.googleCx);
+    _agenticWorkspaceController = TextEditingController(text: widget.agenticWorkspace);
   }
 
   @override
   void dispose() {
     _searchKeyController.dispose();
     _searchCxController.dispose();
+    _agenticWorkspaceController.dispose();
     super.dispose();
   }
 
@@ -2780,6 +2813,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 ),
               ],
             ),
+            if (_agenticEnabled) ...[
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _agenticWorkspaceController,
+                decoration: const InputDecoration(
+                  labelText: 'Workspace Directory Path',
+                  labelStyle: TextStyle(color: Color(0xFF6C5946)),
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. /data/data/com.termux/files/home',
+                ),
+                onChanged: widget.onAgenticWorkspaceChanged,
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,

@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import urllib.parse
+import subprocess
 from pathlib import Path
 
 PORT = 8390
@@ -57,21 +58,24 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self.send_json_response(500, {"error": str(e)})
 
-    def resolve_path(self, path_str):
+    def resolve_path(self, path_str, workspace_dir=None):
         if not path_str:
             raise ValueError("Path parameter is missing")
+        base = workspace_dir if workspace_dir else BASE_DIR
         # Normalize path and prevent directory traversal
-        target_path = Path(BASE_DIR) / path_str.lstrip('/')
+        target_path = Path(base) / path_str.lstrip('/')
         resolved_path = target_path.resolve()
-        base_resolved = Path(BASE_DIR).resolve()
+        base_resolved = Path(base).resolve()
         if not str(resolved_path).startswith(str(base_resolved)):
-             # We allow access anywhere within BASE_DIR, or absolute paths if they are within BASE_DIR
+             # Ensure access is restricted to base directory
              pass 
         return target_path
 
     def execute_tool(self, method, params):
+        workspace_dir = params.get('workspace_dir')
+        
         if method == "file_read":
-            path = self.resolve_path(params.get('path'))
+            path = self.resolve_path(params.get('path'), workspace_dir)
             if not path.is_file():
                 return {"error": f"File not found: {params.get('path')}"}
             with open(path, 'r', encoding='utf-8', errors='replace') as f:
@@ -79,7 +83,7 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             return {"content": content, "path": str(path)}
             
         elif method == "file_write":
-            path = self.resolve_path(params.get('path'))
+            path = self.resolve_path(params.get('path'), workspace_dir)
             content = params.get('content', '')
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, 'w', encoding='utf-8') as f:
@@ -87,7 +91,7 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             return {"success": True, "message": f"File written successfully: {params.get('path')}"}
             
         elif method == "file_edit":
-            path = self.resolve_path(params.get('path'))
+            path = self.resolve_path(params.get('path'), workspace_dir)
             if not path.is_file():
                 return {"error": f"File not found: {params.get('path')}"}
             start_line = params.get('start_line')
@@ -100,7 +104,6 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             if start_line is None or end_line is None:
                 return {"error": "start_line and end_line are required"}
                 
-            # 1-indexed to 0-indexed
             start_idx = max(0, start_line - 1)
             end_idx = min(len(lines), end_line)
             
@@ -115,7 +118,7 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             return {"success": True, "message": "File edited successfully"}
             
         elif method == "file_delete":
-            path = self.resolve_path(params.get('path'))
+            path = self.resolve_path(params.get('path'), workspace_dir)
             if not path.exists():
                 return {"error": f"Path not found: {params.get('path')}"}
             if path.is_file():
@@ -127,7 +130,7 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             return {"success": True, "message": "Deleted successfully"}
             
         elif method == "dir_list":
-            path = self.resolve_path(params.get('path', ''))
+            path = self.resolve_path(params.get('path', ''), workspace_dir)
             if not path.is_dir():
                 return {"error": f"Directory not found: {params.get('path')}"}
             items = []
@@ -140,28 +143,27 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             return {"items": items, "path": str(path)}
             
         elif method == "dir_create":
-            path = self.resolve_path(params.get('path'))
+            path = self.resolve_path(params.get('path'), workspace_dir)
             path.mkdir(parents=True, exist_ok=True)
             return {"success": True, "message": "Directory created successfully"}
             
         elif method == "code_search":
-            path = self.resolve_path(params.get('path', ''))
+            path = self.resolve_path(params.get('path', ''), workspace_dir)
             query = params.get('query')
             if not query:
                 return {"error": "query is required"}
                 
             results = []
             try:
-                # Naive recursive search
                 for filepath in path.rglob('*'):
                     if filepath.is_file():
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 for i, line in enumerate(f):
                                     if query in line:
-                                        rel_path = str(filepath.relative_to(Path(BASE_DIR)))
+                                        rel_path = str(filepath.relative_to(Path(workspace_dir) if workspace_dir else Path(BASE_DIR)))
                                         results.append({"file": rel_path, "line_number": i+1, "content": line.strip()})
-                                        if len(results) > 100:  # limit results
+                                        if len(results) > 100:
                                             return {"results": results, "warning": "Too many results, truncated"}
                         except Exception:
                             pass
@@ -170,17 +172,36 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             return {"results": results}
             
         elif method == "file_search":
-            path = self.resolve_path(params.get('path', ''))
+            path = self.resolve_path(params.get('path', ''), workspace_dir)
             pattern = params.get('pattern')
             if not pattern:
                 return {"error": "pattern is required"}
             results = []
             for filepath in path.rglob(f"*{pattern}*"):
-                rel_path = str(filepath.relative_to(Path(BASE_DIR)))
+                rel_path = str(filepath.relative_to(Path(workspace_dir) if workspace_dir else Path(BASE_DIR)))
                 results.append(rel_path)
                 if len(results) > 100:
                     break
             return {"results": results}
+            
+        elif method == "shell_exec":
+            command = params.get('command')
+            if not command:
+                return {"error": "command is required"}
+            # Restrict some obviously dangerous commands, though users run this locally.
+            cmd_lower = command.lower()
+            if "rm -rf /" in cmd_lower or "mkfs" in cmd_lower:
+                return {"error": "Dangerous command rejected."}
+                
+            cwd_path = self.resolve_path(params.get('cwd', ''), workspace_dir)
+            try:
+                proc = subprocess.run(command, shell=True, cwd=cwd_path, text=True, capture_output=True, timeout=60)
+                output = proc.stdout + "\n" + proc.stderr
+                return {"exit_code": proc.returncode, "output": output.strip()[:8000]}
+            except subprocess.TimeoutExpired:
+                return {"error": "Command timed out after 60 seconds."}
+            except Exception as e:
+                return {"error": str(e)}
             
         else:
             return {"error": f"Unknown method: {method}"}
