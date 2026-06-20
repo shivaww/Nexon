@@ -421,6 +421,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       role: MessageRole.user,
       text: prompt,
       images: List<String>.from(session.attachedImagesBase64),
+      files: List<AttachedFile>.from(session.attachedFiles),
     );
 
     String updatedTitle = session.title;
@@ -435,6 +436,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         messages: updatedMessages,
         title: updatedTitle,
         attachedImagesBase64: const [],
+        attachedFiles: const [],
       );
     });
 
@@ -766,6 +768,20 @@ class _ChatHomePageState extends State<ChatHomePage> {
         if (index >= 0 && index < list.length) {
           list.removeAt(index);
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedImagesBase64: list);
+        }
+      }
+    });
+    _saveSessions();
+  }
+
+  void _removeFile(int index) {
+    setState(() {
+      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      if (sessionIndex != -1) {
+        final list = List<AttachedFile>.from(_sessions[sessionIndex].attachedFiles);
+        if (index >= 0 && index < list.length) {
+          list.removeAt(index);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedFiles: list);
         }
       }
     });
@@ -1705,14 +1721,46 @@ class MessageBubble extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: const Color(0xFFE7D8C4)),
                 ),
-                child: SelectableText(
-                  message.text,
-                  style: const TextStyle(
-                    height: 1.45,
-                    color: Color(0xFF2D241C),
-                    fontSize: 15.5,
-                    fontWeight: FontWeight.w500,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (message.files.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: message.files.map((f) => Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF0EBE1),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFFDCCBB8)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.insert_drive_file, size: 13, color: Color(0xFF7B4E2E)),
+                                const SizedBox(width: 5),
+                                Text(
+                                  f.name,
+                                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF4A3424), fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          )).toList(),
+                        ),
+                      ),
+                    SelectableText(
+                      message.text,
+                      style: const TextStyle(
+                        height: 1.45,
+                        color: Color(0xFF2D241C),
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
                 ),
               )
             else ...[
