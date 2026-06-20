@@ -74,6 +74,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   final Set<String> _sendingSessionIds = {};
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
+  bool _agenticEnabled = true;
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -237,11 +238,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
       nextSettings[provider.id] = normalized.copyWith(apiKey: key ?? '');
     }
 
+    final agenticRaw = prefs.getBool('agentic_enabled_v1');
+
     if (!mounted) return;
     setState(() {
       _prefs = prefs;
       _settings = nextSettings;
       _searchSettings = loadedSearchSettings;
+      _agenticEnabled = agenticRaw ?? true;
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
         _selectedProviderId = selected;
@@ -474,26 +478,32 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final List<ChatMessage> historyForApi = [];
         
-        String systemPromptText = "You have access to local Termux file system tools.\n"
-            "If you need to use the local file system MCP server, output a single line: [MCP_REQUEST: {\"method\": \"...\", \"params\": {...}}] and stop generating.\n"
-            "MCP methods available:\n"
-            "- file_read: params {path: string}\n"
-            "- file_write: params {path: string, content: string}\n"
-            "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
-            "- file_delete: params {path: string}\n"
-            "- dir_list: params {path: string}\n"
-            "- dir_create: params {path: string}\n"
-            "- code_search: params {path: string, query: string}\n"
-            "- file_search: params {path: string, pattern: string}\n"
-            "Once results are provided, continue your response.\n\n"
-            "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via MCP_REQUEST. Just output the tag.";
+        String systemPromptText = '';
+        if (_agenticEnabled) {
+          systemPromptText += "You have access to local Termux file system tools.\n"
+              "If you need to use the local file system MCP server, output a single line: [MCP_REQUEST: {\"method\": \"...\", \"params\": {...}}] and stop generating.\n"
+              "MCP methods available:\n"
+              "- file_read: params {path: string}\n"
+              "- file_write: params {path: string, content: string}\n"
+              "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
+              "- file_delete: params {path: string}\n"
+              "- dir_list: params {path: string}\n"
+              "- dir_create: params {path: string}\n"
+              "- code_search: params {path: string, query: string}\n"
+              "- file_search: params {path: string, pattern: string}\n"
+              "Once results are provided, continue your response.\n\n"
+              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via MCP_REQUEST. Just output the tag.";
+        }
 
         if (_searchSettings.enabled) {
-          systemPromptText += "\n\nYou ALSO have access to a web search tool.\n"
+          if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
+          systemPromptText += "You ALSO have access to a web search tool.\n"
               "If you need to search the web, output a single line: [SEARCH_REQUEST: your search query] and stop generating.";
         }
 
-        historyForApi.add(ChatMessage(role: MessageRole.system, text: systemPromptText));
+        if (systemPromptText.isNotEmpty) {
+          historyForApi.add(ChatMessage(role: MessageRole.system, text: systemPromptText));
+        }
 
         historyForApi.addAll(_sessions[sessionIndex].messages.take(assistantMessageIndex));
 
@@ -645,7 +655,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
             final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
             final request = await client.postUrl(Uri.parse('http://127.0.0.1:8390/mcp'));
             request.headers.contentType = ContentType.json;
-            request.write(jsonString);
+            
+            final bytes = utf8.encode(jsonString);
+            request.headers.contentLength = bytes.length;
+            request.add(bytes);
+            
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             mcpResult = body;
@@ -2236,7 +2250,9 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.settings,
     required this.cachedModels,
     required this.searchSettings,
+    required this.agenticEnabled,
     required this.onSearchSettingsChanged,
+    required this.onAgenticEnabledChanged,
     required this.onImageAttached,
     required this.onFileAttached,
 
@@ -2253,7 +2269,9 @@ class MediaAndModelSheet extends StatefulWidget {
   final ProviderSettings settings;
   final List<String> cachedModels;
   final SearchSettings searchSettings;
+  final bool agenticEnabled;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
+  final ValueChanged<bool> onAgenticEnabledChanged;
   final ValueChanged<String> onImageAttached;
   final ValueChanged<AttachedFile> onFileAttached;
 
@@ -2275,6 +2293,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late String _selectedModel;
   late bool _reasoningEnabled;
   late bool _searchEnabled;
+  late bool _agenticEnabled;
   late String _searchProvider;
   late final TextEditingController _searchKeyController;
   late final TextEditingController _searchCxController;
@@ -2287,6 +2306,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _selectedModel = widget.settings.model;
     _reasoningEnabled = widget.settings.reasoningEnabled;
     _searchEnabled = widget.searchSettings.enabled;
+    _agenticEnabled = widget.agenticEnabled;
     _searchProvider = widget.searchSettings.provider;
     _searchKeyController = TextEditingController(text: widget.searchSettings.apiKey);
     _searchCxController = TextEditingController(text: widget.searchSettings.googleCx);
@@ -2719,6 +2739,40 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             const SizedBox(height: 16),
             const Divider(color: Color(0xFFE7D8C4)),
             const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Agentic File Access',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D241C),
+                      ),
+                    ),
+                    Text(
+                      'Let models read/write local files',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6C5946),
+                      ),
+                    ),
+                  ],
+                ),
+                Switch(
+                  value: _agenticEnabled,
+                  activeColor: const Color(0xFF6A1B9A),
+                  onChanged: (val) {
+                    setState(() => _agenticEnabled = val);
+                    widget.onAgenticEnabledChanged(val);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
