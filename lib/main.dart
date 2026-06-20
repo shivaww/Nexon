@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -71,13 +72,105 @@ class _ChatHomePageState extends State<ChatHomePage> {
   var _isSending = false;
   var _isFetchingModels = false;
 
-  final List<ChatMessage> _messages = [
-    const ChatMessage(
-      role: MessageRole.assistant,
-      text:
-          'Select a provider, add its API key, fetch or type a model, then start chatting.',
-    ),
-  ];
+  List<ChatSession> _sessions = [];
+  String? _activeSessionId;
+
+  List<ChatMessage> get _messages {
+    if (_sessions.isEmpty) {
+      _initDefaultSession();
+    }
+    final active = _sessions.firstWhere(
+      (s) => s.id == _activeSessionId,
+      orElse: () => _sessions.first,
+    );
+    return active.messages;
+  }
+
+  void _initDefaultSession() {
+    final nextId = DateTime.now().millisecondsSinceEpoch.toString();
+    final newSession = ChatSession(
+      id: nextId,
+      title: 'Welcome Chat',
+      messages: [
+        const ChatMessage(
+          role: MessageRole.assistant,
+          text:
+              'Select a provider, add its API key, fetch or type a model, then start chatting.',
+        ),
+      ],
+      providerId: _selectedProviderId,
+      model: _activeModel,
+    );
+    _sessions = [newSession];
+    _activeSessionId = newSession.id;
+  }
+
+  Future<void> _loadSessions() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('chat_sessions_v1');
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final List decoded = jsonDecode(raw);
+        setState(() {
+          _sessions = decoded.map((s) => ChatSession.fromJson(s)).toList();
+          _activeSessionId = prefs.getString('active_session_id_v1') ??
+              (_sessions.isNotEmpty ? _sessions.first.id : 'default');
+        });
+      } catch (_) {
+        setState(() {
+          _initDefaultSession();
+        });
+      }
+    } else {
+      setState(() {
+        _initDefaultSession();
+      });
+    }
+  }
+
+  Future<void> _saveSessions() async {
+    final prefs = _prefs ?? await SharedPreferences.getInstance();
+    final serialized = _sessions.map((s) => s.toJson()).toList();
+    await prefs.setString('chat_sessions_v1', jsonEncode(serialized));
+    if (_activeSessionId != null) {
+      await prefs.setString('active_session_id_v1', _activeSessionId!);
+    }
+  }
+
+  void _switchSession(String sessionId) {
+    setState(() {
+      _activeSessionId = sessionId;
+      final session = _sessions.firstWhere((s) => s.id == sessionId);
+      _selectedProviderId = session.providerId;
+      final settings = _settings[_selectedProviderId] ??
+          ProviderSettings.defaults(_provider);
+      if (session.model.isNotEmpty) {
+        _settings[_selectedProviderId] =
+            settings.copyWith(model: session.model);
+      }
+    });
+    _saveSettings();
+    _saveSessions();
+    if (MediaQuery.sizeOf(context).width < 840 && mounted) {
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  void _deleteSession(String sessionId) {
+    if (_sessions.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot delete the last remaining chat.')),
+      );
+      return;
+    }
+    setState(() {
+      _sessions.removeWhere((s) => s.id == sessionId);
+      if (_activeSessionId == sessionId) {
+        _activeSessionId = _sessions.first.id;
+      }
+    });
+    _saveSessions();
+  }
 
   ProviderDefinition get _provider =>
       providerCatalog.firstWhere((item) => item.id == _selectedProviderId);
@@ -127,7 +220,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
       final key = await _secureStorage.read(key: _keyStorageName(provider.id));
       final current = nextSettings[provider.id] ??
           ProviderSettings.defaults(provider);
-      nextSettings[provider.id] = current.copyWith(apiKey: key ?? '');
+      final normalized = current.maxTokens < 1
+          ? current.copyWith(maxTokens: provider.defaultMaxTokens)
+          : current;
+      nextSettings[provider.id] = normalized.copyWith(apiKey: key ?? '');
     }
 
     if (!mounted) return;
@@ -139,6 +235,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
         _selectedProviderId = selected;
       }
     });
+
+    await _loadSessions();
   }
 
   Future<void> _saveSettings() async {
@@ -158,8 +256,15 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   Future<void> _selectProvider(String providerId) async {
-    setState(() => _selectedProviderId = providerId);
+    setState(() {
+      _selectedProviderId = providerId;
+      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      if (sessionIndex != -1) {
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(providerId: providerId);
+      }
+    });
     await _saveSettings();
+    await _saveSessions();
     if (MediaQuery.sizeOf(context).width < 840 && mounted) {
       Navigator.of(context).maybePop();
     }
@@ -256,36 +361,71 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
     _messageController.clear();
     final userMessage = ChatMessage(role: MessageRole.user, text: prompt);
+    
+    final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+    if (sessionIndex != -1) {
+      final session = _sessions[sessionIndex];
+      String updatedTitle = session.title;
+      if (session.title == 'Welcome Chat' || session.title == 'New Chat') {
+        updatedTitle = prompt.length > 25 ? '${prompt.substring(0, 25)}...' : prompt;
+      }
+      setState(() {
+        final updatedMessages = List<ChatMessage>.from(session.messages)..add(userMessage);
+        _sessions[sessionIndex] = session.copyWith(
+          messages: updatedMessages,
+          title: updatedTitle,
+          providerId: _selectedProviderId,
+          model: _activeModel,
+        );
+      });
+    }
+
+    _scrollToBottom();
+
+    final assistantMessageIndex = _messages.length;
     setState(() {
-      _messages.add(userMessage);
+      _messages.add(const ChatMessage(role: MessageRole.assistant, text: ''));
       _isSending = true;
     });
     _scrollToBottom();
 
     try {
-      final answer = await _chatClient.sendChat(
+      final stream = _chatClient.sendChatStream(
         provider: provider,
         settings: settings,
         model: _activeModel,
         messages: _messages
+            .take(assistantMessageIndex)
             .where((message) => message.role != MessageRole.system)
             .toList(),
       );
-      if (!mounted) return;
-      setState(() {
-        _messages.add(ChatMessage(role: MessageRole.assistant, text: answer));
-      });
+
+      var fullText = '';
+      await for (final chunk in stream) {
+        if (!mounted) return;
+        fullText += chunk;
+        setState(() {
+          _messages[assistantMessageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: fullText,
+          );
+        });
+        _scrollToBottom();
+      }
+      await _saveSessions();
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _messages.add(
-          ChatMessage(
-            role: MessageRole.assistant,
-            text: 'Request failed: $error',
-            isError: true,
-          ),
+        final currentText = _messages[assistantMessageIndex].text;
+        _messages[assistantMessageIndex] = ChatMessage(
+          role: MessageRole.assistant,
+          text: currentText.isNotEmpty
+              ? '$currentText\n\n[Error: $error]'
+              : 'Request failed: $error',
+          isError: true,
         );
       });
+      await _saveSessions();
     } finally {
       if (mounted) {
         setState(() => _isSending = false);
@@ -295,16 +435,72 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   void _newChat() {
+    final newId = DateTime.now().millisecondsSinceEpoch.toString();
+    final newSession = ChatSession(
+      id: newId,
+      title: 'New Chat',
+      messages: [
+        const ChatMessage(
+          role: MessageRole.assistant,
+          text: 'New chat ready. Choose any configured provider and model.',
+        ),
+      ],
+      providerId: _selectedProviderId,
+      model: _activeModel,
+    );
     setState(() {
-      _messages
-        ..clear()
-        ..add(
-          const ChatMessage(
-            role: MessageRole.assistant,
-            text: 'New chat ready. Choose any configured provider and model.',
-          ),
-        );
+      _sessions.insert(0, newSession);
+      _activeSessionId = newId;
     });
+    _saveSessions();
+  }
+
+  Future<void> _openPlusBottomSheet() async {
+    final provider = _provider;
+    final settings = _activeSettings;
+    final models = _modelCache[provider.id] ?? provider.models;
+    
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return MediaAndModelSheet(
+          provider: provider,
+          settings: settings,
+          cachedModels: models,
+          onProviderChanged: (newProviderId) async {
+            setState(() {
+              _selectedProviderId = newProviderId;
+            });
+            await _saveSettings();
+            final nextProvider = providerCatalog.firstWhere((p) => p.id == newProviderId);
+            final nextSettings = _settings[newProviderId] ?? ProviderSettings.defaults(nextProvider);
+            final nextModel = nextSettings.model.isNotEmpty ? nextSettings.model : nextProvider.models.first;
+            setState(() {
+              _settings[newProviderId] = nextSettings.copyWith(model: nextModel);
+            });
+          },
+          onModelChanged: (newModel) async {
+            setState(() {
+              _settings[provider.id] = settings.copyWith(model: newModel);
+            });
+            await _saveSettings();
+          },
+          onMaxTokensChanged: (newMaxTokens) async {
+            setState(() {
+              _settings[provider.id] = settings.copyWith(maxTokens: newMaxTokens);
+            });
+            await _saveSettings();
+          },
+          onFetchModels: () => _fetchModels(provider),
+          onConfigureKey: () {
+            _openProviderSheet(provider.id);
+          },
+        );
+      },
+    );
   }
 
   void _scrollToBottom() {
@@ -322,24 +518,24 @@ class _ChatHomePageState extends State<ChatHomePage> {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final wide = width >= 840;
-    final providerPanel = ProviderPanel(
-      providers: providerCatalog,
-      selectedProviderId: _selectedProviderId,
-      settings: _settings,
-      onProviderTap: _selectProvider,
-      onProviderSettings: _openProviderSheet,
+    
+    final chatHistoryPanel = ChatHistoryPanel(
+      sessions: _sessions,
+      activeSessionId: _activeSessionId,
+      onSessionTap: _switchSession,
+      onSessionDelete: _deleteSession,
       onNewChat: _newChat,
     );
 
     return Scaffold(
-      drawer: wide ? null : Drawer(width: 330, child: providerPanel),
+      drawer: wide ? null : Drawer(width: 330, child: chatHistoryPanel),
       body: SafeArea(
         child: Row(
           children: [
             if (wide)
               SizedBox(
                 width: 330,
-                child: providerPanel,
+                child: chatHistoryPanel,
               ),
             Expanded(
               child: ChatSurface(
@@ -353,6 +549,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
                 onOpenProvider: () => _openProviderSheet(_selectedProviderId),
                 onOpenModel: _openModelSheet,
                 onSend: _sendMessage,
+                onPlusPressed: _openPlusBottomSheet,
               ),
             ),
           ],
@@ -364,95 +561,61 @@ class _ChatHomePageState extends State<ChatHomePage> {
   static String _keyStorageName(String providerId) => 'provider_api_key_$providerId';
 }
 
-class ProviderPanel extends StatefulWidget {
-  const ProviderPanel({
-    required this.providers,
-    required this.selectedProviderId,
-    required this.settings,
-    required this.onProviderTap,
-    required this.onProviderSettings,
+class ChatHistoryPanel extends StatelessWidget {
+  const ChatHistoryPanel({
+    required this.sessions,
+    required this.activeSessionId,
+    required this.onSessionTap,
+    required this.onSessionDelete,
     required this.onNewChat,
     super.key,
   });
 
-  final List<ProviderDefinition> providers;
-  final String selectedProviderId;
-  final Map<String, ProviderSettings> settings;
-  final ValueChanged<String> onProviderTap;
-  final ValueChanged<String> onProviderSettings;
+  final List<ChatSession> sessions;
+  final String? activeSessionId;
+  final ValueChanged<String> onSessionTap;
+  final ValueChanged<String> onSessionDelete;
   final VoidCallback onNewChat;
 
   @override
-  State<ProviderPanel> createState() => _ProviderPanelState();
-}
-
-class _ProviderPanelState extends State<ProviderPanel> {
-  final _searchController = TextEditingController();
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final query = _searchController.text.trim().toLowerCase();
-    final filtered = widget.providers.where((provider) {
-      if (query.isEmpty) return true;
-      return provider.name.toLowerCase().contains(query) ||
-          provider.keyLabel.toLowerCase().contains(query) ||
-          provider.models.any((model) => model.toLowerCase().contains(query));
-    }).toList();
-
     return Container(
       color: const Color(0xFFEFE6D6),
       child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    const AppMark(),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Forge Chat',
-                        style: GoogleFonts.notoSerif(
-                          fontSize: 25,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF2D241C),
-                        ),
-                      ),
+                const AppMark(),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Forge Chat',
+                    style: GoogleFonts.notoSerif(
+                      fontSize: 25,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF2D241C),
                     ),
-                    IconButton(
-                      tooltip: 'New chat',
-                      onPressed: widget.onNewChat,
-                      icon: const Icon(Icons.add_comment_outlined),
-                    ),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: 16),
-                SearchBox(
-                  controller: _searchController,
-                  hint: 'Search 30+ providers or models',
-                  onChanged: (_) => setState(() {}),
+                IconButton(
+                  tooltip: 'New chat',
+                  onPressed: onNewChat,
+                  icon: const Icon(Icons.add_comment_outlined),
                 ),
               ],
             ),
           ),
+          const Divider(color: Color(0xFFDCCBB8), height: 1),
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(10, 4, 10, 18),
-              itemCount: filtered.length,
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
+              itemCount: sessions.length,
               itemBuilder: (context, index) {
-                final provider = filtered[index];
-                final selected = provider.id == widget.selectedProviderId;
-                final settings = widget.settings[provider.id];
-                final hasKey = settings?.apiKey.trim().isNotEmpty ?? false;
+                final session = sessions[index];
+                final selected = session.id == activeSessionId;
+                final messageCount = session.messages.length;
                 return AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOutCubic,
@@ -461,18 +624,15 @@ class _ProviderPanelState extends State<ProviderPanel> {
                     color: selected ? const Color(0xFFFFF8EA) : Colors.transparent,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: selected
-                          ? const Color(0xFFD8B98D)
-                          : Colors.transparent,
+                      color: selected ? const Color(0xFFD8B98D) : Colors.transparent,
                     ),
                   ),
                   child: ListTile(
                     dense: true,
                     selected: selected,
-                    contentPadding: const EdgeInsets.only(left: 12, right: 4),
-                    leading: ProviderAvatar(label: provider.shortName),
+                    leading: const Icon(Icons.chat_bubble_outline, size: 20),
                     title: Text(
-                      provider.name,
+                      session.title,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
@@ -480,28 +640,15 @@ class _ProviderPanelState extends State<ProviderPanel> {
                       ),
                     ),
                     subtitle: Text(
-                      hasKey
-                          ? '${settings?.model ?? provider.models.first}'
-                          : provider.keyLabel,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: hasKey
-                            ? const Color(0xFF6C5946)
-                            : const Color(0xFF9B4D39),
-                      ),
+                      '$messageCount message${messageCount == 1 ? '' : 's'}',
+                      style: const TextStyle(color: Color(0xFF6C5946), fontSize: 11),
                     ),
                     trailing: IconButton(
-                      tooltip: 'API key and model',
-                      onPressed: () => widget.onProviderSettings(provider.id),
-                      icon: Icon(
-                        hasKey ? Icons.key : Icons.key_off_outlined,
-                        size: 20,
-                        color: hasKey
-                            ? const Color(0xFF3D7A52)
-                            : const Color(0xFF9B4D39),
-                      ),
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      color: const Color(0xFF9B4D39),
+                      onPressed: () => onSessionDelete(session.id),
                     ),
-                    onTap: () => widget.onProviderTap(provider.id),
+                    onTap: () => onSessionTap(session.id),
                   ),
                 );
               },
@@ -525,6 +672,7 @@ class ChatSurface extends StatelessWidget {
     required this.onOpenProvider,
     required this.onOpenModel,
     required this.onSend,
+    required this.onPlusPressed,
     super.key,
   });
 
@@ -538,6 +686,7 @@ class ChatSurface extends StatelessWidget {
   final VoidCallback onOpenProvider;
   final VoidCallback onOpenModel;
   final VoidCallback onSend;
+  final VoidCallback onPlusPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -582,6 +731,7 @@ class ChatSurface extends StatelessWidget {
             controller: messageController,
             isSending: isSending,
             onSend: onSend,
+            onPlusPressed: onPlusPressed,
           ),
         ],
       ),
@@ -617,48 +767,64 @@ class ChatHeader extends StatelessWidget {
               final hasDrawer = Scaffold.hasDrawer(context);
               if (!hasDrawer) return const SizedBox.shrink();
               return IconButton(
-                tooltip: 'Providers',
+                tooltip: 'Chats',
                 onPressed: () => Scaffold.of(context).openDrawer(),
                 icon: const Icon(Icons.menu),
               );
             },
           ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: onOpenProvider,
+            child: Tooltip(
+              message: '${provider.name} settings',
+              child: ProviderAvatar(label: provider.shortName, small: true),
+            ),
+          ),
+          const SizedBox(width: 10),
           Expanded(
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            child: Row(
               children: [
-                ActionChip(
-                  avatar: ProviderAvatar(label: provider.shortName, small: true),
-                  label: Text(provider.name),
-                  onPressed: onOpenProvider,
+                Expanded(
+                  child: GestureDetector(
+                    onTap: onOpenModel,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFFCF6),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE7D8C4)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.tune, size: 16, color: Color(0xFF7B4E2E)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              model,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF2D241C),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-                ActionChip(
-                  avatar: const Icon(Icons.tune, size: 17),
-                  label: Text(
-                    model,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  onPressed: onOpenModel,
-                ),
-                Chip(
-                  avatar: Icon(
-                    hasKey || !provider.requiresKey
-                        ? Icons.lock_outline
-                        : Icons.lock_open_outlined,
-                    size: 17,
-                    color: hasKey || !provider.requiresKey
-                        ? const Color(0xFF36764D)
-                        : const Color(0xFF9B4D39),
-                  ),
-                  label: Text(
-                    hasKey || !provider.requiresKey ? 'Key ready' : 'Key needed',
-                  ),
-                  side: BorderSide.none,
-                  backgroundColor: hasKey || !provider.requiresKey
-                      ? const Color(0xFFE3F0E4)
-                      : const Color(0xFFF3DDD4),
+                const SizedBox(width: 8),
+                Icon(
+                  hasKey || !provider.requiresKey
+                      ? Icons.lock_outline
+                      : Icons.lock_open_outlined,
+                  size: 18,
+                  color: hasKey || !provider.requiresKey
+                      ? const Color(0xFF36764D)
+                      : const Color(0xFF9B4D39),
                 ),
               ],
             ),
@@ -667,6 +833,33 @@ class ChatHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+String formatMathText(String text) {
+  var formatted = text;
+  
+  // Replace double dollar sign math blocks with markdown code block
+  final blockMathRegex = RegExp(r'\$\$(.*?)\$\$', dotAll: true);
+  formatted = formatted.replaceAllMapped(blockMathRegex, (match) {
+    final eq = match.group(1)?.trim() ?? '';
+    return '\n```math\n$eq\n```\n';
+  });
+
+  // Replace \[ ... \] with code blocks
+  final bracketMathRegex = RegExp(r'\\\[(.*?)\\\]', dotAll: true);
+  formatted = formatted.replaceAllMapped(bracketMathRegex, (match) {
+    final eq = match.group(1)?.trim() ?? '';
+    return '\n```math\n$eq\n```\n';
+  });
+
+  // Replace \( ... \) with inline code blocks
+  final parenMathRegex = RegExp(r'\\\((.*?)\\\)', dotAll: true);
+  formatted = formatted.replaceAllMapped(parenMathRegex, (match) {
+    final eq = match.group(1)?.trim() ?? '';
+    return ' `$eq` ';
+  });
+
+  return formatted;
 }
 
 class MessageBubble extends StatelessWidget {
@@ -729,15 +922,66 @@ class MessageBubble extends StatelessWidget {
                 ),
               ],
             ),
-            child: SelectableText(
-              message.text,
-              style: TextStyle(
-                height: 1.45,
-                color: textColor,
-                fontSize: 15.5,
-                fontWeight: isUser ? FontWeight.w600 : FontWeight.w500,
-              ),
-            ),
+            child: isUser
+                ? SelectableText(
+                    message.text,
+                    style: TextStyle(
+                      height: 1.45,
+                      color: textColor,
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  )
+                : MarkdownBody(
+                    data: formatMathText(message.text),
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                      p: TextStyle(
+                        height: 1.45,
+                        color: textColor,
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      code: GoogleFonts.manrope(
+                        fontSize: 13,
+                        color: const Color(0xFF7B4E2E),
+                        backgroundColor: const Color(0xFFF7F2E8),
+                      ),
+                      codeblockDecoration: BoxDecoration(
+                        color: const Color(0xFFF7F2E8),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFDCCBB8)),
+                      ),
+                      tableBorder: TableBorder.all(
+                        color: const Color(0xFFDCCBB8),
+                        width: 1,
+                      ),
+                      tableBody: TextStyle(
+                        color: textColor,
+                        fontSize: 14,
+                      ),
+                      tableHead: TextStyle(
+                        color: textColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                      h1: TextStyle(
+                        color: textColor,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      h2: TextStyle(
+                        color: textColor,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      h3: TextStyle(
+                        color: textColor,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
           ),
         ),
       ),
@@ -826,12 +1070,14 @@ class Composer extends StatelessWidget {
     required this.controller,
     required this.isSending,
     required this.onSend,
+    required this.onPlusPressed,
     super.key,
   });
 
   final TextEditingController controller;
   final bool isSending;
   final VoidCallback onSend;
+  final VoidCallback onPlusPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -869,6 +1115,31 @@ class Composer extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
+            GestureDetector(
+              onTap: onPlusPressed,
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFFFF8EA),
+                  border: Border.all(color: const Color(0xFFD8B98D), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF7B4E2E).withValues(alpha: 0.1),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.add,
+                  color: Color(0xFF7B4E2E),
+                  size: 20,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
             AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
@@ -897,6 +1168,348 @@ class Composer extends StatelessWidget {
   }
 }
 
+class MediaAndModelSheet extends StatefulWidget {
+  const MediaAndModelSheet({
+    required this.provider,
+    required this.settings,
+    required this.cachedModels,
+    required this.onProviderChanged,
+    required this.onModelChanged,
+    required this.onMaxTokensChanged,
+    required this.onFetchModels,
+    required this.onConfigureKey,
+    super.key,
+  });
+
+  final ProviderDefinition provider;
+  final ProviderSettings settings;
+  final List<String> cachedModels;
+  final ValueChanged<String> onProviderChanged;
+  final ValueChanged<String> onModelChanged;
+  final ValueChanged<int> onMaxTokensChanged;
+  final Future<List<String>> Function() onFetchModels;
+  final VoidCallback onConfigureKey;
+
+  @override
+  State<MediaAndModelSheet> createState() => _MediaAndModelSheetState();
+}
+
+class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
+  late int _maxTokens;
+  var _fetching = false;
+  late String _selectedProviderId;
+  late String _selectedModel;
+
+  @override
+  void initState() {
+    super.initState();
+    _maxTokens = widget.settings.maxTokens;
+    _selectedProviderId = widget.provider.id;
+    _selectedModel = widget.settings.model;
+  }
+
+  Future<void> _fetch() async {
+    setState(() => _fetching = true);
+    try {
+      final models = await widget.onFetchModels();
+      if (mounted) {
+        setState(() {
+          if (!models.contains(_selectedModel) && models.isNotEmpty) {
+            _selectedModel = models.first;
+            widget.onModelChanged(_selectedModel);
+          }
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Model fetch failed: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _fetching = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentProvider = providerCatalog.firstWhere((p) => p.id == _selectedProviderId);
+    final models = widget.cachedModels.isNotEmpty ? widget.cachedModels : currentProvider.models;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      decoration: const BoxDecoration(
+        color: Color(0xFFFFFBF2),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 16,
+            offset: Offset(0, -4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 42,
+              height: 5,
+              decoration: BoxDecoration(
+                color: const Color(0xFFDCCBB8),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Input & Settings',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF2D241C),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Media Attachment (Soon)',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF6C5946),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildMediaItem(Icons.image_outlined, 'Photos'),
+              _buildMediaItem(Icons.camera_alt_outlined, 'Camera'),
+              _buildMediaItem(Icons.insert_drive_file_outlined, 'Document'),
+              _buildMediaItem(Icons.mic_none_outlined, 'Audio'),
+            ],
+          ),
+          const SizedBox(height: 24),
+          const Divider(color: Color(0xFFE7D8C4)),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _selectedProviderId,
+                  dropdownColor: const Color(0xFFFFFBF2),
+                  decoration: const InputDecoration(
+                    labelText: 'AI Provider',
+                    labelStyle: TextStyle(color: Color(0xFF6C5946)),
+                    border: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                    ),
+                    prefixIcon: Icon(Icons.hub_outlined, color: Color(0xFF7B4E2E)),
+                  ),
+                  items: providerCatalog.map((p) {
+                    return DropdownMenuItem<String>(
+                      value: p.id,
+                      child: Text(p.name),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      final nextProvider = providerCatalog.firstWhere((p) => p.id == val);
+                      setState(() {
+                        _selectedProviderId = val;
+                        _selectedModel = nextProvider.models.first;
+                      });
+                      widget.onProviderChanged(val);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 56,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFDCCBB8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    widget.onConfigureKey();
+                  },
+                  child: const Icon(Icons.key, color: Color(0xFF7B4E2E)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: models.contains(_selectedModel) ? _selectedModel : models.first,
+                  dropdownColor: const Color(0xFFFFFBF2),
+                  decoration: const InputDecoration(
+                    labelText: 'Model Name',
+                    labelStyle: TextStyle(color: Color(0xFF6C5946)),
+                    border: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                    ),
+                    prefixIcon: Icon(Icons.memory_outlined, color: Color(0xFF7B4E2E)),
+                  ),
+                  items: models.map((m) {
+                    return DropdownMenuItem<String>(
+                      value: m,
+                      child: Text(
+                        m,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => _selectedModel = val);
+                      widget.onModelChanged(val);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 56,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFDCCBB8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: _fetching ? null : _fetch,
+                  child: _fetching
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.sync, color: Color(0xFF7B4E2E)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Max Output Tokens',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  Text(
+                    '$_maxTokens tokens',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF7B4E2E),
+                    ),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _maxTokens.toDouble().clamp(128, 16384),
+                min: 128,
+                max: 16384,
+                divisions: 63,
+                activeColor: const Color(0xFF7B4E2E),
+                inactiveColor: const Color(0xFFE7D8C4),
+                onChanged: (val) {
+                  setState(() => _maxTokens = val.round());
+                  widget.onMaxTokensChanged(val.round());
+                },
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [512, 1024, 2048, 4096, 8192].map((preset) {
+                  final selected = _maxTokens == preset;
+                  return ChoiceChip(
+                    label: Text(
+                      preset.toString(),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: selected ? Colors.white : const Color(0xFF2D241C),
+                      ),
+                    ),
+                    selected: selected,
+                    selectedColor: const Color(0xFF7B4E2E),
+                    backgroundColor: const Color(0xFFFFFCF6),
+                    onSelected: (sel) {
+                      if (sel) {
+                        setState(() => _maxTokens = preset);
+                        widget.onMaxTokensChanged(preset);
+                      }
+                    },
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMediaItem(IconData icon, String label) {
+    return Opacity(
+      opacity: 0.4,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFFE7D8C4),
+              border: Border.all(color: const Color(0xFFDCCBB8)),
+            ),
+            child: Icon(icon, color: const Color(0xFF6C5946)),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF6C5946),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ProviderSettingsSheet extends StatefulWidget {
   const ProviderSettingsSheet({
     required this.provider,
@@ -919,6 +1532,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
   late final TextEditingController _keyController;
   late final TextEditingController _baseUrlController;
   late final TextEditingController _modelController;
+  late final TextEditingController _maxTokensController;
   List<String> _models = [];
   var _fetching = false;
 
@@ -928,6 +1542,9 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
     _keyController = TextEditingController(text: widget.settings.apiKey);
     _baseUrlController = TextEditingController(text: widget.settings.baseUrl);
     _modelController = TextEditingController(text: widget.settings.model);
+    _maxTokensController = TextEditingController(
+      text: widget.settings.maxTokens.toString(),
+    );
     _models = widget.cachedModels;
   }
 
@@ -936,6 +1553,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
     _keyController.dispose();
     _baseUrlController.dispose();
     _modelController.dispose();
+    _maxTokensController.dispose();
     super.dispose();
   }
 
@@ -1010,6 +1628,18 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
             ],
           ),
           const SizedBox(height: 12),
+          TextField(
+            controller: _maxTokensController,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(
+              labelText: 'Max tokens',
+              helperText: 'Lower this if a provider says you do not have enough credits.',
+              prefixIcon: Icon(Icons.speed),
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
           SizedBox(
             height: 138,
             child: ListView.builder(
@@ -1038,11 +1668,16 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
               Expanded(
                 child: FilledButton(
                   onPressed: () {
+                    final parsedMaxTokens = int.tryParse(
+                          _maxTokensController.text.trim(),
+                        ) ??
+                        widget.provider.defaultMaxTokens;
                     Navigator.of(context).pop(
                       ProviderSettings(
                         apiKey: _keyController.text.trim(),
                         baseUrl: _baseUrlController.text.trim(),
                         model: _modelController.text.trim(),
+                        maxTokens: parsedMaxTokens.clamp(1, 131072).toInt(),
                       ),
                     );
                   },
@@ -1402,7 +2037,7 @@ class ChatClient {
                   'content': message.text,
                 })
             .toList(),
-        'max_tokens': 8192,
+        'max_tokens': settings.maxTokens,
         'temperature': 1.0,
         'top_p': 0.95,
         'stream': false,
@@ -1472,6 +2107,7 @@ class ProviderDefinition {
     required this.keyLabel,
     required this.baseUrl,
     required this.models,
+    this.defaultMaxTokens = 4096,
     this.requiresKey = true,
     this.extraHeaders = const {},
   });
@@ -1482,6 +2118,7 @@ class ProviderDefinition {
   final String keyLabel;
   final String baseUrl;
   final List<String> models;
+  final int defaultMaxTokens;
   final bool requiresKey;
   final Map<String, String> extraHeaders;
 }
@@ -1491,6 +2128,7 @@ class ProviderSettings {
     required this.apiKey,
     required this.baseUrl,
     required this.model,
+    required this.maxTokens,
   });
 
   factory ProviderSettings.defaults(ProviderDefinition provider) {
@@ -1498,6 +2136,7 @@ class ProviderSettings {
       apiKey: '',
       baseUrl: provider.baseUrl,
       model: provider.models.first,
+      maxTokens: provider.defaultMaxTokens,
     );
   }
 
@@ -1506,22 +2145,26 @@ class ProviderSettings {
       apiKey: json['apiKey']?.toString() ?? '',
       baseUrl: json['baseUrl']?.toString() ?? '',
       model: json['model']?.toString() ?? '',
+      maxTokens: _readInt(json['maxTokens'], 0),
     );
   }
 
   final String apiKey;
   final String baseUrl;
   final String model;
+  final int maxTokens;
 
   ProviderSettings copyWith({
     String? apiKey,
     String? baseUrl,
     String? model,
+    int? maxTokens,
   }) {
     return ProviderSettings(
       apiKey: apiKey ?? this.apiKey,
       baseUrl: baseUrl ?? this.baseUrl,
       model: model ?? this.model,
+      maxTokens: maxTokens ?? this.maxTokens,
     );
   }
 
@@ -1530,7 +2173,14 @@ class ProviderSettings {
       'apiKey': apiKey,
       'baseUrl': baseUrl,
       'model': model,
+      'maxTokens': maxTokens,
     };
+  }
+
+  static int _readInt(dynamic value, int fallback) {
+    if (value is int) return value;
+    if (value is num) return value.round();
+    return int.tryParse(value?.toString() ?? '') ?? fallback;
   }
 }
 
@@ -1555,6 +2205,71 @@ class ChatMessage {
   final bool isError;
 }
 
+class ChatSession {
+  final String id;
+  final String title;
+  final List<ChatMessage> messages;
+  final String providerId;
+  final String model;
+
+  ChatSession({
+    required this.id,
+    required this.title,
+    required this.messages,
+    required this.providerId,
+    required this.model,
+  });
+
+  ChatSession copyWith({
+    String? id,
+    String? title,
+    List<ChatMessage>? messages,
+    String? providerId,
+    String? model,
+  }) {
+    return ChatSession(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      messages: messages ?? this.messages,
+      providerId: providerId ?? this.providerId,
+      model: model ?? this.model,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'messages': messages.map((m) => {
+          'role': m.role.apiName,
+          'text': m.text,
+          'isError': m.isError,
+        }).toList(),
+        'providerId': providerId,
+        'model': model,
+      };
+
+  factory ChatSession.fromJson(Map<String, dynamic> json) {
+    final messagesList = (json['messages'] as List?)
+            ?.map((m) => ChatMessage(
+                  role: MessageRole.values.firstWhere(
+                    (v) => v.apiName == m['role'],
+                    orElse: () => MessageRole.user,
+                  ),
+                  text: m['text']?.toString() ?? '',
+                  isError: m['isError'] as bool? ?? false,
+                ))
+            .toList() ??
+        [];
+    return ChatSession(
+      id: json['id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      messages: messagesList,
+      providerId: json['providerId']?.toString() ?? providerCatalog.first.id,
+      model: json['model']?.toString() ?? '',
+    );
+  }
+}
+
 const providerCatalog = <ProviderDefinition>[
   ProviderDefinition(
     id: 'nvidia',
@@ -1568,6 +2283,7 @@ const providerCatalog = <ProviderDefinition>[
       'nvidia/llama-3.1-nemotron-ultra-253b-v1',
       'deepseek-ai/deepseek-r1',
     ],
+    defaultMaxTokens: 8192,
   ),
   ProviderDefinition(
     id: 'openai',
@@ -1588,6 +2304,7 @@ const providerCatalog = <ProviderDefinition>[
       'openai/gpt-4o',
       'google/gemini-2.5-pro',
     ],
+    defaultMaxTokens: 2048,
     extraHeaders: {
       'HTTP-Referer': 'https://termuxforge.local',
       'X-Title': 'Forge Chat',
