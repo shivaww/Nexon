@@ -472,13 +472,30 @@ class _ChatHomePageState extends State<ChatHomePage> {
           _scrollToBottom();
         }
 
-        final List<ChatMessage> historyForApi = [
-          if (_searchSettings.enabled)
-            const ChatMessage(role: MessageRole.system, text: mcpAndSearchSystemPrompt),
-          ..._sessions[sessionIndex].messages
-              .take(assistantMessageIndex)
-              .toList(),
-        ];
+        final List<ChatMessage> historyForApi = [];
+        
+        String systemPromptText = "You have access to local Termux file system tools.\n"
+            "If you need to use the local file system MCP server, output a single line: [MCP_REQUEST: {\"method\": \"...\", \"params\": {...}}] and stop generating.\n"
+            "MCP methods available:\n"
+            "- file_read: params {path: string}\n"
+            "- file_write: params {path: string, content: string}\n"
+            "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
+            "- file_delete: params {path: string}\n"
+            "- dir_list: params {path: string}\n"
+            "- dir_create: params {path: string}\n"
+            "- code_search: params {path: string, query: string}\n"
+            "- file_search: params {path: string, pattern: string}\n"
+            "Once results are provided, continue your response.\n\n"
+            "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via MCP_REQUEST. Just output the tag.";
+
+        if (_searchSettings.enabled) {
+          systemPromptText += "\n\nYou ALSO have access to a web search tool.\n"
+              "If you need to search the web, output a single line: [SEARCH_REQUEST: your search query] and stop generating.";
+        }
+
+        historyForApi.add(ChatMessage(role: MessageRole.system, text: systemPromptText));
+
+        historyForApi.addAll(_sessions[sessionIndex].messages.take(assistantMessageIndex));
 
         final stream = _chatClient.sendChatStream(
           provider: provider,
