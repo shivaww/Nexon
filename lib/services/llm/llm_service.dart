@@ -152,7 +152,10 @@ class LLMService {
     try {
       final uri = Uri.parse('${provider.baseUrl}/models');
       final request = await _httpClient.getUrl(uri);
-      _setProviderHeaders(request, provider);
+      request.headers.set('Authorization', 'Bearer ${provider.apiKey}');
+      for (final entry in provider.customHeaders.entries) {
+        request.headers.set(entry.key, entry.value);
+      }
 
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
@@ -209,10 +212,13 @@ class LLMService {
     final stopwatch = Stopwatch()..start();
 
     try {
-      final uri = Uri.parse(_chatCompletionsEndpoint(provider));
+      final uri = Uri.parse('${provider.baseUrl}/chat/completions');
       final request = await _httpClient.postUrl(uri);
+      request.headers.set('Authorization', 'Bearer ${provider.apiKey}');
       request.headers.set('Content-Type', 'application/json');
-      _setProviderHeaders(request, provider);
+      for (final entry in provider.customHeaders.entries) {
+        request.headers.set(entry.key, entry.value);
+      }
 
       final body = <String, dynamic>{
         'model': modelId,
@@ -286,11 +292,13 @@ class LLMService {
     }
 
     try {
-      final uri = Uri.parse(_chatCompletionsEndpoint(provider));
+      final uri = Uri.parse('${provider.baseUrl}/chat/completions');
       final request = await _httpClient.postUrl(uri);
+      request.headers.set('Authorization', 'Bearer ${provider.apiKey}');
       request.headers.set('Content-Type', 'application/json');
-      request.headers.set('Accept', 'text/event-stream');
-      _setProviderHeaders(request, provider);
+      for (final entry in provider.customHeaders.entries) {
+        request.headers.set(entry.key, entry.value);
+      }
 
       final body = <String, dynamic>{
         'model': modelId,
@@ -310,68 +318,34 @@ class LLMService {
         );
       }
 
-      // Parse SSE stream. A JSON event can be split across network chunks.
-      var buffer = '';
+      // Parse SSE stream.
       await for (final chunk in response.transform(utf8.decoder)) {
-        buffer += chunk;
-        final lines = buffer.split('\n');
-        buffer = lines.removeLast();
+        final lines = chunk.split('\n');
         for (final line in lines) {
-          final content = _contentFromSseLine(line);
-          if (content == null) continue;
-          yield content;
-        }
-      }
+          if (!line.startsWith('data: ')) continue;
+          final data = line.substring(6).trim();
+          if (data == '[DONE]') return;
 
-      if (buffer.trim().isNotEmpty) {
-        final content = _contentFromSseLine(buffer);
-        if (content != null) yield content;
+          try {
+            final json = jsonDecode(data) as Map<String, dynamic>;
+            final choices = json['choices'] as List<dynamic>?;
+            if (choices == null || choices.isEmpty) continue;
+
+            final delta =
+                (choices.first as Map<String, dynamic>)['delta']
+                    as Map<String, dynamic>?;
+            final content = delta?['content'] as String?;
+            if (content != null && content.isNotEmpty) {
+              yield content;
+            }
+          } catch (_) {
+            // Skip malformed SSE chunks.
+          }
+        }
       }
     } catch (e) {
       // Re-yield error as a stream error.
       yield* Stream<String>.error(e);
-    }
-  }
-
-  String? _contentFromSseLine(String line) {
-    final trimmed = line.trim();
-    if (trimmed.isEmpty || !trimmed.startsWith('data:')) return null;
-
-    final data = trimmed.substring(5).trim();
-    if (data == '[DONE]') return null;
-
-    try {
-      final json = jsonDecode(data) as Map<String, dynamic>;
-      final choices = json['choices'] as List<dynamic>?;
-      if (choices == null || choices.isEmpty) return null;
-
-      final choice = choices.first as Map<String, dynamic>;
-      final delta = choice['delta'] as Map<String, dynamic>?;
-      final message = choice['message'] as Map<String, dynamic>?;
-      final content = (delta?['content'] ??
-              delta?['reasoning_content'] ??
-              message?['content'] ??
-              choice['text'])
-          ?.toString();
-      return content == null || content.isEmpty ? null : content;
-    } catch (_) {
-      // Skip malformed SSE chunks.
-      return null;
-    }
-  }
-
-  String _chatCompletionsEndpoint(LLMProvider provider) {
-    final baseUrl = provider.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    if (baseUrl.endsWith('/chat/completions')) return baseUrl;
-    return '$baseUrl/chat/completions';
-  }
-
-  void _setProviderHeaders(HttpClientRequest request, LLMProvider provider) {
-    if (provider.apiKey.trim().isNotEmpty) {
-      request.headers.set('Authorization', 'Bearer ${provider.apiKey.trim()}');
-    }
-    for (final entry in provider.customHeaders.entries) {
-      request.headers.set(entry.key, entry.value);
     }
   }
 
