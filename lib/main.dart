@@ -309,8 +309,21 @@ class _ChatHomePageState extends State<ChatHomePage> {
         provider.id: result,
       };
       _selectedProviderId = provider.id;
+      
+      final targetSessionId = _activeSessionId;
+      if (targetSessionId != null) {
+        final sessionIndex = _sessions.indexWhere((s) => s.id == targetSessionId);
+        if (sessionIndex != -1) {
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            providerId: provider.id,
+            model: result.model,
+            maxTokens: result.maxTokens,
+          );
+        }
+      }
     });
     await _saveSettings();
+    await _saveSessions();
   }
 
   Future<List<String>> _fetchModels(ProviderDefinition provider) async {
@@ -356,8 +369,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
         ..._settings,
         provider.id: settings.copyWith(model: selected.trim()),
       };
+      
+      final targetSessionId = _activeSessionId;
+      if (targetSessionId != null) {
+        final sessionIndex = _sessions.indexWhere((s) => s.id == targetSessionId);
+        if (sessionIndex != -1) {
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(model: selected.trim());
+        }
+      }
     });
     await _saveSettings();
+    await _saveSessions();
   }
 
   static const String searchSystemPrompt =
@@ -443,7 +465,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
             const ChatMessage(role: MessageRole.system, text: searchSystemPrompt),
           ..._sessions[sessionIndex].messages
               .take(assistantMessageIndex)
-              .where((message) => message.role != MessageRole.system)
               .toList(),
         ];
 
@@ -456,38 +477,43 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         var fullText = '';
         var reasoningText = '';
+        var isThinking = false;
+        final updateStopwatch = Stopwatch()..start();
+
         await for (final chunk in stream) {
           if (!mounted) return;
           if (chunk.startsWith('[REASONING]')) {
             reasoningText += chunk.substring(11);
           } else {
-            fullText += chunk;
-          }
-
-          setState(() {
-            final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-            if (assistantMessageIndex < msgs.length) {
-              msgs[assistantMessageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text: fullText,
-                reasoning: reasoningText,
-              );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+            var textChunk = chunk;
+            
+            // Start of <think> or <reasoning>
+            if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>'))) {
+              final tag = textChunk.contains('<think>') ? '<think>' : '<reasoning>';
+              final parts = textChunk.split(tag);
+              fullText += parts[0];
+              isThinking = true;
+              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
             }
-          });
-
-          if (targetSessionId == _activeSessionId) {
-            _scrollToBottom();
+            
+            // End of </think> or </reasoning>
+            if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>'))) {
+              final tag = textChunk.contains('</think>') ? '</think>' : '</reasoning>';
+              final parts = textChunk.split(tag);
+              reasoningText += parts[0];
+              isThinking = false;
+              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+              fullText += textChunk;
+              
+              // We could potentially start thinking again in the same chunk? Unlikely but possible.
+            } else if (isThinking) {
+              reasoningText += textChunk;
+            } else {
+              fullText += textChunk;
+            }
           }
-        }
 
-        // Post-process inline <think> tags if reasoningText is empty but fullText contains them
-        if (reasoningText.isEmpty && fullText.contains('<think>')) {
-          final thinkRegex = RegExp(r'<think>(.*?)</think>', dotAll: true);
-          final match = thinkRegex.firstMatch(fullText);
-          if (match != null) {
-            reasoningText = match.group(1)?.trim() ?? '';
-            fullText = fullText.replaceFirst(thinkRegex, '').trim();
+          if (updateStopwatch.elapsedMilliseconds > 50) {
             setState(() {
               final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
               if (assistantMessageIndex < msgs.length) {
@@ -499,7 +525,27 @@ class _ChatHomePageState extends State<ChatHomePage> {
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
               }
             });
+            updateStopwatch.reset();
+            if (targetSessionId == _activeSessionId) {
+              _scrollToBottom();
+            }
           }
+        }
+
+        // Final state update after stream completes
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          if (assistantMessageIndex < msgs.length) {
+            msgs[assistantMessageIndex] = ChatMessage(
+              role: MessageRole.assistant,
+              text: fullText,
+              reasoning: reasoningText,
+            );
+            _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+          }
+        });
+        if (targetSessionId == _activeSessionId) {
+          _scrollToBottom();
         }
 
         // Check if LLM requested web search
@@ -1976,13 +2022,19 @@ class Composer extends StatelessWidget {
 
 bool modelHasVision(String modelName) {
   final lower = modelName.toLowerCase();
+  if (lower.contains('deepseek-r1') || lower.contains('llama-3.3')) {
+    return false; // Specifically disable vision for these large language-only models if they accidentally match
+  }
   return lower.contains('vision') ||
       lower.contains('gpt-4o') ||
+      lower.contains('gpt-4-turbo') ||
       lower.contains('claude-3') ||
       lower.contains('gemini-1.5') ||
       lower.contains('gemini-2.0') ||
       lower.contains('gemini-2.5') ||
       lower.contains('pixtral') ||
+      lower.contains('llava') ||
+      lower.contains('qwen-vl') ||
       lower.contains('llama-3.2-11b') ||
       lower.contains('llama-3.2-90b');
 }
@@ -2527,33 +2579,46 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Widget _buildMediaItem(IconData icon, String label, {required bool isEnabled, required VoidCallback onTap}) {
-    return Opacity(
-      opacity: isEnabled ? 1.0 : 0.3,
-      child: InkWell(
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 200),
+      opacity: isEnabled ? 1.0 : 0.4,
+      child: GestureDetector(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
+        child: Container(
+          width: 72,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: isEnabled ? Colors.white : const Color(0xFFF8F5F0),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isEnabled ? const Color(0xFFDCCBB8) : Colors.transparent,
+              width: 1,
+            ),
+            boxShadow: isEnabled
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF7B4E2E).withValues(alpha: 0.08),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    )
+                  ]
+                : null,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isEnabled ? const Color(0xFFE7D8C4) : const Color(0xFFF2ECE1),
-                  border: Border.all(color: const Color(0xFFDCCBB8)),
-                ),
-                child: Icon(icon, color: isEnabled ? const Color(0xFF7B4E2E) : const Color(0xFF9E8E7D)),
+              Icon(
+                icon,
+                size: 26,
+                color: isEnabled ? const Color(0xFF7B4E2E) : const Color(0xFFB0A496),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 10,
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: isEnabled ? const Color(0xFF2D241C) : const Color(0xFF9E8E7D),
+                  color: isEnabled ? const Color(0xFF2D241C) : const Color(0xFFB0A496),
                 ),
               ),
             ],
@@ -2587,6 +2652,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
   late final TextEditingController _baseUrlController;
   late final TextEditingController _modelController;
   late final TextEditingController _maxTokensController;
+  late final TextEditingController _fallbackKeysController;
   List<String> _models = [];
   var _fetching = false;
 
@@ -2599,6 +2665,9 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
     _maxTokensController = TextEditingController(
       text: widget.settings.maxTokens.toString(),
     );
+    _fallbackKeysController = TextEditingController(
+      text: widget.settings.fallbackApiKeys.join('\n'),
+    );
     _models = widget.cachedModels;
   }
 
@@ -2608,6 +2677,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
     _baseUrlController.dispose();
     _modelController.dispose();
     _maxTokensController.dispose();
+    _fallbackKeysController.dispose();
     super.dispose();
   }
 
@@ -2643,6 +2713,17 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
                   : 'API key (optional)',
               prefixIcon: const Icon(Icons.key),
               border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _fallbackKeysController,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Fallback API keys (one per line)',
+              helperText: 'Keys to rotate if limits (402, 429) are reached.',
+              prefixIcon: Icon(Icons.vpn_key),
+              border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
@@ -2732,6 +2813,11 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
                         baseUrl: _baseUrlController.text.trim(),
                         model: _modelController.text.trim(),
                         maxTokens: parsedMaxTokens.clamp(1, 131072).toInt(),
+                        fallbackApiKeys: _fallbackKeysController.text
+                            .split('\n')
+                            .map((e) => e.trim())
+                            .where((e) => e.isNotEmpty)
+                            .toList(),
                       ),
                     );
                   },
@@ -3078,48 +3164,67 @@ class ChatClient {
   }) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
-      final request = await client.postUrl(uri);
-      _setHeaders(request, provider, settings, stream: false);
-      request.headers.contentType = ContentType.json;
+      final allKeys = [settings.apiKey, ...settings.fallbackApiKeys]
+          .map((k) => k.trim())
+          .where((k) => k.isNotEmpty)
+          .toList();
+      if (allKeys.isEmpty) allKeys.add('');
 
-      final payload = <String, dynamic>{
-        'model': model,
-        'messages': messages
-            .map((message) {
-              if (message.images.isNotEmpty) {
-                return {
-                  'role': message.role.apiName,
-                  'content': [
-                    {'type': 'text', 'text': message.text},
-                    ...message.images.map((img) => {
-                          'type': 'image_url',
-                          'image_url': {
-                            'url': 'data:image/jpeg;base64,$img'
-                          }
-                        })
-                  ]
-                };
-              }
-              return {
-                'role': message.role.apiName,
-                'content': message.text,
-              };
-            })
-            .toList(),
-        'max_tokens': settings.maxTokens,
-        'temperature': 1.0,
-        'top_p': 0.95,
-        'stream': false,
-      };
+      for (int i = 0; i < allKeys.length; i++) {
+        final currentKey = allKeys[i];
+        
+        try {
+          final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
+          final request = await client.postUrl(uri);
+          _setHeaders(request, provider, settings, currentKey, stream: false);
+          request.headers.contentType = ContentType.json;
 
-      request.write(jsonEncode(payload));
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('HTTP ${response.statusCode}: $body');
+          final payload = <String, dynamic>{
+            'model': model,
+            'messages': messages
+                .map((message) {
+                  if (message.images.isNotEmpty) {
+                    return {
+                      'role': message.role.apiName,
+                      'content': [
+                        {'type': 'text', 'text': message.text},
+                        ...message.images.map((img) => {
+                              'type': 'image_url',
+                              'image_url': {
+                                'url': 'data:image/jpeg;base64,$img'
+                              }
+                            })
+                      ]
+                    };
+                  }
+                  return {
+                    'role': message.role.apiName,
+                    'content': message.text,
+                  };
+                })
+                .toList(),
+            'max_tokens': settings.maxTokens,
+            'temperature': 1.0,
+            'top_p': 0.95,
+            'stream': false,
+          };
+
+          request.write(jsonEncode(payload));
+          final response = await request.close();
+          final body = await response.transform(utf8.decoder).join();
+          
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            throw HttpException('HTTP ${response.statusCode}: $body');
+          }
+          return _extractAnswer(jsonDecode(body));
+        } catch (e) {
+          final isRateLimitOrCredits = e.toString().contains('429') || e.toString().contains('402');
+          if (!isRateLimitOrCredits || i == allKeys.length - 1) {
+            rethrow;
+          }
+        }
       }
-      return _extractAnswer(jsonDecode(body));
+      throw const HttpException('Failed to send request with any provided API key');
     } finally {
       client.close(force: true);
     }
@@ -3133,51 +3238,71 @@ class ChatClient {
   }) async* {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
-      final request = await client.postUrl(uri);
-      _setHeaders(request, provider, settings, stream: true);
-      request.headers.contentType = ContentType.json;
+      final allKeys = [settings.apiKey, ...settings.fallbackApiKeys]
+          .map((k) => k.trim())
+          .where((k) => k.isNotEmpty)
+          .toList();
+      if (allKeys.isEmpty) allKeys.add('');
 
-      final payload = <String, dynamic>{
-        'model': model,
-        'messages': messages
-            .map((message) {
-              if (message.images.isNotEmpty) {
-                return {
-                  'role': message.role.apiName,
-                  'content': [
-                    {'type': 'text', 'text': message.text},
-                    ...message.images.map((img) => {
-                          'type': 'image_url',
-                          'image_url': {
-                            'url': 'data:image/jpeg;base64,$img'
-                          }
-                        })
-                  ]
-                };
-              }
-              return {
-                'role': message.role.apiName,
-                'content': message.text,
-              };
-            })
-            .toList(),
-        'max_tokens': settings.maxTokens,
-        'temperature': 1.0,
-        'top_p': 0.95,
-        'stream': true,
-      };
+      for (int i = 0; i < allKeys.length; i++) {
+        final currentKey = allKeys[i];
+        
+        HttpClientResponse? response;
+        try {
+          final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
+          final request = await client.postUrl(uri);
+          _setHeaders(request, provider, settings, currentKey, stream: true);
+          request.headers.contentType = ContentType.json;
 
-      request.write(jsonEncode(payload));
-      final response = await request.close();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        final body = await response.transform(utf8.decoder).join();
-        throw HttpException('HTTP ${response.statusCode}: $body');
-      }
+          final payload = <String, dynamic>{
+            'model': model,
+            'messages': messages
+                .map((message) {
+                  if (message.images.isNotEmpty) {
+                    return {
+                      'role': message.role.apiName,
+                      'content': [
+                        {'type': 'text', 'text': message.text},
+                        ...message.images.map((img) => {
+                              'type': 'image_url',
+                              'image_url': {
+                                'url': 'data:image/jpeg;base64,$img'
+                              }
+                            })
+                      ]
+                    };
+                  }
+                  return {
+                    'role': message.role.apiName,
+                    'content': message.text,
+                  };
+                })
+                .toList(),
+            'max_tokens': settings.maxTokens,
+            'temperature': 1.0,
+            'top_p': 0.95,
+            'stream': true,
+          };
 
-      final lines = response
-          .transform(utf8.decoder)
-          .transform(const LineSplitter());
+          request.write(jsonEncode(payload));
+          response = await request.close();
+          
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            final body = await response.transform(utf8.decoder).join();
+            throw HttpException('HTTP ${response.statusCode}: $body');
+          }
+        } catch (e) {
+          final isRateLimitOrCredits = e.toString().contains('429') || e.toString().contains('402');
+          if (!isRateLimitOrCredits || i == allKeys.length - 1) {
+            rethrow;
+          }
+          continue; // Try next key
+        }
+
+        // If we reach here, the response was successful
+        final lines = response
+            .transform(utf8.decoder)
+            .transform(const LineSplitter());
 
       await for (final line in lines) {
         if (line.trim().isEmpty) continue;
@@ -3210,6 +3335,7 @@ class ChatClient {
             // Ignore JSON decode errors of partial/empty lines
           }
         }
+        break; // Successfully streamed, do not try next key
       }
     } finally {
       client.close(force: true);
@@ -3297,13 +3423,13 @@ class ChatClient {
   void _setHeaders(
     HttpClientRequest request,
     ProviderDefinition provider,
-    ProviderSettings settings, {
+    ProviderSettings settings,
+    String activeApiKey, {
     required bool stream,
   }) {
     request.headers.set('Accept', stream ? 'text/event-stream' : 'application/json');
-    final apiKey = settings.apiKey.trim();
-    if (apiKey.isNotEmpty) {
-      request.headers.set('Authorization', 'Bearer $apiKey');
+    if (activeApiKey.isNotEmpty) {
+      request.headers.set('Authorization', 'Bearer $activeApiKey');
     }
     for (final entry in provider.extraHeaders.entries) {
       request.headers.set(entry.key, entry.value);
@@ -3361,6 +3487,7 @@ class ProviderSettings {
     required this.baseUrl,
     required this.model,
     required this.maxTokens,
+    this.fallbackApiKeys = const [],
     this.reasoningEnabled = true,
   });
 
@@ -3370,6 +3497,7 @@ class ProviderSettings {
       baseUrl: provider.baseUrl,
       model: provider.models.first,
       maxTokens: provider.defaultMaxTokens,
+      fallbackApiKeys: const [],
       reasoningEnabled: true,
     );
   }
@@ -3380,6 +3508,10 @@ class ProviderSettings {
       baseUrl: json['baseUrl']?.toString() ?? '',
       model: json['model']?.toString() ?? '',
       maxTokens: _readInt(json['maxTokens'], 0),
+      fallbackApiKeys: (json['fallbackApiKeys'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
       reasoningEnabled: json['reasoningEnabled'] as bool? ?? true,
     );
   }
@@ -3388,6 +3520,7 @@ class ProviderSettings {
   final String baseUrl;
   final String model;
   final int maxTokens;
+  final List<String> fallbackApiKeys;
   final bool reasoningEnabled;
 
   ProviderSettings copyWith({
@@ -3395,6 +3528,7 @@ class ProviderSettings {
     String? baseUrl,
     String? model,
     int? maxTokens,
+    List<String>? fallbackApiKeys,
     bool? reasoningEnabled,
   }) {
     return ProviderSettings(
@@ -3402,6 +3536,7 @@ class ProviderSettings {
       baseUrl: baseUrl ?? this.baseUrl,
       model: model ?? this.model,
       maxTokens: maxTokens ?? this.maxTokens,
+      fallbackApiKeys: fallbackApiKeys ?? this.fallbackApiKeys,
       reasoningEnabled: reasoningEnabled ?? this.reasoningEnabled,
     );
   }
@@ -3412,9 +3547,11 @@ class ProviderSettings {
       'baseUrl': baseUrl,
       'model': model,
       'maxTokens': maxTokens,
+      'fallbackApiKeys': fallbackApiKeys,
       'reasoningEnabled': reasoningEnabled,
     };
   }
+}
 
   static int _readInt(dynamic value, int fallback) {
     if (value is int) return value;
