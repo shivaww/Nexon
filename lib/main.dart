@@ -687,7 +687,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           }
         }
         
-        if (toolCallCount >= maxToolCalls) {
+        if (toolCallCount >= 10) {
           shouldContinue = false;
           continue;
         }
