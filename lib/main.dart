@@ -627,14 +627,19 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final searchRegex = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]');
         final mcpRegex = RegExp(r'\[MCP_REQUEST:\s*(\{.*?\})\s*\]', dotAll: true);
-        final researchPlanRegex = RegExp(r'\[RESEARCH_PLAN:\s*(\[.*?\])\s*\]', dotAll: true);
         
         final searchMatch = searchRegex.firstMatch(fullText);
         final mcpMatch = mcpRegex.firstMatch(fullText);
-        final researchPlanMatch = researchPlanRegex.firstMatch(fullText);
 
-        if (researchPlanMatch != null) {
-          final planJsonStr = researchPlanMatch.group(1)!;
+        if (fullText.contains('[RESEARCH_PLAN:')) {
+          final startIndex = fullText.indexOf('[RESEARCH_PLAN:');
+          final endIndex = fullText.lastIndexOf(']');
+          
+          if (startIndex != -1 && endIndex > startIndex) {
+            String planJsonStr = fullText.substring(startIndex + 15, endIndex).trim();
+            planJsonStr = planJsonStr.replaceAll(RegExp(r'^```json\s*'), '');
+            planJsonStr = planJsonStr.replaceAll(RegExp(r'^```\s*'), '');
+            planJsonStr = planJsonStr.replaceAll(RegExp(r'\s*```$'), '');
           try {
             final planList = jsonDecode(planJsonStr) as List;
             final stateMap = {
@@ -669,6 +674,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             debugPrint('Error parsing research plan: $e');
           }
           break;
+          }
         } else if (_searchSettings.enabled && searchMatch != null) {
           final query = searchMatch.group(1)?.trim() ?? '';
           toolCallCount++;
@@ -713,6 +719,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           }
         } else if (mcpMatch != null) {
           String jsonString = mcpMatch.group(1)?.trim() ?? '';
+          jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
           toolCallCount++;
           
           String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
@@ -893,6 +900,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             stepMessages.add(ChatMessage(role: MessageRole.system, text: "Search results:\n$searchResult"));
           } else if (mcpMatch != null) {
             String jsonString = mcpMatch.group(1)?.trim() ?? '';
+            jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
             try {
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
@@ -1643,6 +1651,84 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
   }
 }
 
+class McpToolBlock extends StatefulWidget {
+  const McpToolBlock({required this.mcpJson, super.key});
+  final String mcpJson;
+
+  @override
+  State<McpToolBlock> createState() => _McpToolBlockState();
+}
+
+class _McpToolBlockState extends State<McpToolBlock> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    String method = 'Unknown Tool';
+    String formattedJson = widget.mcpJson;
+    try {
+      final decoded = jsonDecode(widget.mcpJson);
+      if (decoded['method'] != null) {
+        method = decoded['method'].toString();
+      }
+      formattedJson = const JsonEncoder.withIndent('  ').convert(decoded);
+    } catch (_) {}
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F5FA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFD0E0F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.build_circle_outlined, size: 18, color: Color(0xFF2B6CB0)),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Agentic Tool Use: $method',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2B6CB0),
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    size: 18,
+                    color: const Color(0xFF2B6CB0),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: SelectableText(
+                formattedJson,
+                style: const TextStyle(
+                  fontSize: 12.0,
+                  fontFamily: 'monospace',
+                  color: Color(0xFF4A5568),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class CodeBlockWidget extends StatelessWidget {
   const CodeBlockWidget({
     required this.code,
@@ -2186,6 +2272,14 @@ class MessageBubble extends StatelessWidget {
                       ],
                     ),
                   );
+                })
+              else if (message.text.startsWith('[MCP_REQUEST:'))
+                Builder(builder: (context) {
+                  final jsonStr = message.text
+                      .replaceFirst('[MCP_REQUEST:', '')
+                      .replaceFirst(RegExp(r'\]$'), '')
+                      .trim();
+                  return McpToolBlock(mcpJson: jsonStr);
                 })
               else
                 ...parseContentBlocks(message.text).map((block) {
