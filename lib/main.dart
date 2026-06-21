@@ -533,18 +533,18 @@ class _ChatHomePageState extends State<ChatHomePage> {
           } else {
             var textChunk = chunk;
             
-            // Start of <think> or <reasoning>
-            if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>'))) {
-              final tag = textChunk.contains('<think>') ? '<think>' : '<reasoning>';
+            // Start of <think> or <reasoning> or <thought>
+            if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
+              final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
               final parts = textChunk.split(tag);
               fullText += parts[0];
               isThinking = true;
               textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
             }
             
-            // End of </think> or </reasoning>
-            if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>'))) {
-              final tag = textChunk.contains('</think>') ? '</think>' : '</reasoning>';
+            // End of </think> or </reasoning> or </thought>
+            if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
+              final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
               final parts = textChunk.split(tag);
               reasoningText += parts[0];
               isThinking = false;
@@ -1169,13 +1169,26 @@ class ChatSurface extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
               itemCount: messages.length,
               itemBuilder: (context, index) {
+                AvatarAnimationState state = AvatarAnimationState.idle;
+                if (isSending && index == messages.length - 1) {
+                  final msg = messages[index];
+                  if (msg.text.contains('[MCP_REQUEST:')) {
+                    state = AvatarAnimationState.mcp;
+                  } else if (msg.text.contains('[SEARCH_REQUEST:')) {
+                    state = AvatarAnimationState.searching;
+                  } else if ((msg.reasoning?.isNotEmpty ?? false) && msg.text.isEmpty) {
+                    state = AvatarAnimationState.reasoning;
+                  } else {
+                    state = AvatarAnimationState.typing;
+                  }
+                }
                 return MessageBubble(
                   message: messages[index],
                   index: index,
                   providerShortName: provider.shortName,
                   providerName: provider.name,
                   reasoningEnabled: settings.reasoningEnabled,
-                  isTyping: isSending && index == messages.length - 1,
+                  animationState: state,
                   onEditUserMessage: () => onEditUserMessage(index),
                 );
               },
@@ -1698,7 +1711,7 @@ class MessageBubble extends StatelessWidget {
     required this.providerName,
     required this.reasoningEnabled,
     required this.onEditUserMessage,
-    this.isTyping = false,
+    this.animationState = AvatarAnimationState.idle,
     super.key,
   });
 
@@ -1707,7 +1720,7 @@ class MessageBubble extends StatelessWidget {
   final String providerShortName;
   final String providerName;
   final bool reasoningEnabled;
-  final bool isTyping;
+  final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
 
   @override
@@ -1747,7 +1760,7 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ),
                 ] else ...[
-                  ProviderAvatar(label: providerShortName, small: true, isTyping: isTyping),
+                  ProviderAvatar(label: providerShortName, small: true, animationState: animationState),
                   const SizedBox(width: 8),
                   Text(
                     providerName,
@@ -3454,17 +3467,19 @@ class AppMark extends StatelessWidget {
   }
 }
 
+enum AvatarAnimationState { idle, typing, reasoning, searching, mcp }
+
 class ProviderAvatar extends StatefulWidget {
   const ProviderAvatar({
     required this.label,
     this.small = false,
-    this.isTyping = false,
+    this.animationState = AvatarAnimationState.idle,
     super.key,
   });
 
   final String label;
   final bool small;
-  final bool isTyping;
+  final AvatarAnimationState animationState;
 
   @override
   State<ProviderAvatar> createState() => _ProviderAvatarState();
@@ -3478,9 +3493,9 @@ class _ProviderAvatarState extends State<ProviderAvatar> with SingleTickerProvid
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1500),
     );
-    if (widget.isTyping) {
+    if (widget.animationState != AvatarAnimationState.idle) {
       _controller.repeat(reverse: true);
     }
   }
@@ -3488,11 +3503,21 @@ class _ProviderAvatarState extends State<ProviderAvatar> with SingleTickerProvid
   @override
   void didUpdateWidget(covariant ProviderAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isTyping && !oldWidget.isTyping) {
+    if (widget.animationState != AvatarAnimationState.idle && oldWidget.animationState == AvatarAnimationState.idle) {
       _controller.repeat(reverse: true);
-    } else if (!widget.isTyping && oldWidget.isTyping) {
+    } else if (widget.animationState == AvatarAnimationState.idle && oldWidget.animationState != AvatarAnimationState.idle) {
       _controller.stop();
       _controller.animateTo(0);
+    } else if (widget.animationState != oldWidget.animationState) {
+      // Just ensure it's still running, maybe change duration depending on state
+      if (widget.animationState == AvatarAnimationState.searching || widget.animationState == AvatarAnimationState.mcp) {
+        _controller.duration = const Duration(milliseconds: 800);
+      } else if (widget.animationState == AvatarAnimationState.reasoning) {
+        _controller.duration = const Duration(milliseconds: 2000);
+      } else {
+        _controller.duration = const Duration(milliseconds: 1200);
+      }
+      _controller.repeat(reverse: true);
     }
   }
 
@@ -3510,25 +3535,49 @@ class _ProviderAvatarState extends State<ProviderAvatar> with SingleTickerProvid
       width: size,
       height: size,
       alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: const Color(0xFF3B3027),
-        borderRadius: BorderRadius.circular(widget.small ? 8 : 13),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(widget.small ? 8 : 13),
-        child: Image.asset('assets/icon.png', fit: BoxFit.cover, width: size, height: size),
-      ),
+      child: Image.asset('assets/icon_transparent.png', fit: BoxFit.cover, width: size, height: size),
     );
 
-    if (!widget.isTyping) return avatar;
+    if (widget.animationState == AvatarAnimationState.idle) return avatar;
 
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
-        return Transform.scale(
-          scale: 0.85 + (_controller.value * 0.15),
-          child: child,
-        );
+        if (widget.animationState == AvatarAnimationState.typing) {
+          // Subtle pulse
+          return Transform.scale(
+            scale: 0.85 + (_controller.value * 0.15),
+            child: child,
+          );
+        } else if (widget.animationState == AvatarAnimationState.reasoning) {
+          // Slow breathing/fade
+          return Opacity(
+            opacity: 0.4 + (_controller.value * 0.6),
+            child: Transform.scale(
+              scale: 0.9 + (_controller.value * 0.1),
+              child: child,
+            ),
+          );
+        } else if (widget.animationState == AvatarAnimationState.searching) {
+          // Fast pulse + slight rotation
+          return Transform.rotate(
+            angle: _controller.value * 0.5 - 0.25,
+            child: Transform.scale(
+              scale: 0.8 + (_controller.value * 0.3),
+              child: child,
+            ),
+          );
+        } else if (widget.animationState == AvatarAnimationState.mcp) {
+          // Bounce / aggressive scale for tool execution
+          return Transform.translate(
+            offset: Offset(0, -5 * _controller.value),
+            child: Transform.scale(
+              scale: 0.8 + (_controller.value * 0.3),
+              child: child,
+            ),
+          );
+        }
+        return child!;
       },
       child: avatar,
     );
