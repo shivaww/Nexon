@@ -641,49 +641,56 @@ class _ChatHomePageState extends State<ChatHomePage> {
           _scrollToBottom();
         }
 
-        final searchRegex = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]');
-        final mcpRegex = RegExp(r'\[MCP_REQUEST:\s*(\{.*?\})\s*\]', dotAll: true);
+        final searchRegex = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]', dotAll: true);
+        final mcpRegex = RegExp(r'\[MCP_REQUEST:\s*(\{[\s\S]*?\})\s*\]');
         
         final searchMatch = searchRegex.firstMatch(fullText);
-        final mcpMatch = mcpRegex.firstMatch(fullText);
+        final mcpMatch = _findMcpMatch(fullText);
 
         if (fullText.contains('[RESEARCH_PLAN:')) {
-          final startIndex = fullText.indexOf('[RESEARCH_PLAN:');
-          final endIndex = fullText.lastIndexOf(']');
+          final planStartIndex = fullText.indexOf('[RESEARCH_PLAN:');
           
-          if (startIndex != -1 && endIndex > startIndex) {
-            String planJsonStr = fullText.substring(startIndex + 15, endIndex).trim();
-            planJsonStr = planJsonStr.replaceAll(RegExp(r'^```json\s*'), '');
-            planJsonStr = planJsonStr.replaceAll(RegExp(r'^```\s*'), '');
-            planJsonStr = planJsonStr.replaceAll(RegExp(r'\s*```$'), '');
-          try {
-            final planList = jsonDecode(planJsonStr) as List;
-            final stateMap = {
-              "status": "pending",
-              "steps": planList.map((e) => {
-                "title": e["title"],
-                "prompt": e["prompt"],
-                "status": "pending",
-                "content": ""
-              }).toList()
-            };
-            
-            setState(() {
-              final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-              msgs[assistantMessageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text: fullText + '\n\n[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
-                reasoning: reasoningText,
-              );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
-              _sendingSessionIds.remove(targetSessionId);
-            });
-            await _saveSessions();
-            return;
-          } catch (e) {
-            debugPrint('Error parsing research plan: $e');
-          }
-          break;
+          if (planStartIndex != -1) {
+            // Find the JSON array start after the tag
+            final jsonStart = fullText.indexOf('[', planStartIndex + 15);
+            if (jsonStart != -1) {
+              // Use balanced bracket counting to find the matching ']'
+              final planEndIndex = _findMatchingBracket(fullText, jsonStart);
+              if (planEndIndex != -1) {
+                String planJsonStr = fullText.substring(jsonStart, planEndIndex + 1).trim();
+                planJsonStr = planJsonStr.replaceAll(RegExp(r'^```json\s*'), '');
+                planJsonStr = planJsonStr.replaceAll(RegExp(r'^```\s*'), '');
+                planJsonStr = planJsonStr.replaceAll(RegExp(r'\s*```$'), '');
+                try {
+                  final planList = jsonDecode(planJsonStr) as List;
+                  final stateMap = {
+                    "status": "pending",
+                    "steps": planList.map((e) => {
+                      "title": e["title"] ?? 'Untitled Step',
+                      "prompt": e["prompt"] ?? '',
+                      "status": "pending",
+                      "content": ""
+                    } as Map<String, dynamic>).toList()
+                  };
+                  
+                  setState(() {
+                    final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+                    msgs[assistantMessageIndex] = ChatMessage(
+                      role: MessageRole.assistant,
+                      text: fullText + '\n\n[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
+                      reasoning: reasoningText,
+                    );
+                    _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+                    _sendingSessionIds.remove(targetSessionId);
+                  });
+                  await _saveSessions();
+                  return;
+                } catch (e) {
+                  debugPrint('Error parsing research plan: $e');
+                }
+                break;
+              }
+            }
           }
         }
         
@@ -812,6 +819,52 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
   }
 
+  Match? _findMcpMatch(String fullText) {
+    final mcpStart = fullText.indexOf('[MCP_REQUEST:');
+    if (mcpStart == -1) return null;
+    
+    final jsonStart = fullText.indexOf('{', mcpStart);
+    if (jsonStart == -1) return null;
+    
+    final jsonEnd = _findMatchingBracket(fullText, jsonStart);
+    if (jsonEnd == -1) return null;
+    
+    final fullMatchStr = fullText.substring(mcpStart, fullText.indexOf(']', jsonEnd) + 1);
+    final jsonStr = fullText.substring(jsonStart, jsonEnd + 1);
+    
+    return RegExp(r'\[MCP_REQUEST:\s*(\{[\s\S]*?\})\s*\]').firstMatch('[MCP_REQUEST: $jsonStr]');
+  }
+
+  int _findMatchingBracket(String text, int startIndex) {
+    int count = 0;
+    bool inString = false;
+    bool escape = false;
+    
+    for (int i = startIndex; i < text.length; i++) {
+      final c = text[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c == '\\') {
+        escape = true;
+        continue;
+      }
+      if (c == '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      
+      if (c == '{' || c == '[') count++;
+      else if (c == '}' || c == ']') {
+        count--;
+        if (count == 0) return i;
+      }
+    }
+    return -1;
+  }
+
   void _startResearchLoop(int messageIndex) {
     final activeSession = _sessions.firstWhere((s) => s.id == _activeSessionId);
     final sessionIndex = _sessions.indexOf(activeSession);
@@ -909,8 +962,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
           
           stepMessages.add(ChatMessage(role: MessageRole.assistant, text: responseText));
 
-          final searchMatch = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]').firstMatch(responseText);
-          final mcpMatch = RegExp(r'\[MCP_REQUEST:\s*(\{.*?\})\s*\]', dotAll: true).firstMatch(responseText);
+          final searchMatch = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]', dotAll: true).firstMatch(responseText);
+          final mcpMatch = _findMcpMatch(responseText);
           final completeMatch = RegExp(r'\[STEP_COMPLETE\]', dotAll: true).firstMatch(responseText);
 
           if (completeMatch != null) {
@@ -965,17 +1018,22 @@ class _ChatHomePageState extends State<ChatHomePage> {
               jsonString = jsonEncode(parsed);
             } catch (_) {}
 
-            final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-            final request = await client.postUrl(Uri.parse(mcpEndpoint));
-            request.headers.contentType = ContentType.json;
-            final bytes = utf8.encode(jsonString);
-            request.headers.contentLength = bytes.length;
-            request.add(bytes);
-            final response = await request.close();
-            final body = await response.transform(utf8.decoder).join();
-            String mcpResult = body;
-            if (mcpResult.length > 4000) {
-              mcpResult = mcpResult.substring(0, 4000) + '\n\n...[truncated]';
+            String mcpResult = '';
+            try {
+              final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+              final request = await client.postUrl(Uri.parse(mcpEndpoint));
+              request.headers.contentType = ContentType.json;
+              final bytes = utf8.encode(jsonString);
+              request.headers.contentLength = bytes.length;
+              request.add(bytes);
+              final response = await request.close();
+              final body = await response.transform(utf8.decoder).join();
+              mcpResult = body;
+              if (mcpResult.length > 4000) {
+                mcpResult = mcpResult.substring(0, 4000) + '\n\n...[truncated]';
+              }
+            } catch (e) {
+              mcpResult = '{"error": "$e"}';
             }
             stepMessages.add(ChatMessage(role: MessageRole.system, text: "MCP Result:\n$mcpResult"));
           } else {
@@ -2295,7 +2353,8 @@ class MessageBubble extends StatelessWidget {
               if (message.text.startsWith('[RESEARCH_STATE:'))
                 Builder(builder: (context) {
                   try {
-                    final jsonStr = message.text.substring(16, message.text.lastIndexOf(']'));
+                    final startIndex = message.text.indexOf('[RESEARCH_STATE:');
+                    final jsonStr = message.text.substring(startIndex + 16, message.text.lastIndexOf(']')).trim();
                     final stateMap = jsonDecode(jsonStr) as Map<String, dynamic>;
                     return ResearchPlanWidget(
                       stateMap: stateMap,
