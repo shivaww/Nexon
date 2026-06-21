@@ -902,6 +902,15 @@ class _ChatHomePageState extends State<ChatHomePage> {
             stepDone = true;
           } else if (searchMatch != null) {
             final query = searchMatch.group(1)?.trim() ?? '';
+            stepContent += '\n\n[SEARCH_REQUEST: $query]\n\n';
+            steps[i]['content'] = stepContent;
+            if (mounted) {
+              setState(() {
+                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]');
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              });
+            }
             final searchResultRaw = await _chatClient.searchWeb(
               query,
               _searchSettings.provider,
@@ -916,6 +925,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
           } else if (mcpMatch != null) {
             String jsonString = mcpMatch.group(1)?.trim() ?? '';
             jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
+            
+            stepContent += '\n\n[MCP_REQUEST: $jsonString]\n\n';
+            steps[i]['content'] = stepContent;
+            if (mounted) {
+              setState(() {
+                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]');
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              });
+            }
+
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
             try {
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
@@ -1253,6 +1273,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
                 onRemoveFile: _removeFile,
                 onEditUserMessage: _editUserMessage,
                 agenticWorkspace: _agenticWorkspace,
+                deepResearchEnabled: _deepResearchEnabled,
               ),
             ),
           ],
@@ -1382,6 +1403,7 @@ class ChatSurface extends StatelessWidget {
     required this.onRemoveFile,
     required this.onEditUserMessage,
     required this.agenticWorkspace,
+    required this.deepResearchEnabled,
     super.key,
   });
 
@@ -1402,6 +1424,7 @@ class ChatSurface extends StatelessWidget {
   final ValueChanged<int> onRemoveFile;
   final ValueChanged<int> onEditUserMessage;
   final String agenticWorkspace;
+  final bool deepResearchEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -1467,6 +1490,7 @@ class ChatSurface extends StatelessWidget {
             onRemoveImage: onRemoveImage,
             attachedFiles: attachedFiles,
             onRemoveFile: onRemoveFile,
+            deepResearchEnabled: deepResearchEnabled,
           ),
         ],
       ),
@@ -2450,6 +2474,7 @@ class Composer extends StatelessWidget {
     required this.onRemoveImage,
     required this.attachedFiles,
     required this.onRemoveFile,
+    required this.deepResearchEnabled,
     super.key,
   });
 
@@ -2461,6 +2486,7 @@ class Composer extends StatelessWidget {
   final ValueChanged<int> onRemoveImage;
   final List<AttachedFile> attachedFiles;
   final ValueChanged<int> onRemoveFile;
+  final bool deepResearchEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -2592,8 +2618,8 @@ class Composer extends StatelessWidget {
                     minLines: 1,
                     maxLines: 6,
                     textInputAction: TextInputAction.newline,
-                    decoration: const InputDecoration(
-                      hintText: 'Message any provider...',
+                    decoration: InputDecoration(
+                      hintText: deepResearchEnabled ? 'Deep Research Mode is ON...' : 'Message any provider...',
                       border: InputBorder.none,
                       isDense: true,
                     ),
@@ -5019,6 +5045,23 @@ class ResearchPlanWidget extends StatefulWidget {
 
 class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   final Set<int> _expandedSteps = {};
+  late final Stopwatch _stopwatch;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _stopwatch = Stopwatch()..start();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _downloadFile() async {
     final path = '${widget.workspaceDir}/research.md';
@@ -5077,6 +5120,11 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                     ),
                   ],
                 ),
+                if (status == 'running')
+                  Text(
+                    '${_stopwatch.elapsed.inMinutes.toString().padLeft(2, '0')}:${(_stopwatch.elapsed.inSeconds % 60).toString().padLeft(2, '0')}',
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C5282)),
+                  ),
                 if (status == 'completed')
                   IconButton(
                     icon: const Icon(Icons.download, size: 20, color: Color(0xFF2C5282)),
@@ -5137,11 +5185,52 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                   Container(
                     padding: const EdgeInsets.fromLTRB(40, 0, 14, 12),
                     alignment: Alignment.centerLeft,
-                    child: Text(
-                      stepStatus == 'completed' 
-                        ? (step['content'] ?? 'Done.') 
-                        : 'Prompt: ${step['prompt']}',
-                      style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Prompt: ${step['prompt']}',
+                          style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                        ),
+                        if (step['content'] != null && step['content'].toString().isNotEmpty)
+                          ...step['content'].toString().split('\n\n').where((s) => s.trim().isNotEmpty).map((s) {
+                            if (s.startsWith('[MCP_REQUEST:')) {
+                              final jsonStr = s.replaceFirst('[MCP_REQUEST:', '').replaceFirst(RegExp(r'\]$'), '').trim();
+                              return McpToolBlock(mcpJson: jsonStr);
+                            } else if (s.startsWith('[SEARCH_REQUEST:')) {
+                              final query = s.replaceFirst('[SEARCH_REQUEST:', '').replaceFirst(']', '').trim();
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF0F5FA),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0xFFD0E0F0)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.search, color: Color(0xFF2B6CB0), size: 16),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Searched the web for "$query"',
+                                        style: const TextStyle(
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFF2B6CB0),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8.0),
+                              child: Text(s, style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+                            );
+                          }),
+                      ],
                     ),
                   ),
                 if (idx < steps.length - 1)
