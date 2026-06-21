@@ -77,6 +77,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   bool _agenticEnabled = true;
   String _agenticWorkspace = '/data/data/com.termux/files/home';
   String _customMcpUrl = '';
+  bool _deepResearchEnabled = false;
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -243,6 +244,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final agenticRaw = prefs.getBool('agentic_enabled_v1');
     final agenticWorkspaceRaw = prefs.getString('agentic_workspace_v1');
     final customMcpUrlRaw = prefs.getString('custom_mcp_url_v1');
+    final deepResearchRaw = prefs.getBool('deep_research_enabled_v1');
 
     if (!mounted) return;
     setState(() {
@@ -252,6 +254,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _agenticEnabled = agenticRaw ?? true;
       _agenticWorkspace = agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
+      _deepResearchEnabled = deepResearchRaw ?? false;
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
         _selectedProviderId = selected;
@@ -277,6 +280,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setString(_selectedProviderKey, _selectedProviderId);
     await prefs.setString('search_settings_v1', jsonEncode(_searchSettings.toJson()));
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
+    await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
   }
@@ -431,6 +435,18 @@ class _ChatHomePageState extends State<ChatHomePage> {
     );
     final activeModel = session.model.isNotEmpty ? session.model : settings.model;
 
+    if (_deepResearchEnabled && !_agenticEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please turn on Agentic File Access for Research Mode'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
     if (provider.requiresKey && settings.apiKey.trim().isEmpty) {
       await _openProviderSheet(provider.id);
       return;
@@ -515,6 +531,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
           if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
           systemPromptText += "You ALSO have access to a web search tool.\n"
               "If you need to search the web, output a single line: [SEARCH_REQUEST: your search query] and stop generating.";
+        }
+
+        if (_deepResearchEnabled) {
+          if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
+          systemPromptText += "DEEP RESEARCH MODE ENABLED: For your first response, you MUST generate a comprehensive research plan. Output ONLY the following JSON format and nothing else:\n"
+            "[RESEARCH_PLAN: [{\"title\": \"Step 1\", \"prompt\": \"Detailed instructions for this step\"}, ...]]";
         }
 
         if (systemPromptText.isNotEmpty) {
@@ -605,10 +627,49 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final searchRegex = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]');
         final mcpRegex = RegExp(r'\[MCP_REQUEST:\s*(\{.*?\})\s*\]', dotAll: true);
+        final researchPlanRegex = RegExp(r'\[RESEARCH_PLAN:\s*(\[.*?\])\s*\]', dotAll: true);
+        
         final searchMatch = searchRegex.firstMatch(fullText);
         final mcpMatch = mcpRegex.firstMatch(fullText);
+        final researchPlanMatch = researchPlanRegex.firstMatch(fullText);
 
-        if (_searchSettings.enabled && searchMatch != null) {
+        if (researchPlanMatch != null) {
+          final planJsonStr = researchPlanMatch.group(1)!;
+          try {
+            final planList = jsonDecode(planJsonStr) as List;
+            final stateMap = {
+              "status": "running",
+              "steps": planList.map((e) => {
+                "title": e["title"],
+                "prompt": e["prompt"],
+                "status": "pending",
+                "content": ""
+              }).toList()
+            };
+            
+            setState(() {
+              final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+              msgs[assistantMessageIndex] = ChatMessage(
+                role: MessageRole.assistant,
+                text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
+                reasoning: reasoningText,
+              );
+              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+            });
+            
+            _runResearchLoop(
+              sessionIndex: sessionIndex,
+              messageIndex: assistantMessageIndex,
+              stateMap: stateMap,
+              provider: provider,
+              settings: settings,
+              model: activeModel,
+            );
+          } catch (e) {
+            debugPrint('Error parsing research plan: $e');
+          }
+          break;
+        } else if (_searchSettings.enabled && searchMatch != null) {
           final query = searchMatch.group(1)?.trim() ?? '';
           toolCallCount++;
 
@@ -753,6 +814,152 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
   }
 
+  Future<void> _runResearchLoop({
+    required int sessionIndex,
+    required int messageIndex,
+    required Map<String, dynamic> stateMap,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+  }) async {
+    final steps = stateMap['steps'] as List;
+    final systemPrompt = "You are an autonomous research agent.\n"
+        "You have access to SEARCH_REQUEST and MCP_REQUEST.\n"
+        "Always use SEARCH_REQUEST first. Once you have the information, format it beautifully with Markdown tables or Mermaid flowcharts.\n"
+        "Then, use MCP_REQUEST to append the results to $_agenticWorkspace/research.md.\n"
+        "When you are completely finished with the step, output ONLY a single line: [STEP_COMPLETE]";
+    
+    for (int i = 0; i < steps.length; i++) {
+      if (!mounted) return;
+      steps[i]['status'] = 'running';
+      setState(() {
+        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+        msgs[messageIndex] = ChatMessage(
+          role: MessageRole.assistant,
+          text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
+        );
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+      });
+
+      final stepPrompt = "Research Step ${i + 1}: ${steps[i]['title']}\nInstructions: ${steps[i]['prompt']}";
+      List<ChatMessage> stepMessages = [
+        ChatMessage(role: MessageRole.system, text: systemPrompt),
+        ChatMessage(role: MessageRole.user, text: stepPrompt),
+      ];
+
+      String stepContent = '';
+      int loopCount = 0;
+      bool stepDone = false;
+
+      while (!stepDone && loopCount < 15) {
+        if (!mounted) return;
+        loopCount++;
+        
+        try {
+          String responseText = '';
+          final stream = _chatClient.sendChatStream(
+            provider: provider,
+            settings: settings,
+            model: model,
+            messages: stepMessages,
+          );
+          
+          await for (final chunk in stream) {
+            if (chunk.startsWith('[REASONING]')) continue;
+            responseText += chunk;
+          }
+          
+          stepMessages.add(ChatMessage(role: MessageRole.assistant, text: responseText));
+
+          final searchMatch = RegExp(r'\[SEARCH_REQUEST:\s*(.*?)\]').firstMatch(responseText);
+          final mcpMatch = RegExp(r'\[MCP_REQUEST:\s*(\{.*?\})\s*\]', dotAll: true).firstMatch(responseText);
+          final completeMatch = RegExp(r'\[STEP_COMPLETE\]', dotAll: true).firstMatch(responseText);
+
+          if (completeMatch != null) {
+            stepContent = responseText.replaceAll('[STEP_COMPLETE]', '').trim();
+            stepDone = true;
+          } else if (searchMatch != null) {
+            final query = searchMatch.group(1)?.trim() ?? '';
+            final searchResultRaw = await _chatClient.searchWeb(
+              query,
+              _searchSettings.provider,
+              _searchSettings.apiKey,
+              googleCx: _searchSettings.googleCx,
+            );
+            String searchResult = searchResultRaw;
+            if (searchResult.length > 4000) {
+              searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated]';
+            }
+            stepMessages.add(ChatMessage(role: MessageRole.system, text: "Search results:\n$searchResult"));
+          } else if (mcpMatch != null) {
+            String jsonString = mcpMatch.group(1)?.trim() ?? '';
+            String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
+            try {
+              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+              final params = parsed['params'] as Map<String, dynamic>? ?? {};
+              if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
+                mcpEndpoint = _customMcpUrl;
+                params.remove('server');
+              }
+              params['workspace_dir'] = _agenticWorkspace;
+              parsed['params'] = params;
+              jsonString = jsonEncode(parsed);
+            } catch (_) {}
+
+            final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+            final request = await client.postUrl(Uri.parse(mcpEndpoint));
+            request.headers.contentType = ContentType.json;
+            final bytes = utf8.encode(jsonString);
+            request.headers.contentLength = bytes.length;
+            request.add(bytes);
+            final response = await request.close();
+            final body = await response.transform(utf8.decoder).join();
+            String mcpResult = body;
+            if (mcpResult.length > 4000) {
+              mcpResult = mcpResult.substring(0, 4000) + '\n\n...[truncated]';
+            }
+            stepMessages.add(ChatMessage(role: MessageRole.system, text: "MCP Result:\n$mcpResult"));
+          } else {
+            stepContent = responseText;
+            stepDone = true;
+          }
+          await Future.delayed(const Duration(seconds: 2));
+        } catch (e) {
+          stepContent = "Error during step: $e";
+          stepDone = true;
+        }
+      }
+
+      steps[i]['status'] = 'completed';
+      steps[i]['content'] = stepContent;
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        });
+        await _saveSessions();
+      }
+    }
+
+    stateMap['status'] = 'completed';
+    if (mounted) {
+      setState(() {
+        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+        msgs[messageIndex] = ChatMessage(
+          role: MessageRole.assistant,
+          text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
+        );
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        _sendingSessionIds.remove(_sessions[sessionIndex].id);
+      });
+      await _saveSessions();
+    }
+  }
+
   void _newChat() {
     final newId = DateTime.now().millisecondsSinceEpoch.toString();
     final newSession = ChatSession(
@@ -791,6 +998,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           cachedModels: models,
           searchSettings: _searchSettings,
           agenticEnabled: _agenticEnabled,
+          deepResearchEnabled: _deepResearchEnabled,
           agenticWorkspace: _agenticWorkspace,
           customMcpUrl: _customMcpUrl,
           onSearchSettingsChanged: (nextSearchSettings) async {
@@ -802,6 +1010,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
           onAgenticEnabledChanged: (val) async {
             setState(() {
               _agenticEnabled = val;
+            });
+            await _saveSettings();
+          },
+          onDeepResearchEnabledChanged: (val) async {
+            setState(() {
+              _deepResearchEnabled = val;
             });
             await _saveSettings();
           },
@@ -1212,6 +1426,7 @@ class ChatSurface extends StatelessWidget {
                   providerName: provider.name,
                   reasoningEnabled: settings.reasoningEnabled,
                   animationState: state,
+                  agenticWorkspace: _agenticWorkspace,
                   onEditUserMessage: () => onEditUserMessage(index),
                 );
               },
@@ -1734,6 +1949,7 @@ class MessageBubble extends StatelessWidget {
     required this.providerName,
     required this.reasoningEnabled,
     required this.onEditUserMessage,
+    required this.agenticWorkspace,
     this.animationState = AvatarAnimationState.idle,
     super.key,
   });
@@ -1743,6 +1959,7 @@ class MessageBubble extends StatelessWidget {
   final String providerShortName;
   final String providerName;
   final bool reasoningEnabled;
+  final String agenticWorkspace;
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
 
@@ -1925,7 +2142,17 @@ class MessageBubble extends StatelessWidget {
             else ...[
               if (message.reasoning.isNotEmpty && reasoningEnabled)
                 ThoughtBlock(thought: message.reasoning),
-              if (message.text.startsWith('[SEARCH_REQUEST:'))
+              if (message.text.startsWith('[RESEARCH_STATE:'))
+                Builder(builder: (context) {
+                  try {
+                    final jsonStr = message.text.substring(16, message.text.lastIndexOf(']'));
+                    final stateMap = jsonDecode(jsonStr) as Map<String, dynamic>;
+                    return ResearchPlanWidget(stateMap: stateMap, workspaceDir: agenticWorkspace);
+                  } catch (_) {
+                    return const Text('Error rendering research state', style: TextStyle(color: Colors.red));
+                  }
+                })
+              else if (message.text.startsWith('[SEARCH_REQUEST:'))
                 Builder(builder: (context) {
                   final query = message.text
                       .replaceFirst('[SEARCH_REQUEST:', '')
@@ -2319,10 +2546,12 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.cachedModels,
     required this.searchSettings,
     required this.agenticEnabled,
+    required this.deepResearchEnabled,
     required this.agenticWorkspace,
     required this.customMcpUrl,
     required this.onSearchSettingsChanged,
     required this.onAgenticEnabledChanged,
+    required this.onDeepResearchEnabledChanged,
     required this.onAgenticWorkspaceChanged,
     required this.onCustomMcpUrlChanged,
     required this.onImageAttached,
@@ -2342,10 +2571,12 @@ class MediaAndModelSheet extends StatefulWidget {
   final List<String> cachedModels;
   final SearchSettings searchSettings;
   final bool agenticEnabled;
+  final bool deepResearchEnabled;
   final String agenticWorkspace;
   final String customMcpUrl;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
   final ValueChanged<bool> onAgenticEnabledChanged;
+  final ValueChanged<bool> onDeepResearchEnabledChanged;
   final ValueChanged<String> onAgenticWorkspaceChanged;
   final ValueChanged<String> onCustomMcpUrlChanged;
   final ValueChanged<String> onImageAttached;
@@ -2370,6 +2601,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late bool _reasoningEnabled;
   late bool _searchEnabled;
   late bool _agenticEnabled;
+  late bool _deepResearchEnabled;
   late String _searchProvider;
   late final TextEditingController _searchKeyController;
   late final TextEditingController _searchCxController;
@@ -2387,6 +2619,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _reasoningEnabled = widget.settings.reasoningEnabled;
     _searchEnabled = widget.searchSettings.enabled;
     _agenticEnabled = widget.agenticEnabled;
+    _deepResearchEnabled = widget.deepResearchEnabled;
     _searchProvider = widget.searchSettings.provider;
     _searchKeyController = TextEditingController(text: widget.searchSettings.apiKey);
     _searchCxController = TextEditingController(text: widget.searchSettings.googleCx);
@@ -2852,6 +3085,26 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   onChanged: (val) {
                     setState(() => _agenticEnabled = val);
                     widget.onAgenticEnabledChanged(val);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Deep Research Mode',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF6C5946)),
+                ),
+                Switch(
+                  value: _deepResearchEnabled,
+                  activeColor: const Color(0xFF7B4E2E),
+                  onChanged: (val) {
+                    setState(() {
+                      _deepResearchEnabled = val;
+                    });
+                    widget.onDeepResearchEnabledChanged(val);
                   },
                 ),
               ],
@@ -4637,6 +4890,153 @@ class MermaidDiagramWidget extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class ResearchPlanWidget extends StatefulWidget {
+  const ResearchPlanWidget({required this.stateMap, required this.workspaceDir, super.key});
+  final Map<String, dynamic> stateMap;
+  final String workspaceDir;
+
+  @override
+  State<ResearchPlanWidget> createState() => _ResearchPlanWidgetState();
+}
+
+class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
+  final Set<int> _expandedSteps = {};
+
+  Future<void> _downloadFile() async {
+    final path = '${widget.workspaceDir}/research.md';
+    final file = File(path);
+    if (!await file.exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('research.md not found yet.')));
+      }
+      return;
+    }
+    
+    final result = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save Research File',
+      fileName: 'research.md',
+    );
+    
+    if (result != null) {
+      await file.copy(result);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File saved successfully!')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = widget.stateMap['steps'] as List? ?? [];
+    final status = widget.stateMap['status'] as String? ?? 'running';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12, top: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F4F8),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFC0D3E5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFFE2ECF5),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.science, size: 18, color: Color(0xFF2C5282)),
+                    const SizedBox(width: 8),
+                    Text(
+                      status == 'completed' ? 'Deep Research Complete' : 'Deep Research in Progress...',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C5282)),
+                    ),
+                  ],
+                ),
+                if (status == 'completed')
+                  IconButton(
+                    icon: const Icon(Icons.download, size: 20, color: Color(0xFF2C5282)),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: _downloadFile,
+                  ),
+              ],
+            ),
+          ),
+          ...steps.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final step = entry.value as Map<String, dynamic>;
+            final stepStatus = step['status'] as String;
+            final isExpanded = _expandedSteps.contains(idx);
+
+            IconData statusIcon = Icons.radio_button_unchecked;
+            Color statusColor = Colors.grey;
+            if (stepStatus == 'running') {
+              statusIcon = Icons.hourglass_bottom;
+              statusColor = Colors.blue;
+            } else if (stepStatus == 'completed') {
+              statusIcon = Icons.check_circle;
+              statusColor = Colors.green;
+            }
+
+            return Column(
+              children: [
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      if (isExpanded) _expandedSteps.remove(idx);
+                      else _expandedSteps.add(idx);
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(statusIcon, size: 18, color: statusColor),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            step['title'] ?? 'Step ${idx + 1}',
+                            style: TextStyle(
+                              decoration: stepStatus == 'completed' ? TextDecoration.lineThrough : null,
+                              color: stepStatus == 'completed' ? Colors.grey : Colors.black87,
+                              fontWeight: stepStatus == 'running' ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                        Icon(isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: Colors.grey),
+                      ],
+                    ),
+                  ),
+                ),
+                if (isExpanded)
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(40, 0, 14, 12),
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      stepStatus == 'completed' 
+                        ? (step['content'] ?? 'Done.') 
+                        : 'Prompt: ${step['prompt']}',
+                      style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                    ),
+                  ),
+                if (idx < steps.length - 1)
+                  const Divider(height: 1, indent: 40, color: Color(0xFFE2ECF5)),
+              ],
+            );
+          }).toList(),
         ],
       ),
     );
