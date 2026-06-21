@@ -76,6 +76,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
   String _agenticWorkspace = '/data/data/com.termux/files/home';
+  String _customMcpUrl = '';
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -241,6 +242,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
     final agenticRaw = prefs.getBool('agentic_enabled_v1');
     final agenticWorkspaceRaw = prefs.getString('agentic_workspace_v1');
+    final customMcpUrlRaw = prefs.getString('custom_mcp_url_v1');
 
     if (!mounted) return;
     setState(() {
@@ -249,6 +251,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _searchSettings = loadedSearchSettings;
       _agenticEnabled = agenticRaw ?? true;
       _agenticWorkspace = agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
+      _customMcpUrl = customMcpUrlRaw ?? '';
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
         _selectedProviderId = selected;
@@ -275,6 +278,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setString('search_settings_v1', jsonEncode(_searchSettings.toJson()));
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
+    await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
   }
 
   Future<void> _selectProvider(String providerId) async {
@@ -499,7 +503,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
               "- shell_exec: params {command: string, cwd: string (optional)}\n"
               "Once results are provided, continue your response.\n\n"
               "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via MCP_REQUEST. Just output the tag.\n"
-              "CRITICAL: NEVER use dangerous commands that will harm the device (like rm -rf /).";
+              "CRITICAL: NEVER use dangerous commands that will harm the device (like rm -rf /).\n";
+              
+          if (_customMcpUrl.isNotEmpty) {
+            systemPromptText += "\nYou also have access to a Remote MCP HTTP Server at $_customMcpUrl.\n"
+                "If you need to execute tools on the remote PC instead of Termux, add \"server\": \"remote\" to your parameters.\n";
+          }
         }
 
         if (_searchSettings.enabled) {
@@ -645,9 +654,16 @@ class _ChatHomePageState extends State<ChatHomePage> {
           String jsonString = mcpMatch.group(1)?.trim() ?? '';
           toolCallCount++;
           
+          String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
           try {
             final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
             final params = parsed['params'] as Map<String, dynamic>? ?? {};
+            
+            if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
+              mcpEndpoint = _customMcpUrl;
+              params.remove('server');
+            }
+            
             params['workspace_dir'] = _agenticWorkspace;
             parsed['params'] = params;
             jsonString = jsonEncode(parsed);
@@ -668,7 +684,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           String mcpResult = '';
           try {
             final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-            final request = await client.postUrl(Uri.parse('http://127.0.0.1:8390/mcp'));
+            final request = await client.postUrl(Uri.parse(mcpEndpoint));
             request.headers.contentType = ContentType.json;
             
             final bytes = utf8.encode(jsonString);
@@ -776,6 +792,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           searchSettings: _searchSettings,
           agenticEnabled: _agenticEnabled,
           agenticWorkspace: _agenticWorkspace,
+          customMcpUrl: _customMcpUrl,
           onSearchSettingsChanged: (nextSearchSettings) async {
             setState(() {
               _searchSettings = nextSearchSettings;
@@ -791,6 +808,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
           onAgenticWorkspaceChanged: (val) async {
             setState(() {
               _agenticWorkspace = val;
+            });
+            await _saveSettings();
+          },
+          onCustomMcpUrlChanged: (val) async {
+            setState(() {
+              _customMcpUrl = val;
             });
             await _saveSettings();
           },
@@ -2297,9 +2320,11 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.searchSettings,
     required this.agenticEnabled,
     required this.agenticWorkspace,
+    required this.customMcpUrl,
     required this.onSearchSettingsChanged,
     required this.onAgenticEnabledChanged,
     required this.onAgenticWorkspaceChanged,
+    required this.onCustomMcpUrlChanged,
     required this.onImageAttached,
     required this.onFileAttached,
 
@@ -2318,9 +2343,11 @@ class MediaAndModelSheet extends StatefulWidget {
   final SearchSettings searchSettings;
   final bool agenticEnabled;
   final String agenticWorkspace;
+  final String customMcpUrl;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
   final ValueChanged<bool> onAgenticEnabledChanged;
   final ValueChanged<String> onAgenticWorkspaceChanged;
+  final ValueChanged<String> onCustomMcpUrlChanged;
   final ValueChanged<String> onImageAttached;
   final ValueChanged<AttachedFile> onFileAttached;
 
@@ -2347,6 +2374,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late final TextEditingController _searchKeyController;
   late final TextEditingController _searchCxController;
   late final TextEditingController _agenticWorkspaceController;
+  late final TextEditingController _customMcpUrlController;
 
   @override
   void initState() {
@@ -2363,6 +2391,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _searchKeyController = TextEditingController(text: widget.searchSettings.apiKey);
     _searchCxController = TextEditingController(text: widget.searchSettings.googleCx);
     _agenticWorkspaceController = TextEditingController(text: widget.agenticWorkspace);
+    _customMcpUrlController = TextEditingController(text: widget.customMcpUrl);
   }
 
   @override
@@ -2370,6 +2399,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _searchKeyController.dispose();
     _searchCxController.dispose();
     _agenticWorkspaceController.dispose();
+    _customMcpUrlController.dispose();
     super.dispose();
   }
 
@@ -2837,6 +2867,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   hintText: 'e.g. /data/data/com.termux/files/home',
                 ),
                 onChanged: widget.onAgenticWorkspaceChanged,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _customMcpUrlController,
+                decoration: const InputDecoration(
+                  labelText: 'Custom MCP URL (Optional)',
+                  labelStyle: TextStyle(color: Color(0xFF6C5946)),
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. http://192.168.1.10:8390/mcp',
+                ),
+                onChanged: widget.onCustomMcpUrlChanged,
               ),
             ],
             const SizedBox(height: 16),
@@ -3698,7 +3739,9 @@ class ChatClient {
             'stream': false,
           };
 
-          request.write(jsonEncode(payload));
+          final payloadBytes = utf8.encode(jsonEncode(payload));
+          request.headers.contentLength = payloadBytes.length;
+          request.add(payloadBytes);
           final response = await request.close();
           final body = await response.transform(utf8.decoder).join();
           
@@ -3781,7 +3824,9 @@ class ChatClient {
             'stream': true,
           };
 
-          request.write(jsonEncode(payload));
+          final payloadBytes = utf8.encode(jsonEncode(payload));
+          request.headers.contentLength = payloadBytes.length;
+          request.add(payloadBytes);
           response = await request.close();
           
           if (response.statusCode < 200 || response.statusCode >= 300) {
