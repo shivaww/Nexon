@@ -232,7 +232,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
 
     for (final provider in providerCatalog) {
-      final key = await _secureStorage.read(key: _keyStorageName(provider.id));
+      String? key;
+      try {
+        key = await _secureStorage.read(key: _keyStorageName(provider.id));
+      } catch (e) {
+        key = prefs.getString('fallback_api_key_${provider.id}');
+        debugPrint('Secure storage read failed for ${provider.id}: $e');
+      }
       final current = nextSettings[provider.id] ??
           ProviderSettings.defaults(provider);
       final normalized = current.maxTokens < 1
@@ -270,10 +276,19 @@ class _ChatHomePageState extends State<ChatHomePage> {
     for (final entry in _settings.entries) {
       metadata[entry.key] = entry.value.copyWith(apiKey: '').toJson();
       final key = entry.value.apiKey.trim();
-      if (key.isEmpty) {
-        await _secureStorage.delete(key: _keyStorageName(entry.key));
-      } else {
-        await _secureStorage.write(key: _keyStorageName(entry.key), value: key);
+      try {
+        if (key.isEmpty) {
+          await _secureStorage.delete(key: _keyStorageName(entry.key));
+        } else {
+          await _secureStorage.write(key: _keyStorageName(entry.key), value: key);
+        }
+      } catch (e) {
+        debugPrint('Secure storage write failed for ${entry.key}: $e');
+        if (key.isEmpty) {
+          await prefs.remove('fallback_api_key_${entry.key}');
+        } else {
+          await prefs.setString('fallback_api_key_${entry.key}', key);
+        }
       }
     }
     await prefs.setString(_settingsKey, jsonEncode(metadata));
