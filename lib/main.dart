@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -658,7 +659,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           try {
             final planList = jsonDecode(planJsonStr) as List;
             final stateMap = {
-              "status": "running",
+              "status": "pending",
               "steps": planList.map((e) => {
                 "title": e["title"],
                 "prompt": e["prompt"],
@@ -671,56 +672,99 @@ class _ChatHomePageState extends State<ChatHomePage> {
               final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
               msgs[assistantMessageIndex] = ChatMessage(
                 role: MessageRole.assistant,
-                text: '[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
+                text: fullText + '\n\n[RESEARCH_STATE: ${jsonEncode(stateMap)}]',
                 reasoning: reasoningText,
               );
               _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              _sendingSessionIds.remove(targetSessionId);
             });
-            
-            _runResearchLoop(
-              sessionIndex: sessionIndex,
-              messageIndex: assistantMessageIndex,
-              stateMap: stateMap,
-              provider: provider,
-              settings: settings,
-              model: activeModel,
-            );
+            await _saveSessions();
+            return;
           } catch (e) {
             debugPrint('Error parsing research plan: $e');
           }
           break;
           }
-        } else if (_searchSettings.enabled && searchMatch != null) {
-          final query = searchMatch.group(1)?.trim() ?? '';
-          toolCallCount++;
+        }
+        
+        if (toolCallCount >= maxToolCalls) {
+          shouldContinue = false;
+          continue;
+        }
 
-          setState(() {
-            final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-            if (assistantMessageIndex < msgs.length) {
-              msgs[assistantMessageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text: '[SEARCH_REQUEST: $query]',
-                reasoning: reasoningText,
-              );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        List<String> toolOutputs = [];
+        bool executedTools = false;
+
+        if (_searchSettings.enabled && searchMatch != null) {
+          final searchMatches = searchRegex.allMatches(fullText);
+          for (final match in searchMatches) {
+            executedTools = true;
+            final query = match.group(1)?.trim() ?? '';
+            final searchResultRaw = await _chatClient.searchWeb(
+              query,
+              _searchSettings.provider,
+              _searchSettings.apiKey,
+              googleCx: _searchSettings.googleCx,
+            );
+            
+            String searchResult = searchResultRaw;
+            if (searchResult.length > 4000) {
+              searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
             }
-          });
-
-          final searchResultRaw = await _chatClient.searchWeb(
-            query,
-            _searchSettings.provider,
-            _searchSettings.apiKey,
-            googleCx: _searchSettings.googleCx,
-          );
-          
-          String searchResult = searchResultRaw;
-          if (searchResult.length > 4000) {
-            searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
+            toolOutputs.add("Web Search results for '$query':\n\n$searchResult");
           }
+        }
 
+        if (_agenticEnabled && mcpMatch != null) {
+          final mcpMatches = mcpRegex.allMatches(fullText);
+          for (final match in mcpMatches) {
+            executedTools = true;
+            String jsonString = match.group(1)?.trim() ?? '';
+            jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
+            
+            String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
+            try {
+              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+              final params = parsed['params'] as Map<String, dynamic>? ?? {};
+              
+              if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
+                mcpEndpoint = _customMcpUrl;
+                params.remove('server');
+              }
+              
+              params['workspace_dir'] = _agenticWorkspace;
+              parsed['params'] = params;
+              jsonString = jsonEncode(parsed);
+            } catch (_) {}
+
+            String mcpResult = '';
+            try {
+              final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+              final request = await client.postUrl(Uri.parse(mcpEndpoint));
+              request.headers.contentType = ContentType.json;
+              
+              final bytes = utf8.encode(jsonString);
+              request.headers.contentLength = bytes.length;
+              request.add(bytes);
+              
+              final response = await request.close();
+              final body = await response.transform(utf8.decoder).join();
+              mcpResult = body;
+              if (mcpResult.length > 6000) {
+                mcpResult = mcpResult.substring(0, 6000) + '\n\n...[truncated due to length]';
+              }
+            } catch (e) {
+              mcpResult = '{"error": "$e"}';
+            }
+            toolOutputs.add("MCP Result:\n\n$mcpResult");
+          }
+        }
+
+        if (executedTools) {
+          toolCallCount++;
           final resultsMessage = ChatMessage(
             role: MessageRole.system,
-            text: "Web Search results for '$query':\n\n$searchResult",
+            text: toolOutputs.join("\n\n---\n\n"),
           );
 
           setState(() {
@@ -732,74 +776,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
           if (targetSessionId == _activeSessionId) {
             _scrollToBottom();
           }
-        } else if (mcpMatch != null) {
-          String jsonString = mcpMatch.group(1)?.trim() ?? '';
-          jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
-          toolCallCount++;
-          
-          String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
-          try {
-            final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
-            final params = parsed['params'] as Map<String, dynamic>? ?? {};
-            
-            if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
-              mcpEndpoint = _customMcpUrl;
-              params.remove('server');
-            }
-            
-            params['workspace_dir'] = _agenticWorkspace;
-            parsed['params'] = params;
-            jsonString = jsonEncode(parsed);
-          } catch (_) {}
-
-          setState(() {
-            final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-            if (assistantMessageIndex < msgs.length) {
-              msgs[assistantMessageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text: '[MCP_REQUEST: $jsonString]',
-                reasoning: reasoningText,
-              );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
-            }
-          });
-
-          String mcpResult = '';
-          try {
-            final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
-            final request = await client.postUrl(Uri.parse(mcpEndpoint));
-            request.headers.contentType = ContentType.json;
-            
-            final bytes = utf8.encode(jsonString);
-            request.headers.contentLength = bytes.length;
-            request.add(bytes);
-            
-            final response = await request.close();
-            final body = await response.transform(utf8.decoder).join();
-            mcpResult = body;
-            if (mcpResult.length > 6000) {
-              mcpResult = mcpResult.substring(0, 6000) + '\n\n...[truncated due to length]';
-            }
-          } catch (e) {
-            mcpResult = '{"error": "$e"}';
-          }
-
-          final resultsMessage = ChatMessage(
-            role: MessageRole.system,
-            text: "MCP Result:\n\n$mcpResult",
-          );
-
-          setState(() {
-            _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-              messages: [..._sessions[sessionIndex].messages, resultsMessage],
-            );
-          });
-
-          if (targetSessionId == _activeSessionId) {
-            _scrollToBottom();
-          }
-          
-          // Delay to prevent hitting rate limits when executing multiple tools back to back
           await Future.delayed(const Duration(seconds: 2));
         } else {
           shouldContinue = false;
@@ -833,6 +809,46 @@ class _ChatHomePageState extends State<ChatHomePage> {
           _scrollToBottom();
         }
       }
+    }
+  }
+
+  void _startResearchLoop(int messageIndex) {
+    final activeSession = _sessions.firstWhere((s) => s.id == _activeSessionId);
+    final sessionIndex = _sessions.indexOf(activeSession);
+    if (sessionIndex == -1) return;
+    
+    final message = activeSession.messages[messageIndex];
+    if (!message.text.contains('[RESEARCH_STATE:')) return;
+    
+    final stateStr = message.text.substring(message.text.indexOf('[RESEARCH_STATE: ') + 17, message.text.lastIndexOf(']')).trim();
+    try {
+      final stateMap = jsonDecode(stateStr) as Map<String, dynamic>;
+      stateMap['status'] = 'running';
+      
+      setState(() {
+        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+        msgs[messageIndex] = ChatMessage(
+          role: MessageRole.assistant,
+          text: message.text.replaceRange(
+            message.text.indexOf('[RESEARCH_STATE:'), 
+            message.text.lastIndexOf(']') + 1, 
+            '[RESEARCH_STATE: ${jsonEncode(stateMap)}]'
+          ),
+          reasoning: message.reasoning,
+        );
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+      });
+
+      _runResearchLoop(
+        sessionIndex: sessionIndex,
+        messageIndex: messageIndex,
+        stateMap: stateMap,
+        provider: _provider,
+        settings: _activeSettings,
+        model: _activeModel,
+      );
+    } catch (e) {
+      debugPrint('Error parsing state map on start: $e');
     }
   }
 
@@ -1274,6 +1290,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
                 onEditUserMessage: _editUserMessage,
                 agenticWorkspace: _agenticWorkspace,
                 deepResearchEnabled: _deepResearchEnabled,
+                onStartResearch: _startResearchLoop,
               ),
             ),
           ],
@@ -1404,6 +1421,7 @@ class ChatSurface extends StatelessWidget {
     required this.onEditUserMessage,
     required this.agenticWorkspace,
     required this.deepResearchEnabled,
+    required this.onStartResearch,
     super.key,
   });
 
@@ -1425,6 +1443,7 @@ class ChatSurface extends StatelessWidget {
   final ValueChanged<int> onEditUserMessage;
   final String agenticWorkspace;
   final bool deepResearchEnabled;
+  final ValueChanged<int> onStartResearch;
 
   @override
   Widget build(BuildContext context) {
@@ -1477,6 +1496,7 @@ class ChatSurface extends StatelessWidget {
                   animationState: state,
                   agenticWorkspace: agenticWorkspace,
                   onEditUserMessage: () => onEditUserMessage(index),
+                  onStartResearch: () => onStartResearch(index),
                 );
               },
             ),
@@ -2079,6 +2099,7 @@ class MessageBubble extends StatelessWidget {
     required this.onEditUserMessage,
     required this.agenticWorkspace,
     this.animationState = AvatarAnimationState.idle,
+    this.onStartResearch,
     super.key,
   });
 
@@ -2090,6 +2111,7 @@ class MessageBubble extends StatelessWidget {
   final String agenticWorkspace;
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
+  final VoidCallback? onStartResearch;
 
   @override
   Widget build(BuildContext context) {
@@ -2275,7 +2297,11 @@ class MessageBubble extends StatelessWidget {
                   try {
                     final jsonStr = message.text.substring(16, message.text.lastIndexOf(']'));
                     final stateMap = jsonDecode(jsonStr) as Map<String, dynamic>;
-                    return ResearchPlanWidget(stateMap: stateMap, workspaceDir: agenticWorkspace);
+                    return ResearchPlanWidget(
+                      stateMap: stateMap,
+                      workspaceDir: agenticWorkspace,
+                      onStartResearch: onStartResearch,
+                    );
                   } catch (_) {
                     return const Text('Error rendering research state', style: TextStyle(color: Colors.red));
                   }
@@ -5035,9 +5061,10 @@ class MermaidDiagramWidget extends StatelessWidget {
 }
 
 class ResearchPlanWidget extends StatefulWidget {
-  const ResearchPlanWidget({required this.stateMap, required this.workspaceDir, super.key});
+  const ResearchPlanWidget({required this.stateMap, required this.workspaceDir, this.onStartResearch, super.key});
   final Map<String, dynamic> stateMap;
   final String workspaceDir;
+  final VoidCallback? onStartResearch;
 
   @override
   State<ResearchPlanWidget> createState() => _ResearchPlanWidgetState();
@@ -5115,11 +5142,26 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                     const Icon(Icons.science, size: 18, color: Color(0xFF2C5282)),
                     const SizedBox(width: 8),
                     Text(
-                      status == 'completed' ? 'Deep Research Complete' : 'Deep Research in Progress...',
+                      status == 'completed' 
+                          ? 'Deep Research Complete' 
+                          : status == 'pending' 
+                              ? 'Research Plan Ready' 
+                              : 'Deep Research in Progress...',
                       style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C5282)),
                     ),
                   ],
                 ),
+                if (status == 'pending' && widget.onStartResearch != null)
+                  ElevatedButton.icon(
+                    onPressed: widget.onStartResearch,
+                    icon: const Icon(Icons.play_arrow, size: 16, color: Colors.white),
+                    label: const Text('Start', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2C5282),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      minimumSize: const Size(0, 32),
+                    ),
+                  ),
                 if (status == 'running')
                   Text(
                     '${_stopwatch.elapsed.inMinutes.toString().padLeft(2, '0')}:${(_stopwatch.elapsed.inSeconds % 60).toString().padLeft(2, '0')}',
