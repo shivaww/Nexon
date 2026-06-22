@@ -524,7 +524,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final List<ChatMessage> historyForApi = [];
         final currentDateStr = DateTime.now().toString().substring(0, 10);
-        String systemPromptText = "The current date/year is $currentDateStr. Make sure to search for and refer to the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\n\n";
+        String systemPromptText = "The current date/year is $currentDateStr. Make sure to search for and refer to the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\n\n"
+            "You have powerful visual rendering capabilities! You can render the following blocks by outputting standard markdown code blocks:\n"
+            "- Mathematical equations using LaTeX: `\\[ ... \\]` or `\\( ... \\)`.\n"
+            "- Mermaid diagrams: ```mermaid\n"
+            "- SVG Graphics: ```svg\n"
+            "- Native Charts (Bar/Pie): ```chart with JSON data (e.g., {\"type\": \"bar\", \"title\": \"...\", \"data\": [{\"label\": \"...\", \"value\": 10}]})\n"
+            "- Interactive HTML/JS Web Apps: ```html or ```javascript or ```react or ```artifact\n"
+            "Whenever asked to generate UI, diagrams, charts, or interactive content, USE THESE code blocks to render them natively in the app.\n\n";
         if (_agenticEnabled) {
           systemPromptText += "You have access to local Termux file system tools.\n"
               "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
