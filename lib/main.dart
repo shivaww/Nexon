@@ -531,7 +531,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             "- SVG Graphics: ```svg\n"
             "- Native Charts (Bar/Pie): ```chart with JSON data (e.g., {\"type\": \"bar\", \"title\": \"...\", \"data\": [{\"label\": \"...\", \"value\": 10}]})\n"
             "- Interactive HTML/JS Web Apps: ```html or ```javascript or ```react or ```artifact\n"
-            "Whenever asked to generate UI, diagrams, charts, or interactive content, USE THESE code blocks to render them natively in the app.\n\n";
+            "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts, SVGs, or Mermaid diagrams when helpful. Keep visual colors simple, high contrast, and effective.\n\n";
         if (_agenticEnabled) {
           systemPromptText += "You have access to local Termux file system tools.\n"
               "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
@@ -2762,32 +2762,16 @@ class MessageBubble extends StatelessWidget {
           );
         }
         if (block.language.toLowerCase() == 'mermaid') {
-          return ArtifactCard(
-            title: 'Mermaid Diagram',
-            icon: Icons.account_tree_outlined,
-            builder: (context) => MermaidDiagramWidget(code: block.content),
-          );
+          return MermaidDiagramWidget(code: block.content);
         }
         if (block.language.toLowerCase() == 'svg') {
-          return ArtifactCard(
-            title: 'SVG Graphic',
-            icon: Icons.image_outlined,
-            builder: (context) => SvgDiagramWidget(svgString: block.content),
-          );
+          return SvgDiagramWidget(svgString: block.content);
         }
         if (block.language.toLowerCase() == 'chart' || block.language.toLowerCase() == 'json-chart') {
-          return ArtifactCard(
-            title: 'Data Chart',
-            icon: Icons.bar_chart_outlined,
-            builder: (context) => ChartDiagramWidget(jsonString: block.content),
-          );
+          return ChartDiagramWidget(jsonString: block.content);
         }
         if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
-          return ArtifactCard(
-            title: 'Interactive Web App',
-            icon: Icons.web_outlined,
-            builder: (context) => HtmlArtifactWidget(htmlContent: block.content),
-          );
+          return HtmlArtifactWidget(htmlContent: block.content);
         }
         return CodeBlockWidget(
           code: block.content,
@@ -5839,6 +5823,7 @@ class HtmlArtifactWidget extends StatefulWidget {
 class _HtmlArtifactWidgetState extends State<HtmlArtifactWidget> {
   late final WebViewController _controller;
   bool _isLoading = true;
+  bool _showPreview = true;
 
   @override
   void initState() {
@@ -5875,21 +5860,79 @@ class _HtmlArtifactWidgetState extends State<HtmlArtifactWidget> {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
-      height: 450,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE7D8C4)),
         boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Stack(
-          children: [
-            WebViewWidget(controller: _controller),
-            if (_isLoading) const Center(child: CircularProgressIndicator(color: Color(0xFF7B4E2E))),
-          ],
-        ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF7F2E8),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
+              border: Border(bottom: BorderSide(color: Color(0xFFE7D8C4))),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Interactive Web App', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2D241C))),
+                Row(
+                  children: [
+                    TextButton(
+                      onPressed: () => setState(() => _showPreview = true),
+                      style: TextButton.styleFrom(
+                        foregroundColor: _showPreview ? Colors.white : const Color(0xFF7B4E2E),
+                        backgroundColor: _showPreview ? const Color(0xFF7B4E2E) : Colors.transparent,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        minimumSize: const Size(0, 32),
+                      ),
+                      child: const Text('Preview', style: TextStyle(fontSize: 12)),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => setState(() => _showPreview = false),
+                      style: TextButton.styleFrom(
+                        foregroundColor: !_showPreview ? Colors.white : const Color(0xFF7B4E2E),
+                        backgroundColor: !_showPreview ? const Color(0xFF7B4E2E) : Colors.transparent,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        minimumSize: const Size(0, 32),
+                      ),
+                      child: const Text('Code', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (_showPreview)
+            SizedBox(
+              height: 400,
+              child: Stack(
+                children: [
+                  WebViewWidget(controller: _controller),
+                  if (_isLoading) const Center(child: CircularProgressIndicator(color: Color(0xFF7B4E2E))),
+                ],
+              ),
+            )
+          else
+            Container(
+              height: 400,
+              color: const Color(0xFF1E1E1E),
+              width: double.infinity,
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: SelectableText(
+                    widget.htmlContent,
+                    style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 13),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -5911,16 +5954,32 @@ class ChartDiagramWidget extends StatelessWidget {
         chart = PieChart(
           PieChartData(
             sectionsSpace: 2,
+class ChartDiagramWidget extends StatelessWidget {
+  final String jsonString;
+  const ChartDiagramWidget({super.key, required this.jsonString});
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      final data = jsonDecode(jsonString);
+      final type = data['type']?.toString().toLowerCase() ?? 'bar';
+      
+      Widget chart;
+      if (type == 'pie') {
+        final List items = data['data'] ?? [];
+        chart = PieChart(
+          PieChartData(
+            sectionsSpace: 2,
             centerSpaceRadius: 40,
             sections: items.asMap().entries.map((e) {
               final Map item = e.value;
-              final color = Colors.primaries[e.key % Colors.primaries.length];
+              final color = e.key % 2 == 0 ? const Color(0xFF2B6CB0) : const Color(0xFFE2ECF5);
               return PieChartSectionData(
                 color: color,
                 value: (item['value'] as num).toDouble(),
                 title: item['label']?.toString() ?? '',
                 radius: 50,
-                titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black87),
               );
             }).toList(),
           ),
@@ -5937,22 +5996,34 @@ class ChartDiagramWidget extends StatelessWidget {
               bottomTitles: AxisTitles(
                 sideTitles: SideTitles(
                   showTitles: true,
+                  reservedSize: 42,
                   getTitlesWidget: (value, meta) {
                     if (value.toInt() >= 0 && value.toInt() < items.length) {
                       return Padding(
                         padding: const EdgeInsets.only(top: 8.0),
-                        child: Text(items[value.toInt()]['label']?.toString() ?? '', style: const TextStyle(fontSize: 10)),
+                        child: Transform.rotate(
+                          angle: -0.5,
+                          child: Text(items[value.toInt()]['label']?.toString() ?? '', style: const TextStyle(fontSize: 9, color: Colors.black54)),
+                        ),
                       );
                     }
                     return const SizedBox.shrink();
                   },
                 ),
               ),
-              leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 30,
+                  getTitlesWidget: (value, meta) {
+                    return Text(value.toInt().toString(), style: const TextStyle(fontSize: 9, color: Colors.black54));
+                  },
+                ),
+              ),
+              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             ),
-            gridData: FlGridData(show: false),
+            gridData: const FlGridData(show: false),
             borderData: FlBorderData(show: false),
             barGroups: items.asMap().entries.map((e) {
               return BarChartGroupData(
@@ -5960,7 +6031,7 @@ class ChartDiagramWidget extends StatelessWidget {
                 barRods: [
                   BarChartRodData(
                     toY: (e.value['value'] as num).toDouble(),
-                    color: Colors.primaries[e.key % Colors.primaries.length],
+                    color: const Color(0xFF2B6CB0),
                     width: 16,
                     borderRadius: BorderRadius.circular(4),
                   )
@@ -6019,71 +6090,16 @@ class SvgDiagramWidget extends StatelessWidget {
     }
     return Container(
       width: double.infinity,
-      height: double.infinity,
       color: const Color(0xFFFFFDF9),
-      child: InteractiveViewer(
-        panEnabled: true,
-        boundaryMargin: const EdgeInsets.all(40),
-        minScale: 0.5,
-        maxScale: 4.0,
-        child: Center(
-          child: SvgPicture.string(
-            cleanSvg,
-            placeholderBuilder: (context) => const CircularProgressIndicator(color: Color(0xFF7B4E2E)),
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: SvgPicture.string(
+          cleanSvg,
+          fit: BoxFit.contain,
+          placeholderBuilder: (context) => const Padding(
+            padding: EdgeInsets.all(20),
+            child: CircularProgressIndicator(color: Color(0xFF7B4E2E)),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class ArtifactCard extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final WidgetBuilder builder;
-
-  const ArtifactCard({super.key, required this.title, required this.icon, required this.builder});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (context) => Scaffold(
-            appBar: AppBar(
-              backgroundColor: const Color(0xFFFFFDF9),
-              title: Text(title, style: const TextStyle(color: Color(0xFF2D241C), fontSize: 16)),
-              iconTheme: const IconThemeData(color: Color(0xFF2D241C)),
-              elevation: 1,
-            ),
-            body: SafeArea(child: builder(context)),
-          ),
-        ));
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFFDF9),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE7D8C4)),
-          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 2)],
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: const Color(0xFF7B4E2E), size: 28),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF2D241C))),
-                  const Text('Click to view artifact', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                ],
-              ),
-            ),
-            const Icon(Icons.open_in_new, size: 18, color: Colors.grey),
-          ],
         ),
       ),
     );
