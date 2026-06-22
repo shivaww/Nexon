@@ -958,8 +958,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
         "For the current phase, perform thorough research:\n"
         "1. Conduct multiple <search_request> calls with distinct search queries to gather comprehensive data.\n"
         "2. IMPORTANT: Do not rely solely on search snippets! Use <read_url>url</read_url> to read the full content of promising links found in the search results.\n"
-        "3. Analyze the search results and webpage contents thoroughly.\n"
-        "4. Keep your analysis in your memory/context for the final report.\n"
+        "3. Cross-check your sources to ensure high accuracy and reliability of the data.\n"
+        "4. Analyze the search results and webpage contents thoroughly.\n"
+        "5. Keep your analysis in your memory/context for the final report.\n"
         "CRITICAL: If you need to use <search_request>, <read_url>, or <mcp_request>, output the tag and stop generating immediately in that turn. Do not generate any text after the tag.\n"
         "When you are completely finished researching and analyzing the current phase, output a detailed summary of your findings for this phase, list your source URLs, and then output a single line: <step_complete/>";
     
@@ -1141,8 +1142,22 @@ class _ChatHomePageState extends State<ChatHomePage> {
           }
           await Future.delayed(const Duration(seconds: 3));
         } catch (e) {
-          stepContent = stepContent.isEmpty ? "Error during step: $e" : "$stepContent\n\nError during step: $e";
-          stepDone = true;
+          final errorStr = e.toString().toLowerCase();
+          if (errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503')) {
+            stepContent = stepContent.isEmpty ? "API rate limit or server error. Retrying in 10s..." : "$stepContent\n\nAPI rate limit or server error. Retrying in 10s...";
+            steps[i]['content'] = stepContent;
+            if (mounted) {
+              setState(() {
+                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '<research_state>${jsonEncode(stateMap)}</research_state>');
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              });
+            }
+            await Future.delayed(const Duration(seconds: 10));
+          } else {
+            stepContent = stepContent.isEmpty ? "Error during step: $e" : "$stepContent\n\nError during step: $e";
+            stepDone = true;
+          }
         }
       }
 
@@ -1178,46 +1193,59 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
     String finalReportText = '';
     String finalReasoningText = '';
-    try {
-      final stream = _chatClient.sendChatStream(
-        provider: provider,
-        settings: settings,
-        model: model,
-        messages: stepMessages,
-      );
-      
-      var isThinking = false;
-      await for (final chunk in stream) {
-        if (chunk.startsWith('[REASONING]')) {
-          finalReasoningText += chunk.substring(11);
-        } else {
-          var textChunk = chunk;
-          if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
-            final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
-            final parts = textChunk.split(tag);
-            finalReportText += parts[0];
-            isThinking = true;
-            textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-          }
-          
-          if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
-            final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
-            final parts = textChunk.split(tag);
-            finalReasoningText += parts[0];
-            isThinking = false;
-            textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-            finalReportText += textChunk;
-          } else if (isThinking) {
-            finalReasoningText += textChunk;
+    bool finalReportDone = false;
+    int finalReportRetries = 0;
+
+    while (!finalReportDone && finalReportRetries < 3) {
+      try {
+        final stream = _chatClient.sendChatStream(
+          provider: provider,
+          settings: settings,
+          model: model,
+          messages: stepMessages,
+        );
+        
+        var isThinking = false;
+        await for (final chunk in stream) {
+          if (chunk.startsWith('[REASONING]')) {
+            finalReasoningText += chunk.substring(11);
           } else {
-            finalReportText += textChunk;
+            var textChunk = chunk;
+            if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
+              final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
+              final parts = textChunk.split(tag);
+              finalReportText += parts[0];
+              isThinking = true;
+              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+            }
+            
+            if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
+              final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
+              final parts = textChunk.split(tag);
+              finalReasoningText += parts[0];
+              isThinking = false;
+              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+              finalReportText += textChunk;
+            } else if (isThinking) {
+              finalReasoningText += textChunk;
+            } else {
+              finalReportText += textChunk;
+            }
           }
         }
+        stateMap['final_report'] = finalReportText;
+        finalReportDone = true;
+      } catch (e) {
+        final errorStr = e.toString().toLowerCase();
+        if (errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503')) {
+          finalReportRetries++;
+          await Future.delayed(const Duration(seconds: 10));
+        } else {
+          stateMap['final_report'] = "Error generating final report: $e";
+          finalReportText = stateMap['final_report'];
+          finalReportDone = true;
+        }
       }
-      stateMap['final_report'] = finalReportText;
-    } catch (e) {
-      stateMap['final_report'] = "Error generating final report: $e";
-      finalReportText = stateMap['final_report'];
     }
 
     stateMap['status'] = 'completed';
@@ -2584,6 +2612,41 @@ class MessageBubble extends StatelessWidget {
                     );
                   } catch (_) {
                     return const Text('Error rendering search request', style: TextStyle(color: Colors.red));
+                  }
+                })
+              else if (message.text.contains('<read_url>'))
+                Builder(builder: (context) {
+                  try {
+                    final startIndex = message.text.indexOf('<read_url>');
+                    final endIndex = message.text.indexOf('</read_url>');
+                    final url = message.text.substring(startIndex + 10, endIndex).trim();
+                    return Container(
+                      margin: const EdgeInsets.symmetric(vertical: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0F5FA),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFD0E0F0)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.link, color: Color(0xFF2B6CB0), size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Tool Use: Reading webpage at "$url"',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF2B6CB0),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  } catch (_) {
+                    return const Text('Error rendering read_url request', style: TextStyle(color: Colors.red));
                   }
                 })
               else if (message.text.contains('<mcp_request>'))
