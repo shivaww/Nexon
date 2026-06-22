@@ -2762,16 +2762,32 @@ class MessageBubble extends StatelessWidget {
           );
         }
         if (block.language.toLowerCase() == 'mermaid') {
-          return MermaidDiagramWidget(code: block.content);
+          return ArtifactCard(
+            title: 'Mermaid Diagram',
+            icon: Icons.account_tree_outlined,
+            builder: (context) => MermaidDiagramWidget(code: block.content),
+          );
         }
         if (block.language.toLowerCase() == 'svg') {
-          return SvgDiagramWidget(svgString: block.content);
+          return ArtifactCard(
+            title: 'SVG Graphic',
+            icon: Icons.image_outlined,
+            builder: (context) => SvgDiagramWidget(svgString: block.content),
+          );
         }
         if (block.language.toLowerCase() == 'chart' || block.language.toLowerCase() == 'json-chart') {
-          return ChartDiagramWidget(jsonString: block.content);
+          return ArtifactCard(
+            title: 'Data Chart',
+            icon: Icons.bar_chart_outlined,
+            builder: (context) => ChartDiagramWidget(jsonString: block.content),
+          );
         }
         if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
-          return HtmlArtifactWidget(htmlContent: block.content);
+          return ArtifactCard(
+            title: 'Interactive Web App',
+            icon: Icons.web_outlined,
+            builder: (context) => HtmlArtifactWidget(htmlContent: block.content),
+          );
         }
         return CodeBlockWidget(
           code: block.content,
@@ -5997,19 +6013,77 @@ class SvgDiagramWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    String cleanSvg = svgString;
+    if (cleanSvg.contains('<svg')) {
+      cleanSvg = cleanSvg.substring(cleanSvg.indexOf('<svg'));
+    }
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE7D8C4)),
-        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      width: double.infinity,
+      height: double.infinity,
+      color: const Color(0xFFFFFDF9),
+      child: InteractiveViewer(
+        panEnabled: true,
+        boundaryMargin: const EdgeInsets.all(40),
+        minScale: 0.5,
+        maxScale: 4.0,
+        child: Center(
+          child: SvgPicture.string(
+            cleanSvg,
+            placeholderBuilder: (context) => const CircularProgressIndicator(color: Color(0xFF7B4E2E)),
+          ),
+        ),
       ),
-      child: Center(
-        child: SvgPicture.string(
-          svgString,
-          placeholderBuilder: (context) => const CircularProgressIndicator(color: Color(0xFF7B4E2E)),
+    );
+  }
+}
+
+class ArtifactCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final WidgetBuilder builder;
+
+  const ArtifactCard({super.key, required this.title, required this.icon, required this.builder});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (context) => Scaffold(
+            appBar: AppBar(
+              backgroundColor: const Color(0xFFFFFDF9),
+              title: Text(title, style: const TextStyle(color: Color(0xFF2D241C), fontSize: 16)),
+              iconTheme: const IconThemeData(color: Color(0xFF2D241C)),
+              elevation: 1,
+            ),
+            body: SafeArea(child: builder(context)),
+          ),
+        ));
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFDF9),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE7D8C4)),
+          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 2)],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFF7B4E2E), size: 28),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF2D241C))),
+                  const Text('Click to view artifact', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                ],
+              ),
+            ),
+            const Icon(Icons.open_in_new, size: 18, color: Colors.grey),
+          ],
         ),
       ),
     );
