@@ -2506,8 +2506,8 @@ class MessageBubble extends StatelessWidget {
                         alignment: Alignment.centerLeft,
                         child: MarkdownBody(
                           data: message.text
-                              .replaceAll(RegExp(r'\\\[([\s\S]*?)\\\]'), r'$$$1$$')
-                              .replaceAll(RegExp(r'\\\(([\s\S]*?)\\\)'), r'$$1$')
+                              .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
+                              .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
                               .replaceAll(r'\boldsymbol', r'\mathbf'),
                           selectable: true,
                           builders: {
@@ -2776,8 +2776,8 @@ class MessageBubble extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 6.0),
           child: MarkdownBody(
             data: block.content
-                .replaceAll(RegExp(r'\\\[([\s\S]*?)\\\]'), r'$$$1$$')
-                .replaceAll(RegExp(r'\\\(([\s\S]*?)\\\)'), r'$$1$')
+                .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
+                .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
                 .replaceAll(r'\boldsymbol', r'\mathbf'),
             selectable: true,
             builders: {
