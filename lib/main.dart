@@ -531,7 +531,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             "- SVG Graphics: ```svg\n"
             "- Native Charts (Bar/Pie): ```chart with JSON data (e.g., {\"type\": \"bar\", \"title\": \"...\", \"data\": [{\"label\": \"...\", \"value\": 10}]})\n"
             "- Interactive HTML/JS Web Apps: ```html or ```javascript or ```react or ```artifact\n"
-            "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts, SVGs, or Mermaid diagrams when helpful. Keep visual colors simple, high contrast, and effective.\n\n";
+            "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts, SVGs, or Mermaid diagrams when helpful. Keep visuals clean and minimal: DO NOT put long text or explanations inside the visual itself (use the normal chat text for explanations). Keep visual colors simple, high contrast, and effective.\n\n";
         if (_agenticEnabled) {
           systemPromptText += "You have access to local Termux file system tools.\n"
               "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
