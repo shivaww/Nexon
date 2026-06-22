@@ -71,6 +71,7 @@ dependencies:
   
   # Charts for dashboards
   fl_chart: ^0.70.2
+  webview_flutter: any
   
   # Icons
   flutter_vector_icons: ^2.0.0

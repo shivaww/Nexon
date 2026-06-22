@@ -12,6 +12,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -2753,6 +2755,12 @@ class MessageBubble extends StatelessWidget {
         }
         if (block.language.toLowerCase() == 'mermaid') {
           return MermaidDiagramWidget(code: block.content);
+        }
+        if (block.language.toLowerCase() == 'chart' || block.language.toLowerCase() == 'json-chart') {
+          return ChartDiagramWidget(jsonString: block.content);
+        }
+        if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
+          return HtmlArtifactWidget(htmlContent: block.content);
         }
         return CodeBlockWidget(
           code: block.content,
@@ -5764,8 +5772,186 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
               ],
             );
           }).toList(),
-        ],
       ),
     );
+  }
+}
+
+class HtmlArtifactWidget extends StatefulWidget {
+  final String htmlContent;
+  const HtmlArtifactWidget({super.key, required this.htmlContent});
+
+  @override
+  State<HtmlArtifactWidget> createState() => _HtmlArtifactWidgetState();
+}
+
+class _HtmlArtifactWidgetState extends State<HtmlArtifactWidget> {
+  late final WebViewController _controller;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final html = widget.htmlContent;
+    final wrappedHtml = html.contains('<html>') ? html : '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 16px; background-color: #ffffff; }
+  </style>
+</head>
+<body>
+  $html
+</body>
+</html>
+''';
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (String url) {
+            if (mounted) setState(() => _isLoading = false);
+          },
+        ),
+      )
+      ..loadHtmlString(wrappedHtml);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      height: 450,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE7D8C4)),
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
+            if (_isLoading) const Center(child: CircularProgressIndicator(color: Color(0xFF7B4E2E))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ChartDiagramWidget extends StatelessWidget {
+  final String jsonString;
+  const ChartDiagramWidget({super.key, required this.jsonString});
+
+  @override
+  Widget build(BuildContext context) {
+    try {
+      final data = jsonDecode(jsonString);
+      final type = data['type']?.toString().toLowerCase() ?? 'bar';
+      
+      Widget chart;
+      if (type == 'pie') {
+        final List items = data['data'] ?? [];
+        chart = PieChart(
+          PieChartData(
+            sectionsSpace: 2,
+            centerSpaceRadius: 40,
+            sections: items.asMap().entries.map((e) {
+              final Map item = e.value;
+              final color = Colors.primaries[e.key % Colors.primaries.length];
+              return PieChartSectionData(
+                color: color,
+                value: (item['value'] as num).toDouble(),
+                title: item['label']?.toString() ?? '',
+                radius: 50,
+                titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+              );
+            }).toList(),
+          ),
+        );
+      } else {
+        final List items = data['data'] ?? [];
+        chart = BarChart(
+          BarChartData(
+            alignment: BarChartAlignment.spaceAround,
+            maxY: items.isNotEmpty ? items.map((e) => (e['value'] as num).toDouble()).reduce((a, b) => a > b ? a : b) * 1.2 : 10,
+            barTouchData: BarTouchData(enabled: true),
+            titlesData: FlTitlesData(
+              show: true,
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  getTitlesWidget: (value, meta) {
+                    if (value.toInt() >= 0 && value.toInt() < items.length) {
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(items[value.toInt()]['label']?.toString() ?? '', style: const TextStyle(fontSize: 10)),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ),
+              leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            ),
+            gridData: FlGridData(show: false),
+            borderData: FlBorderData(show: false),
+            barGroups: items.asMap().entries.map((e) {
+              return BarChartGroupData(
+                x: e.key,
+                barRods: [
+                  BarChartRodData(
+                    toY: (e.value['value'] as num).toDouble(),
+                    color: Colors.primaries[e.key % Colors.primaries.length],
+                    width: 16,
+                    borderRadius: BorderRadius.circular(4),
+                  )
+                ],
+              );
+            }).toList(),
+          ),
+        );
+      }
+
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(16),
+        height: 300,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE7D8C4)),
+          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (data['title'] != null) ...[
+              Text(
+                data['title'].toString(),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+            ],
+            Expanded(child: chart),
+          ],
+        ),
+      );
+    } catch (e) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(12),
+        color: Colors.red.shade50,
+        child: Text('Chart rendering error: $e', style: TextStyle(color: Colors.red.shade900)),
+      );
+    }
   }
 }
