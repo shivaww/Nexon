@@ -551,13 +551,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         if (_deepResearchEnabled) {
           if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
-          systemPromptText += "DEEP RESEARCH MODE ENABLED: For your first response, you MUST generate a comprehensive research plan using XML tags. Output ONLY the plan inside the tags and nothing else. Follow this exact format:\n"
+          systemPromptText += "DEEP RESEARCH MODE ENABLED: For your first response, you MUST generate a comprehensive research plan using XML tags. Follow this exact format strictly:\n"
             "<research_plan>\n"
-            "  <phase1>Title of Phase 1: Detailed prompt/instructions for what you should accomplish in this phase</phase1>\n"
-            "  <phase2>Title of Phase 2: Detailed prompt/instructions for what you should accomplish in this phase</phase2>\n"
+            "  <phase1>Short Phase Title: Detailed prompt/instructions for what you should accomplish in this phase</phase1>\n"
+            "  <phase2>Short Phase Title: Detailed prompt/instructions for what you should accomplish in this phase</phase2>\n"
             "  ...\n"
             "</research_plan>\n"
-            "Limit the plan to a maximum of 15 phases.";
+            "CRITICAL RULES FOR RESEARCH PLAN:\n"
+            "- Use EXACTLY the tag names <phase1>, <phase2>, etc. Do not add spaces inside the tag names (e.g. do not write <phase 1> or <phase_1>).\n"
+            "- Inside each phase tag, use the format: 'Title: Detailed prompt description'. Keep the title short (under 30 characters) and separate it from the description with a colon ':'.\n"
+            "- Limit the plan to a maximum of 15 phases.\n"
+            "- Do not include any other XML tags besides <research_plan> and <phaseX> tags.";
         }
 
         if (systemPromptText.isNotEmpty) {
@@ -654,50 +658,51 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         if (fullText.contains('<research_plan>')) {
           final planStart = fullText.indexOf('<research_plan>');
-          final planEnd = fullText.indexOf('</research_plan>', planStart);
-          if (planEnd != -1) {
-            final planContent = fullText.substring(planStart + 15, planEnd).trim();
-            final phaseRegex = RegExp(r'<phase(\d+)>(.*?)</phase\1>', dotAll: true);
-            final matches = phaseRegex.allMatches(planContent);
-            if (matches.isNotEmpty) {
-              final List<Map<String, dynamic>> stepsList = [];
-              for (final match in matches) {
-                final phaseNum = int.tryParse(match.group(1) ?? '') ?? 0;
-                final textContent = match.group(2)?.trim() ?? '';
-                
-                String title = 'Phase $phaseNum';
-                String prompt = textContent;
-                final separatorIndex = textContent.indexOf(RegExp(r'[:\-]'));
-                if (separatorIndex != -1) {
-                  title = textContent.substring(0, separatorIndex).trim();
-                  prompt = textContent.substring(separatorIndex + 1).trim();
-                }
-                stepsList.add({
-                  "title": title,
-                  "prompt": prompt,
-                  "status": "pending",
-                  "content": ""
-                });
+          var planEnd = fullText.indexOf('</research_plan>', planStart);
+          if (planEnd == -1) {
+            planEnd = fullText.length;
+          }
+          final planContent = fullText.substring(planStart + 15, planEnd).trim();
+          final phaseRegex = RegExp(r'<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>', caseSensitive: false, dotAll: true);
+          final matches = phaseRegex.allMatches(planContent);
+          if (matches.isNotEmpty) {
+            final List<Map<String, dynamic>> stepsList = [];
+            for (final match in matches) {
+              final phaseNum = int.tryParse(match.group(1) ?? '') ?? 0;
+              final textContent = match.group(2)?.trim() ?? '';
+              
+              String title = 'Phase $phaseNum';
+              String prompt = textContent;
+              final separatorIndex = textContent.indexOf(RegExp(r'[:\-]'));
+              if (separatorIndex != -1 && separatorIndex < 35) {
+                title = textContent.substring(0, separatorIndex).trim();
+                prompt = textContent.substring(separatorIndex + 1).trim();
               }
-              
-              final stateMap = {
+              stepsList.add({
+                "title": title,
+                "prompt": prompt,
                 "status": "pending",
-                "steps": stepsList
-              };
-              
-              setState(() {
-                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-                msgs[assistantMessageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: fullText + '\n\n<research_state>${jsonEncode(stateMap)}</research_state>',
-                  reasoning: reasoningText,
-                );
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
-                _sendingSessionIds.remove(targetSessionId);
+                "content": ""
               });
-              await _saveSessions();
-              return;
             }
+            
+            final stateMap = {
+              "status": "pending",
+              "steps": stepsList
+            };
+            
+            setState(() {
+              final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+              msgs[assistantMessageIndex] = ChatMessage(
+                role: MessageRole.assistant,
+                text: fullText + '\n\n<research_state>${jsonEncode(stateMap)}</research_state>',
+                reasoning: reasoningText,
+              );
+              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              _sendingSessionIds.remove(targetSessionId);
+            });
+            await _saveSessions();
+            return;
           }
         }
         
