@@ -4403,65 +4403,82 @@ class ChatClient {
       for (int i = 0; i < allKeys.length; i++) {
         final currentKey = allKeys[i];
         
-        try {
-          final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
-          final request = await client.postUrl(uri);
-          _setHeaders(request, provider, settings, currentKey, stream: false);
-          request.headers.contentType = ContentType.json;
+        bool success = false;
+        Exception? lastException;
+        String? responseText;
 
-          final payload = <String, dynamic>{
-            'model': model,
-            'messages': messages
-                .map((message) {
-                  String finalText = message.text;
-                  if (message.files.isNotEmpty) {
-                    finalText += '\n\n';
-                    for (final file in message.files) {
-                      finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+        for (int retry = 0; retry < 3; retry++) {
+          try {
+            final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
+            final request = await client.postUrl(uri);
+            _setHeaders(request, provider, settings, currentKey, stream: false);
+            request.headers.contentType = ContentType.json;
+
+            final payload = <String, dynamic>{
+              'model': model,
+              'messages': messages
+                  .map((message) {
+                    String finalText = message.text;
+                    if (message.files.isNotEmpty) {
+                      finalText += '\n\n';
+                      for (final file in message.files) {
+                        finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+                      }
                     }
-                  }
 
-                  if (message.images.isNotEmpty) {
+                    if (message.images.isNotEmpty) {
+                      return {
+                        'role': message.role.apiName,
+                        'content': [
+                          {'type': 'text', 'text': finalText},
+                          ...message.images.map((img) => {
+                                'type': 'image_url',
+                                'image_url': {
+                                  'url': 'data:image/jpeg;base64,$img'
+                                }
+                              })
+                        ]
+                      };
+                    }
                     return {
                       'role': message.role.apiName,
-                      'content': [
-                        {'type': 'text', 'text': finalText},
-                        ...message.images.map((img) => {
-                              'type': 'image_url',
-                              'image_url': {
-                                'url': 'data:image/jpeg;base64,$img'
-                              }
-                            })
-                      ]
+                      'content': finalText,
                     };
-                  }
-                  return {
-                    'role': message.role.apiName,
-                    'content': finalText,
-                  };
-                })
-                .toList(),
-            'max_tokens': settings.maxTokens,
-            'temperature': 1.0,
-            'top_p': 0.95,
-            'stream': false,
-          };
+                  })
+                  .toList(),
+              'max_tokens': settings.maxTokens,
+              'temperature': 1.0,
+              'top_p': 0.95,
+              'stream': false,
+            };
 
-          final payloadBytes = utf8.encode(jsonEncode(payload));
-          request.headers.contentLength = payloadBytes.length;
-          request.add(payloadBytes);
-          final response = await request.close();
-          final body = await response.transform(utf8.decoder).join();
-          
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            throw HttpException('HTTP ${response.statusCode}: $body');
+            final payloadBytes = utf8.encode(jsonEncode(payload));
+            request.headers.contentLength = payloadBytes.length;
+            request.add(payloadBytes);
+            final response = await request.close();
+            final body = await response.transform(utf8.decoder).join();
+            
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              throw HttpException('HTTP ${response.statusCode}: $body');
+            }
+            responseText = _extractAnswer(jsonDecode(body));
+            success = true;
+            break;
+          } catch (e) {
+            lastException = e is Exception ? e : Exception(e.toString());
+            final errorStr = e.toString().toLowerCase();
+            final isRateLimit = errorStr.contains('429') || errorStr.contains('402') || errorStr.contains('500') || errorStr.contains('503');
+            if (!isRateLimit) break;
+            if (retry < 2) await Future.delayed(const Duration(seconds: 20));
           }
-          return _extractAnswer(jsonDecode(body));
-        } catch (e) {
-          final isRateLimitOrCredits = e.toString().contains('429') || e.toString().contains('402');
-          if (!isRateLimitOrCredits || i == allKeys.length - 1) {
-            rethrow;
-          }
+        }
+        
+        if (success && responseText != null) return responseText;
+        
+        final errorStr = lastException.toString().toLowerCase();
+        final isRateLimit = errorStr.contains('429') || errorStr.contains('402') || errorStr.contains('500') || errorStr.contains('503');
+        if (!isRateLimit || i == allKeys.length - 1) {
+          throw lastException ?? Exception('Unknown error');
         }
       }
       throw const HttpException('Failed to send request with any provided API key');
@@ -4488,63 +4505,79 @@ class ChatClient {
         final currentKey = allKeys[i];
         
         HttpClientResponse? response;
-        try {
-          final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
-          final request = await client.postUrl(uri);
-          _setHeaders(request, provider, settings, currentKey, stream: true);
-          request.headers.contentType = ContentType.json;
+        bool success = false;
+        Exception? lastException;
 
-          final payload = <String, dynamic>{
-            'model': model,
-            'messages': messages
-                .map((message) {
-                  String finalText = message.text;
-                  if (message.files.isNotEmpty) {
-                    finalText += '\n\n';
-                    for (final file in message.files) {
-                      finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+        for (int retry = 0; retry < 3; retry++) {
+          try {
+            final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
+            final request = await client.postUrl(uri);
+            _setHeaders(request, provider, settings, currentKey, stream: true);
+            request.headers.contentType = ContentType.json;
+
+            final payload = <String, dynamic>{
+              'model': model,
+              'messages': messages
+                  .map((message) {
+                    String finalText = message.text;
+                    if (message.files.isNotEmpty) {
+                      finalText += '\n\n';
+                      for (final file in message.files) {
+                        finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+                      }
                     }
-                  }
 
-                  if (message.images.isNotEmpty) {
+                    if (message.images.isNotEmpty) {
+                      return {
+                        'role': message.role.apiName,
+                        'content': [
+                          {'type': 'text', 'text': finalText},
+                          ...message.images.map((img) => {
+                                'type': 'image_url',
+                                'image_url': {
+                                  'url': 'data:image/jpeg;base64,$img'
+                                }
+                              })
+                        ]
+                      };
+                    }
                     return {
                       'role': message.role.apiName,
-                      'content': [
-                        {'type': 'text', 'text': finalText},
-                        ...message.images.map((img) => {
-                              'type': 'image_url',
-                              'image_url': {
-                                'url': 'data:image/jpeg;base64,$img'
-                              }
-                            })
-                      ]
+                      'content': finalText,
                     };
-                  }
-                  return {
-                    'role': message.role.apiName,
-                    'content': finalText,
-                  };
-                })
-                .toList(),
-            'max_tokens': settings.maxTokens,
-            'temperature': 1.0,
-            'top_p': 0.95,
-            'stream': true,
-          };
+                  })
+                  .toList(),
+              'max_tokens': settings.maxTokens,
+              'temperature': 1.0,
+              'top_p': 0.95,
+              'stream': true,
+            };
 
-          final payloadBytes = utf8.encode(jsonEncode(payload));
-          request.headers.contentLength = payloadBytes.length;
-          request.add(payloadBytes);
-          response = await request.close();
-          
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            final body = await response.transform(utf8.decoder).join();
-            throw HttpException('HTTP ${response.statusCode}: $body');
+            final payloadBytes = utf8.encode(jsonEncode(payload));
+            request.headers.contentLength = payloadBytes.length;
+            request.add(payloadBytes);
+            response = await request.close();
+            
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              final body = await response.transform(utf8.decoder).join();
+              throw HttpException('HTTP ${response.statusCode}: $body');
+            }
+            success = true;
+            break;
+          } catch (e) {
+            lastException = e is Exception ? e : Exception(e.toString());
+            final errorStr = e.toString().toLowerCase();
+            final isRateLimit = errorStr.contains('429') || errorStr.contains('402') || errorStr.contains('500') || errorStr.contains('503');
+            if (!isRateLimit) break;
+            if (retry < 2) await Future.delayed(const Duration(seconds: 20));
           }
-        } catch (e) {
-          final isRateLimitOrCredits = e.toString().contains('429') || e.toString().contains('402');
-          if (!isRateLimitOrCredits || i == allKeys.length - 1) {
-            rethrow;
+        }
+
+        if (!success || response == null) {
+          final errorStr = lastException.toString().toLowerCase();
+          final isRateLimit = errorStr.contains('429') || errorStr.contains('402') || errorStr.contains('500') || errorStr.contains('503');
+          if (!isRateLimit || i == allKeys.length - 1) {
+            throw lastException ?? Exception('Unknown error');
           }
           continue; // Try next key
         }
