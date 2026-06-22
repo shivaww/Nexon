@@ -6090,15 +6090,20 @@ class SvgDiagramWidget extends StatelessWidget {
     }
     return Container(
       width: double.infinity,
-      color: const Color(0xFFFFFDF9),
       margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Center(
-        child: SvgPicture.string(
-          cleanSvg,
-          fit: BoxFit.contain,
-          placeholderBuilder: (context) => const Padding(
-            padding: EdgeInsets.all(20),
-            child: CircularProgressIndicator(color: Color(0xFF7B4E2E)),
+      child: InteractiveViewer(
+        panEnabled: true,
+        boundaryMargin: const EdgeInsets.all(20),
+        minScale: 0.1,
+        maxScale: 10.0,
+        child: Center(
+          child: SvgPicture.string(
+            cleanSvg,
+            fit: BoxFit.contain,
+            placeholderBuilder: (context) => const Padding(
+              padding: EdgeInsets.all(20),
+              child: CircularProgressIndicator(color: Color(0xFF7B4E2E)),
+            ),
           ),
         ),
       ),
