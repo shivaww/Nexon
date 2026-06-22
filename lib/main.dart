@@ -518,8 +518,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
         }
 
         final List<ChatMessage> historyForApi = [];
-        
-        String systemPromptText = '';
+        final currentDateStr = DateTime.now().toString().substring(0, 10);
+        String systemPromptText = "The current date/year is $currentDateStr. Make sure to search for and refer to the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\n\n";
         if (_agenticEnabled) {
           systemPromptText += "You have access to local Termux file system tools.\n"
               "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
@@ -933,8 +933,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }) async {
     final steps = stateMap['steps'] as List;
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
+    final currentDateStr = DateTime.now().toString().substring(0, 10);
     
-    final systemPrompt = "You are an autonomous research agent.\n"
+    final systemPrompt = "You are an autonomous research agent. The current date/year is $currentDateStr. Make sure to search for the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\n"
         "You have access to <search_request>query</search_request> (for web search) and <mcp_request>json</mcp_request> (for local file/command operations).\n"
         "Your output file is $fileName. Use <mcp_request> with method 'file_append' to append your phase findings directly to this file.\n"
         "For the current phase, perform thorough research:\n"
@@ -2419,11 +2420,22 @@ class MessageBubble extends StatelessWidget {
                     final jsonStr = message.text.substring(startIndex + 16, endIndex).trim();
                     final stateMap = jsonDecode(jsonStr) as Map<String, dynamic>;
                     final textBefore = message.text.substring(0, startIndex).trim();
+                    var cleanTextBefore = textBefore;
+                    if (cleanTextBefore.contains('<research_plan>')) {
+                      final planIndex = cleanTextBefore.indexOf('<research_plan>');
+                      final planEndIndex = cleanTextBefore.indexOf('</research_plan>', planIndex);
+                      if (planEndIndex != -1) {
+                        cleanTextBefore = (cleanTextBefore.substring(0, planIndex) + 
+                                           cleanTextBefore.substring(planEndIndex + 16)).trim();
+                      } else {
+                        cleanTextBefore = cleanTextBefore.substring(0, planIndex).trim();
+                      }
+                    }
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (textBefore.isNotEmpty) ...[
-                          ...parseContentBlocks(textBefore).map((block) {
+                        if (cleanTextBefore.isNotEmpty) ...[
+                          ...parseContentBlocks(cleanTextBefore).map((block) {
                             if (block.isCode) {
                               if (block.language.toLowerCase() == 'math') {
                                 return Container(
