@@ -60,7 +60,7 @@ class ChatHomePage extends StatefulWidget {
 }
 
 class _ChatHomePageState extends State<ChatHomePage> {
-  static const _secureStorage = FlutterSecureStorage();
+  static final _secureStorage = const FlutterSecureStorage();
   static const _settingsKey = 'provider_settings_v1';
   static const _selectedProviderKey = 'selected_provider_id';
 
@@ -2143,27 +2143,6 @@ String getExtension(String lang) {
     case 'java': return 'java';
     case 'kotlin': case 'kt': return 'kt';
     default: return 'txt';
-  }
-}
-
-    }
-    final filename = 'code_${DateTime.now().millisecondsSinceEpoch}.$ext';
-    final file = File('${dir.path}/$filename');
-    await file.writeAsString(code);
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('File saved: downloads/$filename'),
-        backgroundColor: const Color(0xFF36764D),
-      ),
-    );
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Failed to save file: $e'),
-        backgroundColor: const Color(0xFF9B4D39),
-      ),
-    );
   }
 }
 
