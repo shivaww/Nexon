@@ -2118,12 +2118,6 @@ String getExtension(String lang) {
   }
 }
 
-Future<void> _saveCodeBlock(BuildContext context, String code, String language) async {
-  try {
-    final ext = getExtension(language);
-    final dir = Directory('/data/data/com.termux/files/home/downloads');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
     }
     final filename = 'code_${DateTime.now().millisecondsSinceEpoch}.$ext';
     final file = File('${dir.path}/$filename');
@@ -2542,58 +2536,7 @@ class MessageBubble extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (cleanTextBefore.isNotEmpty) ...[
-                          ...parseContentBlocks(cleanTextBefore).map((block) {
-                            if (block.isCode) {
-                              if (block.language.toLowerCase() == 'math') {
-                                return Container(
-                                  width: double.infinity,
-                                  margin: const EdgeInsets.symmetric(vertical: 8),
-                                  padding: const EdgeInsets.all(12),
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFFFCF6),
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: const Color(0xFFE7D8C4)),
-                                  ),
-                                  child: SelectableText(
-                                    convertLatexToUnicode(block.content),
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(0xFF2D241C),
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
-                                );
-                              }
-                              return CodeBlockWidget(
-                                code: block.content,
-                                language: block.language,
-                                onSave: () => _saveCodeBlock(context, block.content, block.language),
-                              );
-                            }
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 6.0),
-                              child: MarkdownBody(
-                                data: formatMathText(convertLatexToUnicode(block.content)),
-                                selectable: true,
-                                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                                  p: const TextStyle(
-                                    height: 1.48,
-                                    color: Color(0xFF1E1E1E),
-                                    fontSize: 15.5,
-                                    fontWeight: FontWeight.w400,
-                                  ),
-                                  h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
-                                  h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
-                                  h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
-                                  listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
-                                  tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
-                                  tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
-                                ),
-                              ),
-                            );
-                          }),
+                          ..._buildBlocks(context, cleanTextBefore),
                           const SizedBox(height: 12),
                         ],
                         ResearchPlanWidget(
@@ -2648,70 +2591,35 @@ class MessageBubble extends StatelessWidget {
                   try {
                     final startIndex = message.text.indexOf('<mcp_request>');
                     final endIndex = message.text.indexOf('</mcp_request>');
-                    final jsonStr = message.text.substring(startIndex + 13, endIndex).trim();
-                    return McpToolBlock(mcpJson: jsonStr);
-                  } catch (_) {
-                    return const Text('Error rendering MCP request', style: TextStyle(color: Colors.red));
+                    final textBefore = message.text.substring(0, startIndex).trim();
+                    
+                    if (endIndex == -1) {
+                      final jsonStr = message.text.substring(startIndex + 13).trim();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (textBefore.isNotEmpty) ..._buildBlocks(context, textBefore),
+                          McpToolBlock(mcpJson: jsonStr),
+                        ],
+                      );
+                    } else {
+                      final jsonStr = message.text.substring(startIndex + 13, endIndex).trim();
+                      final textAfter = message.text.substring(endIndex + 14).trim();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (textBefore.isNotEmpty) ..._buildBlocks(context, textBefore),
+                          McpToolBlock(mcpJson: jsonStr),
+                          if (textAfter.isNotEmpty) ..._buildBlocks(context, textAfter),
+                        ],
+                      );
+                    }
+                  } catch (e) {
+                    return Text('Error rendering MCP request: $e', style: const TextStyle(color: Colors.red));
                   }
                 })
               else
-                ...parseContentBlocks(message.text).map((block) {
-                  if (block.isCode) {
-                    if (block.language.toLowerCase() == 'math') {
-                      return Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.symmetric(vertical: 8),
-                        padding: const EdgeInsets.all(12),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFFCF6),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFE7D8C4)),
-                        ),
-                        child: SelectableText(
-                          convertLatexToUnicode(block.content),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF2D241C),
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      );
-                    }
-                    if (block.language.toLowerCase() == 'mermaid') {
-                      return MermaidDiagramWidget(code: block.content);
-                    }
-                    return CodeBlockWidget(
-                      code: block.content,
-                      language: block.language,
-                      onSave: () => _saveCodeBlock(context, block.content, block.language),
-                    );
-                  } else {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 6.0),
-                      child: MarkdownBody(
-                        data: formatMathText(convertLatexToUnicode(block.content)),
-                        selectable: true,
-                        styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                          p: const TextStyle(
-                            height: 1.48,
-                            color: Color(0xFF1E1E1E),
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w400,
-                          ),
-                          h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
-                          h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
-                          h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
-                          listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
-                          tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
-                          tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
-                          tableHead: const TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                      ),
-                    );
-                  }
-                }),
+                ..._buildBlocks(context, message.text),
             ],
             const SizedBox(height: 4),
             const Divider(color: Color(0xFFE7D8C4), height: 1),
@@ -3660,7 +3568,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   labelStyle: TextStyle(color: Color(0xFF6C5946)),
                   border: OutlineInputBorder(),
                 ),
-                items: ['tavily', 'exa', 'firecrawl', 'google'].map((p) {
+                items: ['duckduckgo', 'tavily', 'exa', 'firecrawl', 'google'].map((p) {
                   return DropdownMenuItem<String>(
                     value: p,
                     child: Text(p.toUpperCase()),
@@ -4654,6 +4562,38 @@ class ChatClient {
               final results = decoded['results'] as List;
               return results.map((r) => '- [${r['title']}](${r['url']}): ${r['content']}').join('\n\n');
             }
+          } else if (provider == 'duckduckgo') {
+            final uri = Uri.parse('https://html.duckduckgo.com/html/?q=${Uri.encodeComponent(query)}');
+            final request = await client.getUrl(uri);
+            request.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+            final response = await request.close();
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              throw HttpException('HTTP ${response.statusCode}: Failed to fetch duckduckgo');
+            }
+            final body = await response.transform(utf8.decoder).join();
+            
+            final blockRegex = RegExp(r'<div class="result results_links[^>]*>([\s\S]*?)<div class="clear"></div>');
+            final titleRegex = RegExp(r'<h2 class="result__title">\s*<a[^>]*>([\s\S]*?)</a>');
+            final urlRegex = RegExp(r'href="//duckduckgo.com/l/\?uddg=([^"&]+)');
+            final snippetRegex = RegExp(r'<a class="result__snippet"[^>]*>([\s\S]*?)</a>');
+            
+            final results = <String>[];
+            for (final match in blockRegex.allMatches(body)) {
+              final block = match.group(1) ?? '';
+              final titleMatch = titleRegex.firstMatch(block);
+              final urlMatch = urlRegex.firstMatch(block);
+              final snippetMatch = snippetRegex.firstMatch(block);
+              
+              if (titleMatch != null && urlMatch != null && snippetMatch != null) {
+                var title = titleMatch.group(1)?.replaceAll(RegExp(r'<[^>]+>'), '').replaceAll('\n', ' ').trim() ?? '';
+                var url = Uri.decodeComponent(urlMatch.group(1) ?? '');
+                var snippet = snippetMatch.group(1)?.replaceAll(RegExp(r'<[^>]+>'), '').replaceAll('\n', ' ').trim() ?? '';
+                results.add('- [$title]($url): $snippet');
+                if (results.length >= 6) break;
+              }
+            }
+            if (results.isNotEmpty) return results.join('\n\n');
+            return 'No search results found.';
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
             final request = await client.postUrl(uri);
@@ -4871,7 +4811,7 @@ class ProviderSettings {
 
 class SearchSettings {
   final bool enabled;
-  final String provider; // 'tavily', 'exa', 'firecrawl', 'google'
+  final String provider; // 'duckduckgo', 'tavily', 'exa', 'firecrawl', 'google'
   final String apiKey;
   final List<String> fallbackApiKeys;
   final String googleCx; // Google Search Engine ID
@@ -4887,7 +4827,7 @@ class SearchSettings {
   factory SearchSettings.defaults() {
     return const SearchSettings(
       enabled: false,
-      provider: 'tavily',
+      provider: 'duckduckgo',
       apiKey: '',
       fallbackApiKeys: [],
       googleCx: '',
@@ -4897,7 +4837,7 @@ class SearchSettings {
   factory SearchSettings.fromJson(Map<String, dynamic> json) {
     return SearchSettings(
       enabled: json['enabled'] as bool? ?? false,
-      provider: json['provider']?.toString() ?? 'tavily',
+      provider: json['provider']?.toString() ?? 'duckduckgo',
       apiKey: json['apiKey']?.toString() ?? '',
       fallbackApiKeys: (json['fallbackApiKeys'] as List<dynamic>?)
               ?.map((e) => e.toString())
