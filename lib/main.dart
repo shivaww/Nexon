@@ -877,10 +877,23 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   String _getResearchFileName(String title) {
-    final slug = title.toLowerCase()
-        .replaceAll(RegExp(r'[^\w\s\-]'), '')
-        .trim()
-        .replaceAll(RegExp(r'[\s\-]+'), '_');
+    var cleanTitle = title.trim();
+    if (cleanTitle.endsWith('...')) {
+      cleanTitle = cleanTitle.substring(0, cleanTitle.length - 3).trim();
+    }
+    final lowerTitle = cleanTitle.toLowerCase();
+    if (lowerTitle.startsWith('research ')) {
+      cleanTitle = cleanTitle.substring(9).trim();
+    } else if (lowerTitle.startsWith('research:')) {
+      cleanTitle = cleanTitle.substring(9).trim();
+    } else if (lowerTitle.startsWith('research')) {
+      cleanTitle = cleanTitle.substring(8).trim();
+    }
+    
+    final slug = cleanTitle
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s-]'), '')
+        .replaceAll(RegExp(r'[\s-]+'), '_');
     return 'research_$slug.md';
   }
 
@@ -940,17 +953,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
     
-    final systemPrompt = "You are an autonomous research agent. The current date/year is $currentDateStr. Make sure to search for the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\n"
+    final systemPrompt = "You are an autonomous research agent. The current date/year is $currentDateStr. Make sure to search for the most up-to-date information for this period.\n"
         "You have access to <search_request>query</search_request> (for web search) and <mcp_request>json</mcp_request> (for local file/command operations).\n"
-        "Your output file is $fileName. Use <mcp_request> with method 'file_append' to append your phase findings directly to this file.\n"
         "For the current phase, perform thorough research:\n"
-        "1. Conduct at least 3 to 5 different <search_request> calls with distinct search queries to gather comprehensive data from diverse sources.\n"
-        "2. Analyze the search results and compile your findings.\n"
-        "3. Format your report beautifully with clear headings, detailed paragraphs, tables, and Mermaid flowcharts where appropriate.\n"
-        "4. You MUST list all source URL links at the end of your phase findings in a 'Sources' section.\n"
-        "5. Write/append this structured markdown block to $fileName using the 'file_append' MCP tool.\n\n"
+        "1. Conduct multiple <search_request> calls with distinct search queries to gather comprehensive data.\n"
+        "2. Analyze the search results thoroughly.\n"
+        "3. Keep your analysis in your memory/context for the final report.\n"
         "CRITICAL: If you need to use <search_request> or <mcp_request>, output the tag and stop generating immediately in that turn. Do not generate any text after the tag.\n"
-        "When you are completely finished with the current phase and have successfully appended its findings to the file, output a single line: <step_complete/>";
+        "When you are completely finished researching and analyzing the current phase, output a detailed summary of your findings for this phase, list your source URLs, and then output a single line: <step_complete/>";
     
     // We maintain a single continuous conversation context for the entire research process
     List<ChatMessage> stepMessages = [
@@ -1102,7 +1112,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             stepContent = stepContent.isEmpty ? responseText : '$stepContent\n\n$responseText';
             stepDone = true;
           }
-          await Future.delayed(const Duration(seconds: 2));
+          await Future.delayed(const Duration(seconds: 3));
         } catch (e) {
           stepContent = stepContent.isEmpty ? "Error during step: $e" : "$stepContent\n\nError during step: $e";
           stepDone = true;
@@ -1124,7 +1134,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       }
     }
 
-    stateMap['status'] = 'completed';
+    stateMap['status'] = 'generating_report';
     if (mounted) {
       setState(() {
         final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
@@ -1133,8 +1143,73 @@ class _ChatHomePageState extends State<ChatHomePage> {
           text: '<research_state>${jsonEncode(stateMap)}</research_state>',
         );
         _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+      });
+    }
+
+    final finalPrompt = "All research phases are complete. Now, output the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.";
+    stepMessages.add(ChatMessage(role: MessageRole.user, text: finalPrompt));
+
+    String finalReportText = '';
+    String finalReasoningText = '';
+    try {
+      final stream = _chatClient.sendChatStream(
+        provider: provider,
+        settings: settings,
+        model: model,
+        messages: stepMessages,
+      );
+      
+      var isThinking = false;
+      await for (final chunk in stream) {
+        if (chunk.startsWith('[REASONING]')) {
+          finalReasoningText += chunk.substring(11);
+        } else {
+          var textChunk = chunk;
+          if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
+            final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
+            final parts = textChunk.split(tag);
+            finalReportText += parts[0];
+            isThinking = true;
+            textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+          }
+          
+          if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
+            final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
+            final parts = textChunk.split(tag);
+            finalReasoningText += parts[0];
+            isThinking = false;
+            textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+            finalReportText += textChunk;
+          } else if (isThinking) {
+            finalReasoningText += textChunk;
+          } else {
+            finalReportText += textChunk;
+          }
+        }
+      }
+      stateMap['final_report'] = finalReportText;
+    } catch (e) {
+      stateMap['final_report'] = "Error generating final report: $e";
+      finalReportText = stateMap['final_report'];
+    }
+
+    stateMap['status'] = 'completed';
+    if (mounted) {
+      setState(() {
+        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+        msgs[messageIndex] = ChatMessage(
+          role: MessageRole.assistant,
+          text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+        );
+        msgs.add(ChatMessage(
+          role: MessageRole.assistant,
+          text: finalReportText,
+          reasoning: finalReasoningText,
+        ));
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
         _sendingSessionIds.remove(_sessions[sessionIndex].id);
       });
+      await _saveSessions();
     }
   }
 
@@ -5351,24 +5426,38 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   }
 
   Future<void> _downloadFile() async {
-    final path = '${widget.workspaceDir}/${widget.fileName}';
-    final file = File(path);
-    if (!await file.exists()) {
+    String contentToSave = widget.stateMap['final_report'] as String? ?? '';
+    if (contentToSave.isEmpty) {
+      final steps = widget.stateMap['steps'] as List? ?? [];
+      for (final step in steps) {
+        contentToSave += '# ${step['title']}\n\n${step['content']}\n\n';
+      }
+    }
+
+    if (contentToSave.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${widget.fileName} not found yet.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No research content to save.')));
       }
       return;
     }
-    
+
     final result = await FilePicker.platform.saveFile(
       dialogTitle: 'Save Research File',
       fileName: widget.fileName,
+      type: FileType.custom,
+      allowedExtensions: ['md'],
     );
     
     if (result != null) {
-      await file.copy(result);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File saved successfully!')));
+      try {
+        await File(result).writeAsString(contentToSave);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File saved successfully!')));
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving file: $e')));
+        }
       }
     }
   }
