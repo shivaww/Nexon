@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_latex/flutter_markdown_latex.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -615,7 +617,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             }
           }
 
-          if (updateStopwatch.elapsedMilliseconds > 50) {
+          if (updateStopwatch.elapsedMilliseconds > 250) {
             setState(() {
               final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
               if (assistantMessageIndex < msgs.length) {
@@ -2502,6 +2504,13 @@ class MessageBubble extends StatelessWidget {
                         child: MarkdownBody(
                           data: message.text,
                           selectable: true,
+                          builders: {
+                            'latex': LatexElementBuilder(),
+                          },
+                          extensionSet: md.ExtensionSet(
+                            [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
+                            [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
+                          ),
                           styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)),
                         ),
                       ),
@@ -2751,8 +2760,18 @@ class MessageBubble extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.only(bottom: 6.0),
           child: MarkdownBody(
-            data: formatMathText(convertLatexToUnicode(block.content)),
+            data: block.content,
             selectable: true,
+            builders: {
+              'latex': LatexElementBuilder(
+                textStyle: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 15.5, fontWeight: FontWeight.w400),
+                textScaleFactor: 1.15,
+              ),
+            },
+            extensionSet: md.ExtensionSet(
+              [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
+              [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
+            ),
             styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
               p: const TextStyle(
                 height: 1.48,
@@ -3625,26 +3644,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Deep Research Mode',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF6C5946)),
-                ),
-                Switch(
-                  value: _deepResearchEnabled,
-                  activeColor: const Color(0xFF7B4E2E),
-                  onChanged: (val) {
-                    setState(() {
-                      _deepResearchEnabled = val;
-                    });
-                    widget.onDeepResearchEnabledChanged(val);
-                  },
-                ),
-              ],
-            ),
+
             if (_agenticEnabled) ...[
               const SizedBox(height: 12),
               TextFormField(
@@ -3713,7 +3713,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   labelStyle: TextStyle(color: Color(0xFF6C5946)),
                   border: OutlineInputBorder(),
                 ),
-                items: ['duckduckgo', 'tavily', 'exa', 'firecrawl', 'google'].map((p) {
+                items: ['tavily', 'exa', 'firecrawl', 'google'].map((p) {
                   return DropdownMenuItem<String>(
                     value: p,
                     child: Text(p.toUpperCase()),
@@ -4752,44 +4752,6 @@ class ChatClient {
               final results = decoded['results'] as List;
               return results.map((r) => '- [${r['title']}](${r['url']}): ${r['content']}').join('\n\n');
             }
-          } else if (provider == 'duckduckgo') {
-            final uri = Uri.parse('https://html.duckduckgo.com/html/?q=${Uri.encodeComponent(query)}');
-            final request = await client.getUrl(uri);
-            request.headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-            request.headers.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8');
-            request.headers.set('Accept-Language', 'en-US,en;q=0.5');
-            final response = await request.close();
-            if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: Failed to fetch duckduckgo');
-            }
-            final body = await response.transform(utf8.decoder).join();
-            
-            if (body.contains('botnet') || body.contains('anomaly-modal') || body.contains('bots use DuckDuckGo too')) {
-              return 'Web search failed: DuckDuckGo has blocked this request with a CAPTCHA. Please open the settings, enable Agentic Web Search, and select a provider like Tavily or Google with an API key.';
-            }
-            
-            final blockRegex = RegExp(r'<div[^>]*class="[^"]*result__body[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*result__body[^"]*"[^>]*>|$)', caseSensitive: false);
-            final titleRegex = RegExp(r'<h2[^>]*class="[^"]*result__title[^"]*"[^>]*>\s*<a[^>]*>([\s\S]*?)</a>', caseSensitive: false);
-            final urlRegex = RegExp(r'href="[^"]*(?:/l/\?uddg=|//duckduckgo\.com/l/\?uddg=)([^"&]+)', caseSensitive: false);
-            final snippetRegex = RegExp(r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)</a>', caseSensitive: false);
-            
-            final results = <String>[];
-            for (final match in blockRegex.allMatches(body)) {
-              final block = match.group(1) ?? '';
-              final titleMatch = titleRegex.firstMatch(block);
-              final urlMatch = urlRegex.firstMatch(block);
-              final snippetMatch = snippetRegex.firstMatch(block);
-              
-              if (titleMatch != null && urlMatch != null && snippetMatch != null) {
-                var title = titleMatch.group(1)?.replaceAll(RegExp(r'<[^>]+>'), '').replaceAll('\n', ' ').trim() ?? '';
-                var url = Uri.decodeComponent(urlMatch.group(1) ?? '');
-                var snippet = snippetMatch.group(1)?.replaceAll(RegExp(r'<[^>]+>'), '').replaceAll('\n', ' ').trim() ?? '';
-                results.add('- [$title]($url): $snippet');
-                if (results.length >= 6) break;
-              }
-            }
-            if (results.isNotEmpty) return results.join('\n\n');
-            return 'No search results found. DuckDuckGo may be rate-limiting. Please configure a different Search Provider (like Tavily) in the Agentic Web Search settings.';
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
             final request = await client.postUrl(uri);
@@ -5007,7 +4969,7 @@ class ProviderSettings {
 
 class SearchSettings {
   final bool enabled;
-  final String provider; // 'duckduckgo', 'tavily', 'exa', 'firecrawl', 'google'
+  final String provider; // 'tavily', 'exa', 'firecrawl', 'google'
   final String apiKey;
   final List<String> fallbackApiKeys;
   final String googleCx; // Google Search Engine ID
@@ -5023,7 +4985,7 @@ class SearchSettings {
   factory SearchSettings.defaults() {
     return const SearchSettings(
       enabled: false,
-      provider: 'duckduckgo',
+      provider: 'tavily',
       apiKey: '',
       fallbackApiKeys: [],
       googleCx: '',
@@ -5033,7 +4995,7 @@ class SearchSettings {
   factory SearchSettings.fromJson(Map<String, dynamic> json) {
     return SearchSettings(
       enabled: json['enabled'] as bool? ?? false,
-      provider: json['provider']?.toString() ?? 'duckduckgo',
+      provider: json['provider']?.toString() ?? 'tavily',
       apiKey: json['apiKey']?.toString() ?? '',
       fallbackApiKeys: (json['fallbackApiKeys'] as List<dynamic>?)
               ?.map((e) => e.toString())
@@ -5496,7 +5458,11 @@ class MermaidDiagramWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String base64Code = base64UrlEncode(utf8.encode(code));
+    final String jsonPayload = jsonEncode({
+      'code': code,
+      'mermaid': {'theme': 'default'}
+    });
+    final String base64Code = base64UrlEncode(utf8.encode(jsonPayload));
     final String url = 'https://mermaid.ink/img/$base64Code';
 
     return Container(

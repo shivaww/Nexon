@@ -66,6 +66,8 @@ dependencies:
   
   # Markdown
   flutter_markdown: ^0.7.7+1
+  flutter_markdown_latex: any
+  markdown: any
   
   # Charts for dashboards
   fl_chart: ^0.70.2
