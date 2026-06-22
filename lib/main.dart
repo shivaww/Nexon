@@ -2167,6 +2167,33 @@ String getExtension(String lang) {
   }
 }
 
+Future<void> _saveCodeBlock(BuildContext context, String code, String language) async {
+  try {
+    final ext = getExtension(language);
+    final dir = Directory('/data/data/com.termux/files/home/downloads');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    final filename = 'code_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final file = File('${dir.path}/$filename');
+    await file.writeAsString(code);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('File saved: downloads/$filename'),
+        backgroundColor: const Color(0xFF36764D),
+      ),
+    );
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to save file: $e'),
+        backgroundColor: const Color(0xFF9B4D39),
+      ),
+    );
+  }
+}
+
 class ContentBlock {
   final bool isCode;
   final String content;
@@ -2690,6 +2717,66 @@ class MessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  List<Widget> _buildBlocks(BuildContext context, String text) {
+    return parseContentBlocks(text).map((block) {
+      if (block.isCode) {
+        if (block.language.toLowerCase() == 'math') {
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.all(12),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFCF6),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE7D8C4)),
+            ),
+            child: SelectableText(
+              convertLatexToUnicode(block.content),
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2D241C),
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          );
+        }
+        if (block.language.toLowerCase() == 'mermaid') {
+          return MermaidDiagramWidget(code: block.content);
+        }
+        return CodeBlockWidget(
+          code: block.content,
+          language: block.language,
+          onSave: () => _saveCodeBlock(context, block.content, block.language),
+        );
+      } else {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 6.0),
+          child: MarkdownBody(
+            data: formatMathText(convertLatexToUnicode(block.content)),
+            selectable: true,
+            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+              p: const TextStyle(
+                height: 1.48,
+                color: Color(0xFF1E1E1E),
+                fontSize: 15.5,
+                fontWeight: FontWeight.w400,
+              ),
+              h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
+              h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
+              h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
+              listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
+              tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
+              tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
+              tableHead: const TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold, fontSize: 14),
+            ),
+          ),
+        );
+      }
+    }).toList();
   }
 }
 
