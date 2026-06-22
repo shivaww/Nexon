@@ -2462,9 +2462,30 @@ class MessageBubble extends StatelessWidget {
                               return CodeBlockWidget(
                                 code: block.content,
                                 language: block.language,
+                                onSave: () => _saveCodeBlock(context, block.content, block.language),
                               );
                             }
-                            return StyledMarkdown(data: block.content);
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 6.0),
+                              child: MarkdownBody(
+                                data: formatMathText(convertLatexToUnicode(block.content)),
+                                selectable: true,
+                                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                                  p: const TextStyle(
+                                    height: 1.48,
+                                    color: Color(0xFF1E1E1E),
+                                    fontSize: 15.5,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                  h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
+                                  h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
+                                  h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
+                                  listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
+                                  tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
+                                  tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
+                                ),
+                              ),
+                            );
                           }),
                           const SizedBox(height: 12),
                         ],
