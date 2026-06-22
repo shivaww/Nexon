@@ -2502,7 +2502,10 @@ class MessageBubble extends StatelessWidget {
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: MarkdownBody(
-                          data: message.text,
+                          data: message.text
+                              .replaceAll(RegExp(r'\\\[([\s\S]*?)\\\]'), r'$$$1$$')
+                              .replaceAll(RegExp(r'\\\(([\s\S]*?)\\\)'), r'$$1$')
+                              .replaceAll(r'\boldsymbol', r'\mathbf'),
                           selectable: true,
                           builders: {
                             'latex': LatexElementBuilder(),
@@ -2760,7 +2763,10 @@ class MessageBubble extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.only(bottom: 6.0),
           child: MarkdownBody(
-            data: block.content,
+            data: block.content
+                .replaceAll(RegExp(r'\\\[([\s\S]*?)\\\]'), r'$$$1$$')
+                .replaceAll(RegExp(r'\\\(([\s\S]*?)\\\)'), r'$$1$')
+                .replaceAll(r'\boldsymbol', r'\mathbf'),
             selectable: true,
             builders: {
               'latex': LatexElementBuilder(
