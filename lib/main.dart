@@ -529,9 +529,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
             "- Mathematical equations using LaTeX: `\\[ ... \\]` or `\\( ... \\)`.\n"
             "- Mermaid diagrams: ```mermaid\n"
             "- SVG Graphics: ```svg\n"
-            "- Native Charts (Bar/Pie): ```chart with JSON data (e.g., {\"type\": \"bar\", \"title\": \"...\", \"data\": [{\"label\": \"...\", \"value\": 10}]})\n"
+            "- Native Charts (Bar/Pie): ```chart with JSON data (e.g., {\"type\": \"bar\", \"title\": \"...\", \"data\": [{\"label\": \"...\", \"value\": 10, \"color\": \"#FF5555\"}]})\n"
             "- Interactive HTML/JS Web Apps: ```html or ```javascript or ```react or ```artifact\n"
-            "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts, SVGs, or Mermaid diagrams when helpful. Keep visuals clean and minimal: DO NOT put long text or explanations inside the visual itself (use the normal chat text for explanations). Keep visual colors simple, high contrast, and effective.\n\n";
+            "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts, SVGs, or Mermaid diagrams when helpful. Keep visuals clean and minimal: DO NOT put long text or explanations inside the visual itself (use the normal chat text for explanations). You may use rich, beautiful colors to enhance the visual experience.\n\n";
         if (_agenticEnabled) {
           systemPromptText += "You have access to local Termux file system tools.\n"
               "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
@@ -5942,21 +5942,20 @@ class ChartDiagramWidget extends StatelessWidget {
   final String jsonString;
   const ChartDiagramWidget({super.key, required this.jsonString});
 
-  @override
-  Widget build(BuildContext context) {
+  Color _parseHexColor(String? hexString, int index) {
+    if (hexString == null || hexString.isEmpty) {
+      return Colors.primaries[index % Colors.primaries.length];
+    }
     try {
-      final data = jsonDecode(jsonString);
-      final type = data['type']?.toString().toLowerCase() ?? 'bar';
-      
-      Widget chart;
-      if (type == 'pie') {
-        final List items = data['data'] ?? [];
-        chart = PieChart(
-          PieChartData(
-            sectionsSpace: 2,
-class ChartDiagramWidget extends StatelessWidget {
-  final String jsonString;
-  const ChartDiagramWidget({super.key, required this.jsonString});
+      final hex = hexString.replaceAll('#', '');
+      if (hex.length == 6) {
+        return Color(int.parse('FF$hex', radix: 16));
+      } else if (hex.length == 8) {
+        return Color(int.parse(hex, radix: 16));
+      }
+    } catch (_) {}
+    return Colors.primaries[index % Colors.primaries.length];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -5973,13 +5972,13 @@ class ChartDiagramWidget extends StatelessWidget {
             centerSpaceRadius: 40,
             sections: items.asMap().entries.map((e) {
               final Map item = e.value;
-              final color = e.key % 2 == 0 ? const Color(0xFF2B6CB0) : const Color(0xFFE2ECF5);
+              final color = _parseHexColor(item['color']?.toString(), e.key);
               return PieChartSectionData(
                 color: color,
                 value: (item['value'] as num).toDouble(),
                 title: item['label']?.toString() ?? '',
                 radius: 50,
-                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black87),
+                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
               );
             }).toList(),
           ),
@@ -6026,12 +6025,13 @@ class ChartDiagramWidget extends StatelessWidget {
             gridData: const FlGridData(show: false),
             borderData: FlBorderData(show: false),
             barGroups: items.asMap().entries.map((e) {
+              final color = _parseHexColor(e.value['color']?.toString(), e.key);
               return BarChartGroupData(
                 x: e.key,
                 barRods: [
                   BarChartRodData(
                     toY: (e.value['value'] as num).toDouble(),
-                    color: const Color(0xFF2B6CB0),
+                    color: color,
                     width: 16,
                     borderRadius: BorderRadius.circular(4),
                   )
