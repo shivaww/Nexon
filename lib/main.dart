@@ -4734,6 +4734,10 @@ class ChatClient {
             }
             final body = await response.transform(utf8.decoder).join();
             
+            if (body.contains('botnet') || body.contains('anomaly-modal') || body.contains('bots use DuckDuckGo too')) {
+              return 'Web search failed: DuckDuckGo has blocked this request with a CAPTCHA. Please open the settings, enable Agentic Web Search, and select a provider like Tavily or Google with an API key.';
+            }
+            
             final blockRegex = RegExp(r'<div class="result results_links[^>]*>([\s\S]*?)<div class="clear"></div>');
             final titleRegex = RegExp(r'<h2 class="result__title">\s*<a[^>]*>([\s\S]*?)</a>');
             final urlRegex = RegExp(r'href="//duckduckgo.com/l/\?uddg=([^"&]+)');
@@ -4755,7 +4759,7 @@ class ChatClient {
               }
             }
             if (results.isNotEmpty) return results.join('\n\n');
-            return 'No search results found.';
+            return 'No search results found. DuckDuckGo may be rate-limiting. Please configure a different Search Provider (like Tavily) in the Agentic Web Search settings.';
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
             final request = await client.postUrl(uri);
