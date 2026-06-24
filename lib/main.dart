@@ -424,16 +424,23 @@ class _ChatHomePageState extends State<ChatHomePage> {
   static const String mcpAndSearchSystemPrompt =
       "You have access to a web search tool and local Termux file system tools.\n"
       "If you need to search the web, output a single line: <search_request>your search query</search_request> and stop generating.\n"
-      "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
-      "MCP methods available:\n"
-      "- file_read: params {path: string}\n"
-      "- file_write: params {path: string, content: string}\n"
-      "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
-      "- file_delete: params {path: string}\n"
-      "- dir_list: params {path: string}\n"
-      "- dir_create: params {path: string}\n"
-      "- code_search: params {path: string, query: string}\n"
-      "- file_search: params {path: string, pattern: string}\n"
+      "If you need to use the local file system tools, use XML tags. Output a SINGLE <tool_request> block per turn and STOP generating.\n"
+      "Example format:\n"
+      "<tool_request>\n"
+      "<method>code_search</method>\n"
+      "<query>Error: foo</query>\n"
+      "<path>lib/</path>\n"
+      "</tool_request>\n\n"
+      "Available methods and parameters (provide parameters as child XML tags):\n"
+      "- file_read: <path>, <start_line>, <end_line>\n"
+      "- file_write: <path>, <content>\n"
+      "- file_edit: <path>, <start_line>, <end_line>, <replacement>\n"
+      "- file_delete: <path>\n"
+      "- dir_list: <path>\n"
+      "- dir_create: <path>\n"
+      "- code_search: <path>, <query>\n"
+      "- file_search: <path>, <pattern>\n"
+      "- run_command: <command>, <cwd>\n"
       "Once results are provided, continue your response.";
 
   Future<void> _sendMessage() async {
@@ -540,24 +547,30 @@ class _ChatHomePageState extends State<ChatHomePage> {
             "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts or SVGs when helpful. Keep visuals clean and minimal: DO NOT put long text or explanations inside the visual itself (use the normal chat text for explanations). You may use rich, beautiful colors to enhance the visual experience.\n\n";
         if (_agenticEnabled) {
           systemPromptText += "You have access to local Termux file system tools.\n"
-              "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
+              "If you need to use the local file system tools, use XML tags. Output a SINGLE <tool_request> block per turn and STOP generating.\n"
+              "Example format:\n"
+              "<tool_request>\n"
+              "<method>code_search</method>\n"
+              "<query>Error: foo</query>\n"
+              "<path>lib/</path>\n"
+              "</tool_request>\n\n"
               "CRITICAL TOKEN SAVING WORKFLOW:\n"
               "1. Symbol/AST Indexing & Dependency Tracing: Parse every file mentally. When a bug is suspected, look up the symbol and trace only that call chain. Ignore unrelated modules entirely.\n"
-              "2. Grep/Regex Search (Before reading): Before touching any file, ALWAYS search for the error string, function, or variable using 'search'. Returns file:line hits only. Then read just those ranges.\n"
-              "3. Chunked File Reading with Line Ranges: Read ONLY 20-80 lines around the hit using 'read_file(path, start, end)'. NEVER read the whole file. This is the biggest token saver.\n"
+              "2. Grep/Regex Search (Before reading): Before touching any file, ALWAYS search for the error string, function, or variable using 'code_search'. Returns file:line hits only. Then read just those ranges.\n"
+              "3. Chunked File Reading with Line Ranges: Read ONLY 20-80 lines around the hit using 'file_read' (with <start_line> and <end_line>). NEVER read the whole file. This is the biggest token saver.\n"
               "4. Vector Embedding + Semantic Search (RAG): If applicable, embed the bug description, retrieve top-k relevant chunks by cosine similarity. No full file read.\n"
               "5. Diff/Patch Writing: Use 'str_replace' to surgically edit files. Send only the changed lines, massive token reduction on writes.\n"
-              "6. Project Memory: Maintain a 'MEMORY.md' file in the project root. Read it via 'read_file' at the start to load context. Update it via 'str_replace' or 'file_write' when new patterns/decisions are made.\n\n"
-              "The minimal tool set you need:\n"
-              "- search: params {pattern: string, path: string} (grep across repo, returns file:line hits)\n"
-              "- read_file: params {path: string, start: int, end: int} (line-range read, massive token saver)\n"
-              "- list_dir: params {path: string} (structure awareness)\n"
-              "- str_replace: params {path: string, old: string, new: string} (surgical edit)\n"
-              "- run_command: params {command: string, cwd: string (optional)} (lint/test to verify fix)\n"
-              "- file_write: params {path: string, content: string} (only for new files)\n"
-              "- file_delete: params {path: string}\n"
+              "6. Project Memory: Maintain a 'MEMORY.md' file in the project root. Read it via 'file_read' at the start to load context. Update it via 'str_replace' or 'file_write' when new patterns/decisions are made.\n\n"
+              "The minimal tool set you need (provide parameters as child XML tags):\n"
+              "- code_search: <pattern>, <path> (grep across repo, returns file:line hits)\n"
+              "- file_read: <path>, <start_line>, <end_line> (line-range read, massive token saver)\n"
+              "- dir_list: <path> (structure awareness)\n"
+              "- str_replace: <path>, <old>, <new> (surgical edit)\n"
+              "- run_command: <command>, <cwd> (lint/test to verify fix)\n"
+              "- file_write: <path>, <content> (only for new files)\n"
+              "- file_delete: <path>\n"
               "Once results are provided, continue your response.\n\n"
-              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via <mcp_request>. Just output the tag.\n"
+              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via <tool_request>. Just output the tag.\n"
               "CRITICAL: NEVER use dangerous commands that will harm the device (like rm -rf /).\n";
               
           if (_customMcpUrl.isNotEmpty) {
@@ -855,6 +868,27 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   Match? _findMcpMatch(String fullText) {
+    // 1. Try pure XML format
+    final xmlStart = fullText.indexOf('<tool_request>');
+    if (xmlStart != -1) {
+       final xmlEnd = fullText.indexOf('</tool_request>', xmlStart);
+       if (xmlEnd != -1) {
+           final xmlContent = fullText.substring(xmlStart + 14, xmlEnd);
+           final Map<String, dynamic> result = {};
+           final regex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
+           for (final match in regex.allMatches(xmlContent)) {
+             result[match.group(1)!] = match.group(2)!.trim();
+           }
+           if (result.containsKey('method')) {
+             final method = result['method'];
+             result.remove('method');
+             final jsonStr = jsonEncode({'method': method, 'params': result});
+             return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+           }
+       }
+    }
+
+    // 2. Fallback to old JSON format
     final mcpStart = fullText.indexOf('<mcp_request>');
     if (mcpStart == -1) return null;
     
@@ -977,14 +1011,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final currentDateStr = DateTime.now().toString().substring(0, 10);
     
     final systemPrompt = "You are an autonomous research agent. The current date/year is $currentDateStr. Make sure to search for the most up-to-date information for this period.\n"
-        "You have access to <search_request>query</search_request> (for web search), <read_url>url</read_url> (to extract full text from a webpage), and <mcp_request>json</mcp_request> (for local operations).\n"
+        "You have access to <search_request>query</search_request> (for web search), <read_url>url</read_url> (to extract full text from a webpage), and <tool_request> (for local operations).\n"
         "For the current phase, perform thorough research:\n"
         "1. Conduct multiple <search_request> calls with distinct search queries to gather comprehensive data.\n"
         "2. IMPORTANT: Do not rely solely on search snippets! Use <read_url>url</read_url> to read the full content of promising links found in the search results.\n"
         "3. Cross-check your sources to ensure high accuracy and reliability of the data.\n"
         "4. Analyze the search results and webpage contents thoroughly.\n"
         "5. Keep your analysis in your memory/context for the final report.\n"
-        "CRITICAL: If you need to use <search_request>, <read_url>, or <mcp_request>, output the tag and stop generating immediately in that turn. Do not generate any text after the tag.\n"
+        "CRITICAL: If you need to use <search_request>, <read_url>, or <tool_request>, output the tag and stop generating immediately in that turn. Do not generate any text after the tag.\n"
         "When you are completely finished researching and analyzing the current phase, output a detailed summary of your findings for this phase, list your source URLs, and then output a single line: <step_complete/>";
     
     // We maintain a single continuous conversation context for the entire research process
@@ -6096,14 +6130,8 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
       child: Container(
         width: double.infinity,
         margin: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE7D8C4)),
-        ),
         child: InteractiveViewer(
           panEnabled: true,
-          boundaryMargin: const EdgeInsets.all(20),
           minScale: 0.1,
           maxScale: 10.0,
           child: Center(
