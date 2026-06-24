@@ -15,7 +15,6 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'team_mode_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -878,7 +877,15 @@ class _ChatHomePageState extends State<ChatHomePage> {
            final Map<String, dynamic> result = {};
            final regex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
            for (final match in regex.allMatches(xmlContent)) {
-             result[match.group(1)!] = match.group(2)!.trim();
+             final key = match.group(1)!;
+             var val = match.group(2)!;
+             if (key == 'method' || key == 'path' || key == 'query' || key == 'start_line' || key == 'end_line' || key == 'pattern' || key == 'command') {
+               val = val.trim();
+             } else {
+               if (val.startsWith('\n')) val = val.substring(1);
+               if (val.endsWith('\n')) val = val.substring(0, val.length - 1);
+             }
+             result[key] = val;
            }
            if (result.containsKey('method')) {
              final method = result['method'];
@@ -1581,7 +1588,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
       onSessionTap: _switchSession,
       onSessionDelete: _deleteSession,
       onNewChat: _newChat,
-      onTeamModeTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamModeScreen())),
     );
 
     return Scaffold(
@@ -1634,7 +1640,6 @@ class ChatHistoryPanel extends StatelessWidget {
     required this.onSessionTap,
     required this.onSessionDelete,
     required this.onNewChat,
-    required this.onTeamModeTap,
     super.key,
   });
 
@@ -1643,7 +1648,6 @@ class ChatHistoryPanel extends StatelessWidget {
   final ValueChanged<String> onSessionTap;
   final ValueChanged<String> onSessionDelete;
   final VoidCallback onNewChat;
-  final VoidCallback onTeamModeTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1666,11 +1670,6 @@ class ChatHistoryPanel extends StatelessWidget {
                       color: const Color(0xFF2D241C),
                     ),
                   ),
-                ),
-                IconButton(
-                  tooltip: 'AI Team Mode',
-                  onPressed: onTeamModeTap,
-                  icon: const Icon(Icons.group_work_outlined),
                 ),
                 IconButton(
                   tooltip: 'New chat',
@@ -2046,8 +2045,9 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
 }
 
 class McpToolBlock extends StatefulWidget {
-  const McpToolBlock({required this.mcpJson, super.key});
+  const McpToolBlock({required this.mcpJson, this.isXml = false, super.key});
   final String mcpJson;
+  final bool isXml;
 
   @override
   State<McpToolBlock> createState() => _McpToolBlockState();
@@ -2059,14 +2059,23 @@ class _McpToolBlockState extends State<McpToolBlock> {
   @override
   Widget build(BuildContext context) {
     String method = 'Unknown Tool';
-    String formattedJson = widget.mcpJson;
-    try {
-      final decoded = jsonDecode(widget.mcpJson);
-      if (decoded['method'] != null) {
-        method = decoded['method'].toString();
+    String formattedContent = widget.mcpJson;
+
+    if (widget.isXml) {
+      final methodMatch = RegExp(r'<method>([\s\S]*?)</method>').firstMatch(widget.mcpJson);
+      if (methodMatch != null) {
+        method = methodMatch.group(1)?.trim() ?? method;
       }
-      formattedJson = const JsonEncoder.withIndent('  ').convert(decoded);
-    } catch (_) {}
+      formattedContent = widget.mcpJson.trim();
+    } else {
+      try {
+        final decoded = jsonDecode(widget.mcpJson);
+        if (decoded['method'] != null) {
+          method = decoded['method'].toString();
+        }
+        formattedContent = const JsonEncoder.withIndent('  ').convert(decoded);
+      } catch (_) {}
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -2109,7 +2118,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
               child: SelectableText(
-                formattedJson,
+                formattedContent,
                 style: const TextStyle(
                   fontSize: 12.0,
                   fontFamily: 'monospace',
@@ -2747,36 +2756,40 @@ class MessageBubble extends StatelessWidget {
                     return const Text('Error rendering read_url request', style: TextStyle(color: Colors.red));
                   }
                 })
-              else if (message.text.contains('<mcp_request>'))
+              else if (message.text.contains('<mcp_request>') || message.text.contains('<tool_request>'))
                 Builder(builder: (context) {
                   try {
-                    final startIndex = message.text.indexOf('<mcp_request>');
-                    final endIndex = message.text.indexOf('</mcp_request>');
+                    final isXml = message.text.contains('<tool_request>');
+                    final openTag = isXml ? '<tool_request>' : '<mcp_request>';
+                    final closeTag = isXml ? '</tool_request>' : '</mcp_request>';
+                    
+                    final startIndex = message.text.indexOf(openTag);
+                    final endIndex = message.text.indexOf(closeTag);
                     final textBefore = message.text.substring(0, startIndex).trim();
                     
                     if (endIndex == -1) {
-                      final jsonStr = message.text.substring(startIndex + 13).trim();
+                      final contentStr = message.text.substring(startIndex + openTag.length).trim();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           if (textBefore.isNotEmpty) ..._buildBlocks(context, textBefore),
-                          McpToolBlock(mcpJson: jsonStr),
+                          McpToolBlock(mcpJson: contentStr, isXml: isXml),
                         ],
                       );
                     } else {
-                      final jsonStr = message.text.substring(startIndex + 13, endIndex).trim();
-                      final textAfter = message.text.substring(endIndex + 14).trim();
+                      final contentStr = message.text.substring(startIndex + openTag.length, endIndex).trim();
+                      final textAfter = message.text.substring(endIndex + closeTag.length).trim();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           if (textBefore.isNotEmpty) ..._buildBlocks(context, textBefore),
-                          McpToolBlock(mcpJson: jsonStr),
+                          McpToolBlock(mcpJson: contentStr, isXml: isXml),
                           if (textAfter.isNotEmpty) ..._buildBlocks(context, textAfter),
                         ],
                       );
                     }
                   } catch (e) {
-                    return Text('Error rendering MCP request: $e', style: const TextStyle(color: Colors.red));
+                    return Text('Error rendering tool request: $e', style: const TextStyle(color: Colors.red));
                   }
                 })
               else

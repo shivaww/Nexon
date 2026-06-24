@@ -137,6 +137,12 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             if start_line is None or end_line is None:
                 return {"error": "start_line and end_line are required"}
                 
+            try:
+                start_line = int(start_line)
+                end_line = int(end_line)
+            except ValueError:
+                return {"error": "start_line and end_line must be integers"}
+                
             start_idx = max(0, start_line - 1)
             end_idx = min(len(lines), end_line)
             
