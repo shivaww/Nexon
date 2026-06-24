@@ -74,12 +74,20 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
     def execute_tool(self, method, params):
         workspace_dir = params.get('workspace_dir')
         
-        if method == "file_read":
+        if method in ("file_read", "read_file"):
             path = self.resolve_path(params.get('path'), workspace_dir)
             if not path.is_file():
                 return {"error": f"File not found: {params.get('path')}"}
+            start = params.get('start') or params.get('start_line')
+            end = params.get('end') or params.get('end_line')
             with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read()
+                if start is not None and end is not None:
+                    lines = f.readlines()
+                    start_idx = max(0, int(start) - 1)
+                    end_idx = min(len(lines), int(end))
+                    content = "".join(lines[start_idx:end_idx])
+                else:
+                    content = f.read()
             return {"content": content, "path": str(path)}
             
         elif method == "file_write":
@@ -97,6 +105,23 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             with open(path, 'a', encoding='utf-8') as f:
                 f.write(content)
             return {"success": True, "message": f"Content appended successfully to: {params.get('path')}"}
+            
+        elif method == "str_replace":
+            path = self.resolve_path(params.get('path'), workspace_dir)
+            if not path.is_file():
+                return {"error": f"File not found: {params.get('path')}"}
+            old_str = params.get('old')
+            new_str = params.get('new')
+            if old_str is None or new_str is None:
+                return {"error": "old and new parameters are required"}
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            if old_str not in content:
+                return {"error": "old string not found in file"}
+            content = content.replace(old_str, new_str)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return {"success": True, "message": "File edited successfully via str_replace"}
             
         elif method == "file_edit":
             path = self.resolve_path(params.get('path'), workspace_dir)
@@ -155,9 +180,9 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             path.mkdir(parents=True, exist_ok=True)
             return {"success": True, "message": "Directory created successfully"}
             
-        elif method == "code_search":
+        elif method in ("code_search", "search"):
             path = self.resolve_path(params.get('path', ''), workspace_dir)
-            query = params.get('query')
+            query = params.get('query') or params.get('pattern')
             if not query:
                 return {"error": "query is required"}
                 
@@ -192,7 +217,7 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
                     break
             return {"results": results}
             
-        elif method == "shell_exec":
+        elif method in ("shell_exec", "run_command"):
             command = params.get('command')
             if not command:
                 return {"error": "command is required"}
