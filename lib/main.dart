@@ -2771,7 +2771,7 @@ class MessageBubble extends StatelessWidget {
               ),
             ),
           );
-
+        }
         if (block.language.toLowerCase() == 'svg') {
           return SvgDiagramWidget(svgString: block.content);
         }
