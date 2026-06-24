@@ -15,6 +15,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'team_mode_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1580,6 +1581,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       onSessionTap: _switchSession,
       onSessionDelete: _deleteSession,
       onNewChat: _newChat,
+      onTeamModeTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const TeamModeScreen())),
     );
 
     return Scaffold(
@@ -1632,6 +1634,7 @@ class ChatHistoryPanel extends StatelessWidget {
     required this.onSessionTap,
     required this.onSessionDelete,
     required this.onNewChat,
+    required this.onTeamModeTap,
     super.key,
   });
 
@@ -1640,6 +1643,7 @@ class ChatHistoryPanel extends StatelessWidget {
   final ValueChanged<String> onSessionTap;
   final ValueChanged<String> onSessionDelete;
   final VoidCallback onNewChat;
+  final VoidCallback onTeamModeTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1662,6 +1666,11 @@ class ChatHistoryPanel extends StatelessWidget {
                       color: const Color(0xFF2D241C),
                     ),
                   ),
+                ),
+                IconButton(
+                  tooltip: 'AI Team Mode',
+                  onPressed: onTeamModeTap,
+                  icon: const Icon(Icons.group_work_outlined),
                 ),
                 IconButton(
                   tooltip: 'New chat',
