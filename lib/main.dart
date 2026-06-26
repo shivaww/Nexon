@@ -83,6 +83,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
   bool _agenticEnabled = true;
   String _agenticWorkspace = '/data/data/com.termux/files/home';
   String _customMcpUrl = '';
+  final Map<String, StreamSubscription<String>> _activeSubscriptions = {};
+  final Map<String, Completer<void>> _activeCompleters = {};
   bool _deepResearchEnabled = false;
   String _toolStatus = ''; // live tool status shown in UI banner
 
@@ -518,6 +520,23 @@ jobs:
     "run_command: command,cwd\n\n"
     "Resume after results arrive.";
 
+  void _stopResponse(String sessionId) {
+    if (sessionId.isEmpty) return;
+    final subscription = _activeSubscriptions[sessionId];
+    if (subscription != null) {
+      subscription.cancel();
+      _activeSubscriptions.remove(sessionId);
+    }
+    final completer = _activeCompleters[sessionId];
+    if (completer != null && !completer.isCompleted) {
+      completer.complete();
+      _activeCompleters.remove(sessionId);
+    }
+    setState(() {
+      _sendingSessionIds.remove(sessionId);
+    });
+  }
+
   Future<void> _sendMessage() async {
     final prompt = _messageController.text.trim();
     if (prompt.isEmpty) return;
@@ -574,12 +593,15 @@ jobs:
     setState(() {
       _sendingSessionIds.add(targetSessionId);
       final updatedMessages = List<ChatMessage>.from(session.messages)..add(userMessage);
-      _sessions[sessionIndex] = session.copyWith(
-        messages: updatedMessages,
-        title: updatedTitle,
-        attachedImagesBase64: const [],
-        attachedFiles: const [],
-      );
+      final curIdx = _sessions.indexWhere((s) => s.id == targetSessionId);
+      if (curIdx != -1) {
+        _sessions[curIdx] = session.copyWith(
+          messages: updatedMessages,
+          title: updatedTitle,
+          attachedImagesBase64: const [],
+          attachedFiles: const [],
+        );
+      }
     });
 
     if (targetSessionId == _activeSessionId) {
@@ -591,13 +613,21 @@ jobs:
 
     try {
       while (shouldContinue && toolCallCount < 10) {
-        final currentSession = _sessions[sessionIndex];
+        final curIdx = _sessions.indexWhere((s) => s.id == targetSessionId);
+        if (curIdx == -1) {
+          shouldContinue = false;
+          break;
+        }
+        final currentSession = _sessions[curIdx];
         final assistantMessageIndex = currentSession.messages.length;
 
         setState(() {
-          _sessions[sessionIndex] = currentSession.copyWith(
-            messages: [...currentSession.messages, const ChatMessage(role: MessageRole.assistant, text: '')],
-          );
+          final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+          if (idx != -1) {
+            _sessions[idx] = _sessions[idx].copyWith(
+              messages: [..._sessions[idx].messages, const ChatMessage(role: MessageRole.assistant, text: '')],
+            );
+          }
         });
 
         if (targetSessionId == _activeSessionId) {
@@ -615,7 +645,7 @@ jobs:
             "  Margins: 70px left, 40px top, 30px right, 55px bottom\n"
             "  Font: font-family=\"system-ui,sans-serif\"; labels 12px fill=#555, title 15px bold fill=#222\n"
             "  Lines: stroke-width 2.5px; points r=5, 2px stroke, white fill\n"
-            "  Grid: stroke=#888 opacity=0.15 stroke-dasharray=\"4 4\"\n"
+            "  Grid: stroke=#555 opacity=0.45 stroke-dasharray=\"4 4\" (Make grid lines and data ticks dark and clear so data values are easily read, not just decorative)\n"
             "  Gradient fill: opacity 0.35 top -> 0 bottom\n"
             "  Palette: #6C8EF5 #F56C6C #67C23A #E6A23C #9B59B6\n"
             "  Typography: Title 20px 600w, Axis 13px 400w, Labels 12px 500w, Tooltips 12px monospace\\n"
@@ -627,7 +657,8 @@ jobs:
             "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\\n"
             "- Bar/Pie/Line: ```chart {\\\"type\\\":\\\"bar\\\",\\\"title\\\":\\\"...\\\",\\\"data\\\":[{\\\"label\\\":\\\"...\\\",\\\"value\\\":10,\\\"color\\\":\\\"#6C8EF5\\\"}]}\\n"
             "- Interactive: ```html / ```javascript / ```react / ```artifact\\n\\n"
-            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate diagrams or charts whenever discussing data, comparisons, architectures, flows, math, physics, or complex concepts. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.\\n\\n";
+            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate SVG diagrams or charts whenever discussing mathematics, physics, science concepts, data analysis/metrics, complex workflows, processes, architectures, or system flows. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.\\n"
+            "SVG MIND MAP REQUIREMENT: Mind maps MUST be drawn strictly as vertical tree structures (top-to-bottom hierarchy layouts), never horizontal or radial.\\n\\n";
 
         if (_agenticEnabled) {
           systemPromptText +=
@@ -717,7 +748,12 @@ jobs:
           historyForApi.add(ChatMessage(role: MessageRole.system, text: systemPromptText));
         }
 
-        historyForApi.addAll(_sessions[sessionIndex].messages.take(assistantMessageIndex));
+        final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+        if (idx == -1) {
+          shouldContinue = false;
+          break;
+        }
+        historyForApi.addAll(_sessions[idx].messages.take(assistantMessageIndex));
 
         final stream = _chatClient.sendChatStream(
           provider: provider,
@@ -726,73 +762,103 @@ jobs:
           messages: historyForApi,
         );
 
+        final completer = Completer<void>();
         var fullText = '';
         var reasoningText = '';
         var isThinking = false;
         final updateStopwatch = Stopwatch()..start();
 
-        await for (final chunk in stream) {
-          if (!mounted) return;
-          if (chunk.startsWith('[REASONING]')) {
-            reasoningText += chunk.substring(11);
-          } else {
-            var textChunk = chunk;
-            
-            // Start of <think> or <reasoning> or <thought>
-            if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
-              final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
-              final parts = textChunk.split(tag);
-              fullText += parts[0];
-              isThinking = true;
-              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-            }
-            
-            // End of </think> or </reasoning> or </thought>
-            if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
-              final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
-              final parts = textChunk.split(tag);
-              reasoningText += parts[0];
-              isThinking = false;
-              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-              fullText += textChunk;
-              
-              // We could potentially start thinking again in the same chunk? Unlikely but possible.
-            } else if (isThinking) {
-              reasoningText += textChunk;
+        final subscription = stream.listen(
+          (chunk) {
+            if (!mounted) return;
+            if (chunk.startsWith('[REASONING]')) {
+              reasoningText += chunk.substring(11);
             } else {
-              fullText += textChunk;
-            }
-          }
-
-          if (updateStopwatch.elapsedMilliseconds > 250) {
-            setState(() {
-              final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-              if (assistantMessageIndex < msgs.length) {
-                msgs[assistantMessageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: fullText,
-                  reasoning: reasoningText,
-                );
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              var textChunk = chunk;
+              
+              // Start of <think> or <reasoning> or <thought>
+              if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
+                final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
+                final parts = textChunk.split(tag);
+                fullText += parts[0];
+                isThinking = true;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
               }
-            });
-            updateStopwatch.reset();
-            if (targetSessionId == _activeSessionId) {
-              _scrollToBottom();
+              
+              // End of </think> or </reasoning> or </thought>
+              if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
+                final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
+                final parts = textChunk.split(tag);
+                reasoningText += parts[0];
+                isThinking = false;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                fullText += textChunk;
+              } else if (isThinking) {
+                reasoningText += textChunk;
+              } else {
+                fullText += textChunk;
+              }
             }
-          }
+
+            if (updateStopwatch.elapsedMilliseconds > 250) {
+              setState(() {
+                final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+                if (idx != -1) {
+                  final msgs = List<ChatMessage>.from(_sessions[idx].messages);
+                  if (assistantMessageIndex < msgs.length) {
+                    msgs[assistantMessageIndex] = ChatMessage(
+                      role: MessageRole.assistant,
+                      text: fullText,
+                      reasoning: reasoningText,
+                    );
+                    _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
+                  }
+                }
+              });
+              updateStopwatch.reset();
+              if (targetSessionId == _activeSessionId) {
+                _scrollToBottom();
+              }
+            }
+          },
+          onError: (err) {
+            if (!completer.isCompleted) completer.completeError(err);
+          },
+          onDone: () {
+            if (!completer.isCompleted) completer.complete();
+          },
+          cancelOnError: true,
+        );
+
+        _activeSubscriptions[targetSessionId] = subscription;
+        _activeCompleters[targetSessionId] = completer;
+
+        try {
+          await completer.future;
+        } finally {
+          _activeSubscriptions.remove(targetSessionId);
+          _activeCompleters.remove(targetSessionId);
+          await subscription.cancel();
+        }
+
+        if (!_sendingSessionIds.contains(targetSessionId)) {
+          shouldContinue = false;
+          break;
         }
 
         // Final state update after stream completes
         setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          if (assistantMessageIndex < msgs.length) {
-            msgs[assistantMessageIndex] = ChatMessage(
-              role: MessageRole.assistant,
-              text: fullText,
-              reasoning: reasoningText,
-            );
-            _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+          final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+          if (idx != -1) {
+            final msgs = List<ChatMessage>.from(_sessions[idx].messages);
+            if (assistantMessageIndex < msgs.length) {
+              msgs[assistantMessageIndex] = ChatMessage(
+                role: MessageRole.assistant,
+                text: fullText,
+                reasoning: reasoningText,
+              );
+              _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
+            }
           }
         });
         if (targetSessionId == _activeSessionId) {
@@ -979,9 +1045,12 @@ jobs:
           );
 
           setState(() {
-            _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-              messages: [..._sessions[sessionIndex].messages, resultsMessage],
-            );
+            final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+            if (idx != -1) {
+              _sessions[idx] = _sessions[idx].copyWith(
+                messages: [..._sessions[idx].messages, resultsMessage],
+              );
+            }
           });
 
           if (targetSessionId == _activeSessionId) {
@@ -996,18 +1065,21 @@ jobs:
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        final currentMessages = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-        if (currentMessages.isNotEmpty) {
-          final lastIdx = currentMessages.length - 1;
-          final currentText = currentMessages[lastIdx].text;
-          currentMessages[lastIdx] = ChatMessage(
-            role: MessageRole.assistant,
-            text: currentText.isNotEmpty
-                ? '$currentText\n\n[Error: $error]'
-                : 'Request failed: $error',
-            isError: true,
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: currentMessages);
+        final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+        if (idx != -1) {
+          final currentMessages = List<ChatMessage>.from(_sessions[idx].messages);
+          if (currentMessages.isNotEmpty) {
+            final lastIdx = currentMessages.length - 1;
+            final currentText = currentMessages[lastIdx].text;
+            currentMessages[lastIdx] = ChatMessage(
+              role: MessageRole.assistant,
+              text: currentText.isNotEmpty
+                  ? '$currentText\n\n[Error: $error]'
+                  : 'Request failed: $error',
+              isError: true,
+            );
+            _sessions[idx] = _sessions[idx].copyWith(messages: currentMessages);
+          }
         }
       });
       await _saveSessions();
@@ -1878,6 +1950,7 @@ jobs:
                 onOpenProvider: () => _openProviderSheet(_selectedProviderId),
                 onOpenModel: _openModelSheet,
                 onSend: _sendMessage,
+                onStop: () => _stopResponse(_activeSessionId ?? ''),
                 onPlusPressed: _openPlusBottomSheet,
                 attachedImages: activeSession.attachedImagesBase64,
                 onRemoveImage: _removeImage,
@@ -2021,6 +2094,7 @@ class ChatSurface extends StatelessWidget {
     required this.deepResearchEnabled,
     required this.onStartResearch,
     required this.fileName,
+    this.onStop,
     super.key,
   });
 
@@ -2045,6 +2119,7 @@ class ChatSurface extends StatelessWidget {
   final String agenticWorkspace;
   final bool deepResearchEnabled;
   final ValueChanged<int> onStartResearch;
+  final VoidCallback? onStop;
 
   @override
   Widget build(BuildContext context) {
@@ -2149,6 +2224,7 @@ class ChatSurface extends StatelessWidget {
             controller: messageController,
             isSending: isSending,
             onSend: onSend,
+            onStop: onStop,
             onPlusPressed: onPlusPressed,
             attachedImages: attachedImages,
             onRemoveImage: onRemoveImage,
@@ -3418,12 +3494,14 @@ class Composer extends StatelessWidget {
     required this.attachedFiles,
     required this.onRemoveFile,
     required this.deepResearchEnabled,
+    this.onStop,
     super.key,
   });
 
   final TextEditingController controller;
   final bool isSending;
   final VoidCallback onSend;
+  final VoidCallback? onStop;
   final VoidCallback onPlusPressed;
   final List<String> attachedImages;
   final ValueChanged<int> onRemoveImage;
@@ -3579,8 +3657,8 @@ class Composer extends StatelessWidget {
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: IconButton(
-                    tooltip: 'Send',
-                    onPressed: isSending ? null : onSend,
+                    tooltip: isSending ? 'Stop response' : 'Send',
+                    onPressed: isSending ? onStop : onSend,
                     icon: isSending
                         ? const SizedBox(
                             width: 18,
@@ -4826,11 +4904,8 @@ class AppMark extends StatelessWidget {
     return Container(
       width: 42,
       height: 42,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2E241C),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: const Icon(Icons.api, color: Color(0xFFFFE0A8)),
+      alignment: Alignment.center,
+      child: Image.asset('assets/icon_transparent.png', fit: BoxFit.cover, width: 38, height: 38),
     );
   }
 }
@@ -5219,9 +5294,10 @@ class ChatClient {
             .transform(const LineSplitter());
 
       await for (final line in lines) {
-        if (line.trim().isEmpty) continue;
-        if (line.startsWith('data: ')) {
-          final dataStr = line.substring(6).trim();
+        final trimmedLine = line.trim();
+        if (trimmedLine.isEmpty) continue;
+        if (trimmedLine.startsWith('data:')) {
+          final dataStr = trimmedLine.substring(5).trim();
           if (dataStr == '[DONE]') {
             break;
           }
@@ -5373,6 +5449,10 @@ class ChatClient {
     required bool stream,
   }) {
     request.headers.set('Accept', stream ? 'text/event-stream' : 'application/json');
+    if (stream) {
+      request.headers.set('Cache-Control', 'no-cache');
+      request.headers.set('Connection', 'keep-alive');
+    }
     if (activeApiKey.isNotEmpty) {
       request.headers.set('Authorization', 'Bearer $activeApiKey');
     }
@@ -6035,23 +6115,29 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
       return;
     }
 
-    final result = await FilePicker.platform.saveFile(
-      dialogTitle: 'Save Research File',
-      fileName: widget.fileName,
-      type: FileType.custom,
-      allowedExtensions: ['md'],
-    );
-    
-    if (result != null) {
-      try {
-        await File(result).writeAsString(contentToSave);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File saved successfully!')));
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving file: $e')));
-        }
+    try {
+      final dir = Directory('/data/data/com.termux/files/home/downloads');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final file = File('${dir.path}/${widget.fileName}');
+      await file.writeAsString(contentToSave);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved to downloads/${widget.fileName}'),
+            backgroundColor: const Color(0xFF36764D),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving file: $e'),
+            backgroundColor: const Color(0xFF9B4D39),
+          ),
+        );
       }
     }
   }
@@ -6342,23 +6428,29 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
 
   Future<void> _downloadFile() async {
     try {
-      String? outputFile = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save HTML File',
-        fileName: 'index.html',
-        type: FileType.custom,
-        allowedExtensions: ['html'],
-      );
-
-      if (outputFile != null) {
-        final file = File(outputFile);
-        await file.writeAsString(widget.htmlContent);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved to \$outputFile')));
-        }
+      final dir = Directory('/data/data/com.termux/files/home/downloads');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      final filename = 'page_${DateTime.now().millisecondsSinceEpoch}.html';
+      final file = File('${dir.path}/$filename');
+      await file.writeAsString(widget.htmlContent);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Saved to downloads/$filename'),
+            backgroundColor: const Color(0xFF36764D),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving file: \$e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving file: $e'),
+            backgroundColor: const Color(0xFF9B4D39),
+          ),
+        );
       }
     }
   }
@@ -6814,14 +6906,18 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
 
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
-            child: SizedBox(
-              width: double.infinity,
-              height: renderHeight,
-              child: InteractiveViewer(
-                panEnabled: true,
-                scaleEnabled: true,
-                minScale: 0.5,
-                maxScale: 10.0,
+            child: GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => FullScreenSvgViewer(svgString: _cachedSvg),
+                  ),
+                );
+              },
+              child: SizedBox(
+                width: double.infinity,
+                height: renderHeight,
                 child: SvgPicture.string(
                   _cachedSvg,
                   fit: BoxFit.contain,
@@ -6840,6 +6936,55 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class FullScreenSvgViewer extends StatelessWidget {
+  const FullScreenSvgViewer({required this.svgString, super.key});
+  final String svgString;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D1B2A),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.close, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy_all, color: Colors.white),
+            tooltip: 'Copy SVG code',
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: svgString));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('SVG code copied to clipboard')),
+              );
+            },
+          ),
+        ],
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          panEnabled: true,
+          scaleEnabled: true,
+          minScale: 0.5,
+          maxScale: 10.0,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: SvgPicture.string(
+              svgString,
+              fit: BoxFit.contain,
+              width: double.infinity,
+              height: double.infinity,
+            ),
+          ),
+        ),
       ),
     );
   }
