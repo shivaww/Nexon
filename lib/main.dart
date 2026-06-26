@@ -6626,7 +6626,7 @@ class ChartDiagramWidget extends StatelessWidget {
       );
     }
 }
-
+}
 
 
 
