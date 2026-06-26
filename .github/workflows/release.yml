@@ -70,20 +70,20 @@ jobs:
       - name: Rename APK with version
         run: |
           mv build/app/outputs/flutter-apk/app-release.apk \
-             build/app/outputs/flutter-apk/termux-forge-${{ steps.version.outputs.version }}.apk
+             build/app/outputs/flutter-apk/nexon-${{ steps.version.outputs.version }}.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "TermuxForge v${{ steps.version.outputs.version }}"
+          name: "Nexon v${{ steps.version.outputs.version }}"
           body: |
-            ## TermuxForge v${{ steps.version.outputs.version }}
+            ## Nexon v${{ steps.version.outputs.version }}
 
             ### Changes
             See [CHANGELOG.md](CHANGELOG.md) for details.
 
             ### Installation
-            1. Download `termux-forge-${{ steps.version.outputs.version }}.apk`
+            1. Download `nexon-${{ steps.version.outputs.version }}.apk`
             2. Install on your Android device
             3. Open the app and follow the setup wizard
 
@@ -91,7 +91,7 @@ jobs:
             - Android 7.0+ (API 24)
             - Termux installed
           files: |
-            build/app/outputs/flutter-apk/termux-forge-${{ steps.version.outputs.version }}.apk
+            build/app/outputs/flutter-apk/nexon-${{ steps.version.outputs.version }}.apk
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           generate_release_notes: true
@@ -101,5 +101,5 @@ jobs:
           echo "## Release v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "✅ Release created successfully" >> $GITHUB_STEP_SUMMARY
-          SIZE=$(du -h build/app/outputs/flutter-apk/termux-forge-${{ steps.version.outputs.version }}.apk | cut -f1)
+          SIZE=$(du -h build/app/outputs/flutter-apk/nexon-${{ steps.version.outputs.version }}.apk | cut -f1)
           echo "📦 APK Size: $SIZE" >> $GITHUB_STEP_SUMMARY

@@ -1,6 +1,6 @@
-# Project Rules for Termux Forge Agent
+# Project Rules for Nexon Agent
 
-Welcome, Agent! You are working on the **Termux Forge** repository. This is an agentic environment for Termux using Flutter/Dart that integrates LLMs with system tools.
+Welcome, Agent! You are working on the **Nexon** repository. This is an agentic environment for Termux using Flutter/Dart that integrates LLMs with system tools.
 
 ## Critical Guidelines for Project Agents
 

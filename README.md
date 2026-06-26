@@ -1,293 +1,161 @@
-# TermuxForge
+# Nexon
 
-> **An AI-powered mobile development environment** that transforms your Android device into a full-featured coding workstation — powered by Flutter, Termux, and intelligent tooling.
+> **An AI-powered mobile coding workstation and agentic workspace** that transforms your Android device into a full-featured development workspace — powered by Flutter, Termux, and intelligent local tool routing.
 
-[![Build](https://github.com/YOUR_USERNAME/termux_forge/actions/workflows/build.yml/badge.svg)](https://github.com/YOUR_USERNAME/termux_forge/actions/workflows/build.yml)
-[![Tests](https://github.com/YOUR_USERNAME/termux_forge/actions/workflows/test.yml/badge.svg)](https://github.com/YOUR_USERNAME/termux_forge/actions/workflows/test.yml)
+[![Build](https://github.com/shivaww/termux_forge/actions/workflows/build.yml/badge.svg)](https://github.com/shivaww/termux_forge/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
 ## Overview
 
-TermuxForge bridges the gap between mobile convenience and desktop-grade development. It provides a beautiful Flutter-based IDE interface that communicates with a Python bridge server running in Termux, giving you access to shell commands, git operations, Flutter builds, MCP servers, GitHub Actions workflows, and more — all from your phone or tablet.
+Nexon provides a beautiful Flutter-based agentic workspace that communicates directly with LLM API providers for streaming chat, while routing local tool calls to a zero-dependency Python-based Model Context Protocol (MCP) server running inside Termux.
+
+Nexon empowers LLMs to read/write files, execute commands, perform search, build code, manage git workflows, and deploy projects directly from your phone or tablet.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                 Flutter App (UI)                      │
-│  ┌─────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │ Screens │  │ Widgets  │  │ State (Riverpod 3.x) │ │
-│  └────┬────┘  └─────┬────┘  └──────────┬───────────┘ │
-│       └──────────────┴──────────────────┘             │
-│                      │                                │
-│              WebSocket Client                         │
-└──────────────────────┬───────────────────────────────┘
-                       │ JSON-RPC 2.0 over WebSocket
-                       │ ws://127.0.0.1:8765
-┌──────────────────────┴───────────────────────────────┐
-│              Python Bridge (Termux)                   │
-│  ┌────────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │  Security  │  │ Command  │  │ Tool Discovery   │  │
-│  │  Manager   │  │ Executor │  │                  │  │
-│  └────────────┘  └──────────┘  └──────────────────┘  │
-│  ┌────────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │    MCP     │  │ Workflow │  │ GitHub Hooks     │  │
-│  │  Manager   │  │  Runner  │  │                  │  │
-│  └────────────┘  └──────────┘  └──────────────────┘  │
-│  ┌────────────┐  ┌──────────┐                        │
-│  │   Media    │  │Checkpoint│                        │
-│  │   Hooks    │  │  Manager │                        │
-│  └────────────┘  └──────────┘                        │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                    Nexon Flutter App                       │
+│                                                            │
+│   ┌────────────────────────────────────────────────────┐   │
+│   │                    Chat Interface                  │   │
+│   └─────────────────────────┬──────────────────────────┘   │
+│                             │ Sends/streams chat requests  │
+│                             ▼                              │
+│                ┌─────────────────────────┐                 │
+│                │     LLM API Provider    │                 │
+│                │ (Gemini, OpenAI, etc.)  │                 │
+│                └────────────┬────────────┘                 │
+│                             │ Streams XML tool calls       │
+│                             ▼                              │
+│                ┌─────────────────────────┐                 │
+│                │   XML Tool Call Parser  │                 │
+│                └────────────┬────────────┘                 │
+│                             │                              │
+│                             │ HTTP POST JSON               │
+│                             │ http://127.0.0.1:8390/mcp    │
+│                             ▼                              │
+│   ┌────────────────────────────────────────────────────┐   │
+│   │           Python MCP Server (Termux Bridge)        │   │
+│   │                                                    │   │
+│   │   ┌────────────┐  ┌────────────┐  ┌────────────┐   │   │
+│   │   │  Security  │  │  Command   │  │    Git     │   │   │
+│   │   │  Filtering │  │  Executor  │  │ Operations │   │   │
+│   │   └────────────┘  └────────────┘  └────────────┘   │   │
+│   │   ┌────────────┐  ┌────────────┐                   │   │
+│   │   │ Checkpoint │  │ Workflows  │                   │   │
+│   │   │   Helper   │  │   Engine   │                   │   │
+│   │   └────────────┘  └────────────┘                   │   │
+│   └────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
-### 🖥️ Terminal & Shell
-- Full shell command execution in Termux
-- Command safety filtering (blocks destructive operations)
-- Output streaming via WebSocket
-- Command history with search
-- Configurable timeouts and environment variables
+### 🖥️ Shell & Terminal
+- Safe bash command execution in Termux (unblocked operations).
+- Command safety scanner (automatically blocks high-risk or destructive actions).
+- Real-time command output capture and display.
 
 ### 📁 File Management
-- Read, write, edit, list, and search files
-- Path sandboxing to approved directories
-- Recursive directory listing with depth control
+- Sandbox-aware folder path lookup.
+- Read, write, list, delete, and recursively search files.
+- Space-insensitive parameter extraction from LLM tool-calling nodes.
 
-### 🔀 Git Integration
-- Status, diff, commit, push, pull
-- GitHub CLI integration for workflows
-- Build status monitoring
-- Artifact downloading
-- Release creation
+### 🔀 Git & GitHub Workflow Integration
+- Manage version control (status, diff, commit, push, pull).
+- GitHub CLI integration to monitor GitHub Actions build jobs, stream remote workflow execution logs, and retrieve built artifacts.
 
-### 🏗️ Flutter & Dart
-- `flutter run`, `flutter test`, `flutter build`
-- `dart analyze` with structured output
-- Device selection and flavor support
+### 🤖 Local Zero-Dependency MCP Server
+- Operates on HTTP port `8390` inside your Termux environment.
+- Implements tools like `file_read`, `file_write`, `str_replace`, `dir_list`, `find_paths`, and `run_command`.
 
-### 🤖 MCP Server Management
-- Start/stop MCP servers (stdio, SSE, HTTP transports)
-- Built-in presets: GitHub, Filesystem, Brave Search, Tavily, Supabase, and more
-- Tool discovery from running servers
-- Request routing to specific servers
-- Health monitoring
+### ⚡ Tap-to-Stop Response Cancellation
+- Immediate streaming connection cancellation when you tap the loading indicator in the composer input bar.
 
-### ⚡ Workflow Engine
-- Multi-step workflow execution
-- Sequential and parallel step groups
-- Conditional branching
-- Retry logic with configurable delays
-- Detailed status reporting
+### 🎨 Fully Fullscreen SVGs & Interactive Visuals
+- LaTeX equations rendering via Markdown.
+- Proactive generation rules for scientific, math, data analysis, and workflow diagrams using SVGs.
+- Interactive fullscreen SVG viewer with pinch-to-zoom scaling, panning, and code copy tools.
+- Strict mind map layouts constrained to clean vertical tree structures.
+- Darker internal grids on graphs for sharp, readable values.
 
-### 📸 Checkpoints
-- Create file and git state snapshots
-- Compare current state with checkpoints
-- Rollback to any checkpoint
-- Backup and restore individual files
+### 📥 Direct Downloads Manager
+- Saves HTML sandbox pages and research reports directly into the local Android `downloads/` folder (`/data/data/com.termux/files/home/downloads/`), accompanied by success notification snackbars.
 
-### 🎨 Media Generation
-- Discover configured media providers
-- Generate images via OpenAI, Stability AI, Replicate, etc.
-- Save outputs as artifacts
-
-### 🔐 Security
-- Blocked command pattern matching
-- Path validation and sandboxing
-- Risk level classification (safe → critical)
-- Safety score calculation
+---
 
 ## Getting Started
 
 ### Prerequisites
-
-- Android device running **Android 7.0+** (API 24)
-- [Termux](https://f-droid.org/en/packages/com.termux/) installed from F-Droid
+- Android device running **Android 7.0+** (API 24+)
+- **[Termux](https://f-droid.org/en/packages/com.termux/)** installed from F-Droid
 - Python 3.10+ in Termux
-- Flutter SDK (for building from source)
+- Flutter SDK (to compile from source)
 
 ### Installation
 
-#### 1. Setup Termux Environment
-
+#### 1. Configure the Termux Environment
+Install Python, Node.js, Git, and other developer tools:
 ```bash
-# Update packages
 pkg update && pkg upgrade -y
-
-# Install Python and essentials
 pkg install python git nodejs -y
-
-# Install bridge dependencies
-cd ~/termux_forge/python_bridge
-pip install -r requirements.txt
 ```
 
-#### 2. Start the Bridge Server
-
+#### 2. Start the Local Python MCP Gateway
 ```bash
-python3 ~/termux_forge/python_bridge/termux_forge_bridge.py
+python3 ~/termux_forge/python_bridge/mcp_server.py
 ```
+This runs the zero-dependency tool executor server on `http://127.0.0.1:8390/mcp`.
 
-The bridge server will start on `ws://127.0.0.1:8765`.
-
-#### 3. Install the Flutter App
-
-Download the latest release APK from the [Releases](https://github.com/YOUR_USERNAME/termux_forge/releases) page, or build from source:
-
+#### 3. Build & Install the App
+To compile the Nexon APK from source:
 ```bash
 cd ~/termux_forge
 flutter pub get
 flutter build apk --release
 ```
-
-### Configuration
-
-#### MCP Servers
-
-Configure MCP servers by setting the appropriate environment variables:
-
-```bash
-export GITHUB_PERSONAL_ACCESS_TOKEN="ghp_..."
-export TAVILY_API_KEY="tvly-..."
-export BRAVE_API_KEY="BSA..."
-```
-
-#### Media Providers
-
-```bash
-export OPENAI_API_KEY="sk-..."
-export STABILITY_API_KEY="sk-..."
-```
-
-## Project Structure
-
-```
-termux_forge/
-├── lib/                          # Flutter app source
-│   ├── core/                     # Core utilities, theme, routing
-│   ├── data/                     # Data layer (repos, sources)
-│   ├── domain/                   # Domain layer (models, interfaces)
-│   └── presentation/             # UI layer (screens, widgets)
-├── python_bridge/                # Python bridge server
-│   ├── termux_forge_bridge.py    # Main WebSocket server
-│   ├── command_executor.py       # Safe command execution
-│   ├── security.py               # Command safety filtering
-│   ├── protocol.py               # JSON-RPC 2.0 protocol
-│   ├── tool_discovery.py         # Installed tool detection
-│   ├── mcp_manager.py            # MCP server management
-│   ├── workflow_runner.py        # Workflow execution engine
-│   ├── github_hooks.py           # GitHub CLI integration
-│   ├── media_hooks.py            # Media provider integration
-│   ├── checkpoint_hooks.py       # Checkpoint management
-│   └── requirements.txt          # Python dependencies
-├── android/                      # Android platform
-├── .github/workflows/            # CI/CD pipelines
-│   ├── build.yml                 # Build & test workflow
-│   ├── test.yml                  # Test-only workflow
-│   └── release.yml               # Tagged release workflow
-├── analysis_options.yaml         # Dart analysis config
-├── pubspec.yaml                  # Flutter project config
-└── README.md                     # This file
-```
-
-## JSON-RPC 2.0 API
-
-The bridge uses JSON-RPC 2.0 over WebSocket. Example request:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "execute_command",
-  "params": {
-    "command": "echo Hello, TermuxForge!",
-    "cwd": "/data/data/com.termux/files/home",
-    "timeout": 30
-  }
-}
-```
-
-### Available Methods
-
-| Category | Methods |
-|----------|---------|
-| **Commands** | `execute_command`, `kill_command` |
-| **Files** | `read_file`, `write_file`, `edit_file`, `list_files`, `search_files` |
-| **Git** | `git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull` |
-| **Flutter** | `flutter_run`, `flutter_test`, `flutter_build`, `dart_analyze` |
-| **Tools** | `check_tool`, `discover_tools`, `install_package` |
-| **MCP** | `mcp_server_manage`, `mcp_tool_discover`, `mcp_transport_handle` |
-| **Workflows** | `workflow_execute` |
-| **Checkpoints** | `checkpoint_create`, `checkpoint_rollback` |
-| **Media** | `media_discover` |
-| **GitHub** | `github_workflow_trigger`, `github_build_status`, `github_download_artifact` |
-| **System** | `version_check`, `workspace_validate`, `get_command_history` |
-
-## CI/CD
-
-TermuxForge uses GitHub Actions for automated builds and releases:
-
-- **`build.yml`** — Triggered on push to `main`/`develop` and PRs. Runs analysis, tests, and builds a release APK.
-- **`test.yml`** — Runs unit, widget, integration, and Python bridge tests with a summary report.
-- **`release.yml`** — Triggered on version tags (`v*`). Builds a release APK and creates a GitHub Release.
-
-### Creating a Release
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-This automatically triggers the release workflow, which builds the APK and publishes a GitHub Release.
-
-## Development
-
-### Flutter App
-
-```bash
-flutter pub get
-flutter run
-flutter test
-```
-
-### Python Bridge
-
-```bash
-cd python_bridge
-pip install -r requirements.txt
-python3 termux_forge_bridge.py
-```
-
-### Running Tests
-
-```bash
-# Flutter tests
-flutter test
-
-# Python tests
-cd python_bridge && python -m pytest tests/ -v
-```
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| **UI** | Flutter 3.x, Material 3 |
-| **State** | Riverpod 3.x |
-| **Local DB** | Isar |
-| **Secure Storage** | flutter_secure_storage |
-| **Bridge** | Python 3.12+, websockets, aiohttp |
-| **Protocol** | JSON-RPC 2.0 over WebSocket |
-| **CI/CD** | GitHub Actions |
-| **Platform** | Android (Termux) |
-
-## License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+Locate the compiled release APK at `build/app/outputs/flutter-apk/app-release.apk` and install it on your device.
 
 ---
 
-**Built with ❤️ for mobile developers who refuse to be limited by their device.**
+## Tool calling Protocol
+
+Nexon uses structured XML tags inside standard LLM text completions to trigger local device tool executions. The model outputs exactly one tool request per turn, halts generation, and waits for results.
+
+### Expected XML Syntax
+```xml
+<tool_request>
+  <method>file_read</method>
+  <path>lib/main.dart</path>
+  <start_line>1</start_line>
+  <end_line>50</end_line>
+</tool_request>
+```
+Nexon's parser is highly robust and automatically extracts tags like `<method>`, `<path>`, `<query>`, `<start_line>`, `<end_line>`, `<pattern>`, and `<command>`. It also includes fallback parsers to capture `<PARAM name="key">value</PARAM>` and `<parameter name="key">value</parameter>` syntax if generated by older models.
+
+### Available Tool Methods
+- **`dir_list`** — List folder contents.
+- **`file_read`** — View lines within a specific range.
+- **`file_write`** — Overwrite or write content to a file path.
+- **`str_replace`** — Find and replace contiguous string blocks.
+- **`find_paths`** — Case-insensitive search for files or directories by pattern.
+- **`run_command`** — Safely execute bash shell commands.
+- **`git_status`** / **`git_diff`** — Version control state.
+
+---
+
+## Tech Stack
+- **Frontend UI**: Flutter 3.x, Material 3, Google Fonts
+- **State Management**: Provider catalog state
+- **Local Storage**: Flutter Secure Storage (safe API keys) & SharedPreferences
+- **Backend Bridge**: Python 3 Standard Library
+- **Tool Protocol**: HTTP POST JSON-RPC payloads
+- **CI/CD**: GitHub Actions Build Workflows
+
+---
+
+## License
+Nexon is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
