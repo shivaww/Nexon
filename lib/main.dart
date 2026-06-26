@@ -6452,8 +6452,7 @@ class ChartDiagramWidget extends StatelessWidget {
               return PieChartSectionData(
                 color: c,
                 value: v,
-                title: '${item['label'] ?? ''}
-$pct%',
+                title: '${item['label'] ?? ''}\n$pct%',
                 radius: 80,
                 titleStyle: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w500,
@@ -6462,8 +6461,8 @@ $pct%',
               );
             }).toList(),
           ),
-          swapAnimationDuration: const Duration(milliseconds: 300),
-          swapAnimationCurve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
         );
       } else if (type == 'line') {
         final maxY = items.map((e) => _val(e['value'])).reduce((a, b) => a > b ? a : b);
@@ -6478,8 +6477,7 @@ $pct%',
                   return touchedSpots.map((spot) {
                     final item = items[spot.spotIndex] as Map;
                     return LineTooltipItem(
-                      '${item['label']}
-',
+                      '${item['label']}\n',
                       const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace'),
                       children: [
                         TextSpan(
@@ -6524,8 +6522,8 @@ $pct%',
               ),
             ],
           ),
-          swapAnimationDuration: const Duration(milliseconds: 300),
-          swapAnimationCurve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
         );
       } else {
         // Bar chart
@@ -6541,8 +6539,7 @@ $pct%',
                 getTooltipItem: (group, groupIndex, rod, rodIndex) {
                   final item = items[groupIndex] as Map;
                   return BarTooltipItem(
-                    '${item['label']}
-',
+                    '${item['label']}\n',
                     const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace'),
                     children: [
                       TextSpan(
@@ -6587,8 +6584,8 @@ $pct%',
               );
             }).toList(),
           ),
-          swapAnimationDuration: const Duration(milliseconds: 300),
-          swapAnimationCurve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
         );
       }
 
@@ -6641,7 +6638,7 @@ $pct%',
       );
     }
   }
-}
+}}
 
 
 
