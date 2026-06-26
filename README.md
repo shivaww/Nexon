@@ -101,7 +101,15 @@ Nexon empowers LLMs to read/write files, execute commands, perform search, build
 Install Python, Node.js, Git, and other developer tools:
 ```bash
 pkg update && pkg upgrade -y
-pkg install python git nodejs -y
+
+# Install required packages
+pkg install -y python git nodejs gh
+
+# Install Firebase CLI globally using npm
+npm install -g firebase-tools
+
+# Install Nexon Bridge
+curl -sL https://github.com/shivaww/Nexon/raw/main/install_bridge.sh | bash
 ```
 
 #### 2. Start the Local Python MCP Gateway
