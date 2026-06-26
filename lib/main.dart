@@ -630,8 +630,26 @@ jobs:
 
         if (_agenticEnabled) {
           systemPromptText +=
-              "Termux file tools enabled. ONE <tool_request> per turn, then STOP:\n"
-              "<tool_request><method>METHOD</method><PARAM>VALUE</PARAM></tool_request>\n\n"
+              "Termux file tools enabled. ONE <tool_request> per turn, then STOP and wait.\n"
+              "EXACT FORMAT — copy this structure precisely:\n"
+              "<tool_request>\n"
+              "  <method>METHOD_NAME</method>\n"
+              "  <param_name>value</param_name>\n"
+              "</tool_request>\n\n"
+              "RULES:\n"
+              "• Tag names are lowercase. <method> is REQUIRED. All other tags are param names.\n"
+              "• ONE tool call per reply. Output text BEFORE the tag, never after.\n"
+              "• Do NOT use JSON inside <tool_request>. Use plain XML child tags only.\n"
+              "• Do NOT wrap in markdown code blocks. Raw XML only.\n\n"
+              "CORRECT examples:\n"
+              "  <tool_request><method>file_read</method><path>/foo/bar.dart</path><start_line>1</start_line><end_line>50</end_line></tool_request>\n"
+              "  <tool_request><method>run_command</method><command>flutter pub get</command><cwd>/project</cwd></tool_request>\n"
+              "  <tool_request><method>str_replace</method><path>/foo/bar.dart</path><old>old text</old><new>new text</new></tool_request>\n\n"
+              "WRONG (never do this):\n"
+              "  ❌ <tool_use><name>file_read</name>...  ← wrong outer tag\n"
+              "  ❌ <function_calls><invoke>...          ← wrong format entirely\n"
+              "  ❌ ```xml <tool_request>...             ← don't wrap in code block\n"
+              "  ❌ {\"method\":\"file_read\",...}         ← JSON inside tool_request not allowed\n\n"
               "Workflow (strict):\n"
               "1. Always code_search/git_diff before reading any file\n"
               "2. file_read/multi_read with line ranges only — never full file\n"
@@ -670,7 +688,7 @@ jobs:
               "file_info: path\n"
               "git_diff: path\n"
               "git_status: cwd\n"
-              "multi_read: path,ranges\n"
+              "multi_read: path,ranges (ranges format: '1-50,100-150' comma-separated line ranges)\n"
               "symbol_search: symbol,path\n"
               "file_read: path,start_line,end_line\n"
               "dir_list: path\n"
@@ -6639,110 +6657,133 @@ class SvgDiagramWidget extends StatefulWidget {
 }
 
 class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
+  // Cache processed SVG so we don't re-run regex on every parent rebuild.
+  late String _cachedSvg;
+  late bool _isComplete;
 
+  @override
+  void initState() {
+    super.initState();
+    _cachedSvg = _cleanSvg(widget.svgString);
+    _isComplete = _cachedSvg.trim().endsWith('</svg>');
+  }
+
+  @override
+  void didUpdateWidget(SvgDiagramWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Only reprocess when the raw string actually changes.
+    if (oldWidget.svgString != widget.svgString) {
+      _cachedSvg = _cleanSvg(widget.svgString);
+      final nowComplete = _cachedSvg.trim().endsWith('</svg>');
+      // If we just became complete, trigger exactly one rebuild to show SVG.
+      if (nowComplete != _isComplete) {
+        _isComplete = nowComplete;
+        // setState is safe here — didUpdateWidget is called during the build phase
+        // but setState schedules a new frame, not an immediate rebuild.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
+      } else {
+        _isComplete = nowComplete;
+      }
+    }
+  }
 
   /// Strip everything before <svg and normalize width/height to 100%
   String _cleanSvg(String raw) {
-    String s = raw;
+    String s = raw.trim();
     final svgIdx = s.indexOf('<svg');
+    if (svgIdx < 0) return s; // not SVG at all, return as-is
     if (svgIdx > 0) s = s.substring(svgIdx);
 
-    // Remove fixed pixel width/height attributes so we can control sizing
-    // e.g. width="480" height="320" → width="100%" height="100%"
+    // Remove fixed pixel width/height so we control sizing via LayoutBuilder
     s = s.replaceFirstMapped(
-      RegExp(r'''(<svg[^>]*?)\s+width=["']?[\d.]+["']?''', caseSensitive: false),
-      (m) => '${m.group(1)} width="100%"',
+      RegExp(r'''(<svg[^>]*?)\s+width=["']?[\d.%]+["']?''', caseSensitive: false),
+      (m) => m.group(1)!,
     );
     s = s.replaceFirstMapped(
-      RegExp(r'''(<svg[^>]*?)\s+height=["']?[\d.]+["']?''', caseSensitive: false),
-      (m) => '${m.group(1)} height="100%"',
+      RegExp(r'''(<svg[^>]*?)\s+height=["']?[\d.%]+["']?''', caseSensitive: false),
+      (m) => m.group(1)!,
     );
-    // If no width/height at all, inject them
-    if (!s.contains('width=')) {
-      s = s.replaceFirst('<svg', '<svg width="100%" height="100%"');
-    }
     return s;
   }
 
   @override
   Widget build(BuildContext context) {
-    String cleanSvg = _cleanSvg(widget.svgString);
-
-    // Check completeness
-    bool isComplete = cleanSvg.trim().endsWith('</svg>');
-
-    if (!isComplete) {
+    if (!_isComplete) {
+      // Streaming in progress — show a subtle shimmer placeholder
       return Container(
         width: double.infinity,
         height: 80,
+        margin: const EdgeInsets.symmetric(vertical: 4),
         decoration: BoxDecoration(
-          color: const Color(0xFF0B1120),
-          borderRadius: BorderRadius.circular(12),
+          color: const Color(0xFF0D1B2A),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFF1E3A5F).withOpacity(0.5)),
         ),
         child: const Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             SizedBox(
-              width: 16, height: 16,
+              width: 15, height: 15,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
                 valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
               ),
             ),
-            SizedBox(width: 12),
-            Text('Rendering diagram…',
-                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13)),
+            SizedBox(width: 10),
+            Text('Generating visual…',
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 12, letterSpacing: 0.3)),
           ],
         ),
       );
     }
 
+    // SVG is complete — render it directly on chat background, no card
     return RepaintBoundary(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Parse viewBox to determine aspect ratio for proper height
-          double aspectRatio = 16 / 9; // default
+          // Parse viewBox to derive aspect ratio
+          double aspectRatio = 16 / 9;
           final vbMatch = RegExp(
-            r'''viewBox=["']([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)["']''',
+            r'''viewBox=["']\s*([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s*["']''',
             caseSensitive: false,
-          ).firstMatch(cleanSvg);
+          ).firstMatch(_cachedSvg);
           if (vbMatch != null) {
             final w = double.tryParse(vbMatch.group(3) ?? '') ?? 0;
             final h = double.tryParse(vbMatch.group(4) ?? '') ?? 0;
             if (w > 0 && h > 0) {
-              aspectRatio = w / h;
-              // Cap extreme ratios
-              aspectRatio = aspectRatio.clamp(0.4, 4.0);
+              aspectRatio = (w / h).clamp(0.3, 5.0);
             }
           }
 
           final availWidth = constraints.maxWidth.isFinite
               ? constraints.maxWidth
-              : MediaQuery.of(context).size.width - 36;
-          final renderHeight = (availWidth / aspectRatio).clamp(200.0, 600.0);
+              : MediaQuery.of(context).size.width - 32;
+          final renderHeight = (availWidth / aspectRatio).clamp(180.0, 520.0);
 
-          return Container(
-            width: double.infinity,
-            height: renderHeight,
-            decoration: BoxDecoration(
-              color: const Color(0xFF0B1120),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            clipBehavior: Clip.hardEdge,
-            child: InteractiveViewer(
-              panEnabled: true,
-              scaleEnabled: true,
-              minScale: 0.5,
-              maxScale: 8.0,
-              child: SvgPicture.string(
-                cleanSvg,
-                width: availWidth,
-                height: renderHeight,
-                fit: BoxFit.contain,
-                alignment: Alignment.topCenter,
-                placeholderBuilder: (context) => const Center(
-                  child: CircularProgressIndicator(
-                    color: Color(0xFF6366F1), strokeWidth: 2,
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: SizedBox(
+              width: double.infinity,
+              height: renderHeight,
+              child: InteractiveViewer(
+                panEnabled: true,
+                scaleEnabled: true,
+                minScale: 0.5,
+                maxScale: 10.0,
+                child: SvgPicture.string(
+                  _cachedSvg,
+                  fit: BoxFit.contain,
+                  width: availWidth,
+                  height: renderHeight,
+                  placeholderBuilder: (_) => const Center(
+                    child: SizedBox(
+                      width: 24, height: 24,
+                      child: CircularProgressIndicator(
+                        color: Color(0xFF6366F1), strokeWidth: 2,
+                      ),
+                    ),
                   ),
                 ),
               ),
