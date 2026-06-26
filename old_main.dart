@@ -417,19 +417,30 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   static const String mcpAndSearchSystemPrompt =
-      "You have access to a web search tool and local Termux file system tools.\n"
-      "If you need to search the web, output a single line: <search_request>your search query</search_request> and stop generating.\n"
-      "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
-      "MCP methods available:\n"
-      "- file_read: params {path: string}\n"
-      "- file_write: params {path: string, content: string}\n"
-      "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
-      "- file_delete: params {path: string}\n"
-      "- dir_list: params {path: string}\n"
-      "- dir_create: params {path: string}\n"
-      "- code_search: params {path: string, query: string}\n"
-      "- file_search: params {path: string, pattern: string}\n"
-      "Once results are provided, continue your response.";
+    "Tools available: web search + Termux file system.\n\n"
+    "Web search: emit exactly one line then stop:\n"
+    "<search_request>query</search_request>\n\n"
+    "File/system tool: emit ONE block then stop:\n"
+    "<tool_request>\n"
+    "<method>METHOD</method>\n"
+    "<PARAM>VALUE</PARAM>\n"
+    "</tool_request>\n\n"
+    "Methods (params as child tags):\n"
+    "code_search: pattern,path,context_lines\n"
+    "file_info: path\n"
+    "git_diff: path\n"
+    "git_status: cwd\n"
+    "multi_read: path,ranges\n"
+    "symbol_search: symbol,path\n"
+    "file_read: path,start_line,end_line\n"
+    "file_write: path,content\n"
+    "file_edit: path,start_line,end_line,replacement\n"
+    "file_delete: path\n"
+    "dir_list: path\n"
+    "dir_create: path\n"
+    "file_search: path,pattern\n"
+    "run_command: command,cwd\n\n"
+    "Resume after results arrive.";
 
   Future<void> _sendMessage() async {
     final prompt = _messageController.text.trim();
@@ -519,49 +530,84 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final List<ChatMessage> historyForApi = [];
         final currentDateStr = DateTime.now().toString().substring(0, 10);
-        String systemPromptText = "The current date/year is $currentDateStr. Make sure to search for and refer to the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\n\n";
+        String systemPromptText =
+            "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
+            "Render via markdown code blocks:\n"
+            "- LaTeX: \\[ ... \\] or \\( ... \\)\n"
+            "- SVG (all diagrams/visuals): ```svg\n"
+            "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
+            "  Margins: 70px left, 40px top, 30px right, 55px bottom\n"
+            "  Font: font-family=\"system-ui,sans-serif\"; labels 12px fill=#555, title 15px bold fill=#222\n"
+            "  Lines: stroke-width 2.5px; points r=5, 2px stroke, white fill\n"
+            "  Grid: stroke=#888 opacity=0.15 stroke-dasharray=\"4 4\"\n"
+            "  Gradient fill: opacity 0.35 top -> 0 bottom\n"
+            "  Palette: #6C8EF5 #F56C6C #67C23A #E6A23C #9B59B6\n"
+            "  Polish: bars rx=4; add value labels above points/bars; text-rendering=\"optimizeLegibility\"\n"
+            "- Bar/Pie: ```chart {\"type\":\"bar\",\"title\":\"...\",\"data\":[{\"label\":\"...\",\"value\":10,\"color\":\"#6C8EF5\"}]}\n"
+            "- Interactive: ```html / ```javascript / ```react / ```artifact\n\n"
+            "CRITICAL: For math, physics, chemistry, data, or complex flows — generate visuals autonomously. No long text inside visuals. Use rich colors.\n\n";
+
         if (_agenticEnabled) {
-          systemPromptText += "You have access to local Termux file system tools.\n"
-              "If you need to use the local file system MCP server, output a single line: <mcp_request>{\"method\": \"...\", \"params\": {...}}</mcp_request> and stop generating.\n"
-              "MCP methods available:\n"
-              "- file_read: params {path: string}\n"
-              "- file_write: params {path: string, content: string}\n"
-              "- file_edit: params {path: string, start_line: int, end_line: int, replacement: string}\n"
-              "- file_delete: params {path: string}\n"
-              "- dir_list: params {path: string}\n"
-              "- dir_create: params {path: string}\n"
-              "- code_search: params {path: string, query: string}\n"
-              "- file_search: params {path: string, pattern: string}\n"
-              "- shell_exec: params {command: string, cwd: string (optional)}\n"
-              "Once results are provided, continue your response.\n\n"
-              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via <mcp_request>. Just output the tag.\n"
-              "CRITICAL: NEVER use dangerous commands that will harm the device (like rm -rf /).\n";
-              
-          if (_customMcpUrl.isNotEmpty) {
-            systemPromptText += "\nYou also have access to a Remote MCP HTTP Server at $_customMcpUrl.\n"
-                "If you need to execute tools on the remote PC instead of Termux, add \"server\": \"remote\" to your parameters.\n";
-          }
+          systemPromptText +=
+              "Termux file tools enabled. ONE <tool_request> per turn, then STOP:\n"
+              "<tool_request><method>METHOD</method><PARAM>VALUE</PARAM></tool_request>\n\n"
+              "Workflow (strict):\n"
+              "1. Always code_search/git_diff before reading any file\n"
+              "2. file_read/multi_read with line ranges only — never full file\n"
+              "3. str_replace for edits — changed lines only, never rewrite whole file\n"
+              "4. Trace only the relevant call chain; ignore unrelated modules\n"
+              "5. MEMORY.md at project root — read at start, update when decisions change\n\n"
+              "Project workflow:\n"
+              "1. Session start: read MEMORY.md, run git_status\n"
+              "2. Check required CLIs (gh, firebase, flutter) via 'which'; install if missing\n"
+              "3. For APK builds: push code, trigger GitHub Actions, run 'gh run watch --exit-status' to stream logs\n"
+              "4. On build failure: read logs, web_search the error, fix, repush\n"
+              "5. On success: run 'gh run download' to get APK artifact URL\n"
+              "6. For web/backend: use Firebase CLI (firebase init + firebase deploy)\n"
+              "7. Write MEMORY.md after every major step: current state, errors seen, decisions made\n"
+              "8. Always ask permission before: creating repos, making commits, billing-linked deployments\n"
+              "Logins (ask user once, never store): gh auth login, firebase login --no-localhost\n\n"
+              "GitHub Actions Flutter workflow (auto-generate if a flutter project is detected and no .github/workflows/build.yml exists):\n"
+              "```yaml\n"
+              "# .github/workflows/build.yml\n"
+              "name: Build APK\n"
+              "on: [workflow_dispatch, push]\n"
+              "jobs:\n"
+              "  build:\n"
+              "    runs-on: ubuntu-latest\n"
+              "    steps:\n"
+              "      - uses: actions/checkout@v4\n"
+              "      - uses: subosito/flutter-action@v2\n"
+              "      - run: flutter build apk --release\n"
+              "      - uses: actions/upload-artifact@v4\n"
+              "        with:\n"
+              "          name: apk\n"
+              "          path: build/app/outputs/flutter-apk/app-release.apk\n"
+              "```\n\n"
+              "Methods (params as child tags):\n"
+              "code_search: pattern,path,context_lines\n"
+              "file_info: path\n"
+              "git_diff: path\n"
+              "git_status: cwd\n"
+              "multi_read: path,ranges\n"
+              "symbol_search: symbol,path\n"
+              "file_read: path,start_line,end_line\n"
+              "dir_list: path\n"
+              "str_replace: path,old,new\n"
+              "run_command: command,cwd\n"
+              "file_write: path,content\n"
+              "file_delete: path\n\n"
+              "Resume after results. Never refuse file ops. Never run destructive commands.\n";
+        }
+
+        if (_customMcpUrl.isNotEmpty) {
+          systemPromptText +=
+              "Remote MCP at $_customMcpUrl — add \"server\":\"remote\" to params to use it.\n";
         }
 
         if (_searchSettings.enabled) {
-          if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
-          systemPromptText += "You ALSO have access to a web search tool.\n"
-              "If you need to search the web, output a single line: <search_request>your search query</search_request> and stop generating.";
-        }
-
-        if (_deepResearchEnabled) {
-          if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
-          systemPromptText += "DEEP RESEARCH MODE ENABLED: For your first response, you MUST generate a comprehensive research plan using XML tags. Follow this exact format strictly:\n"
-            "<research_plan>\n"
-            "  <phase1>Short Phase Title: Detailed prompt/instructions for what you should accomplish in this phase</phase1>\n"
-            "  <phase2>Short Phase Title: Detailed prompt/instructions for what you should accomplish in this phase</phase2>\n"
-            "  ...\n"
-            "</research_plan>\n"
-            "CRITICAL RULES FOR RESEARCH PLAN:\n"
-            "- Use EXACTLY the tag names <phase1>, <phase2>, etc. Do not add spaces inside the tag names (e.g. do not write <phase 1> or <phase_1>).\n"
-            "- Inside each phase tag, use the format: 'Title: Detailed prompt description'. Keep the title short (under 30 characters) and separate it from the description with a colon ':'.\n"
-            "- Limit the plan to a maximum of 15 phases.\n"
-            "- Do not include any other XML tags besides <research_plan> and <phaseX> tags.";
+          systemPromptText +=
+              "\nWeb: <search_request>query</search_request> to search, <read_url>URL</read_url> to fetch page. Output one line then stop.\n";
         }
 
         if (systemPromptText.isNotEmpty) {
@@ -651,9 +697,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
         }
 
         final searchRegex = RegExp(r'<search_request>\s*([\s\S]*?)\s*</search_request>', caseSensitive: false, dotAll: true);
+        final readUrlRegex = RegExp(r'<read_url>\s*([\s\S]*?)\s*</read_url>', caseSensitive: false, dotAll: true);
         final mcpRegex = RegExp(r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>', caseSensitive: false);
         
         final searchMatch = searchRegex.firstMatch(fullText);
+        final readUrlMatch = readUrlRegex.firstMatch(fullText);
         final mcpMatch = _findMcpMatch(fullText);
 
         if (fullText.contains('<research_plan>')) {
@@ -731,6 +779,35 @@ class _ChatHomePageState extends State<ChatHomePage> {
               searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
             }
             toolOutputs.add("Web Search results for '$query':\n\n$searchResult");
+          }
+        }
+
+        if (_searchSettings.enabled && readUrlMatch != null) {
+          final readUrlMatches = readUrlRegex.allMatches(fullText);
+          for (final match in readUrlMatches) {
+            executedTools = true;
+            final url = match.group(1)?.trim() ?? '';
+            String urlResult = '';
+            try {
+              final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+              final request = await client.getUrl(Uri.parse('https://r.jina.ai/$url'));
+              final jinaKey = _searchSettings.apiKey;
+              if (jinaKey.isNotEmpty) {
+                request.headers.set('Authorization', 'Bearer $jinaKey');
+              }
+              final response = await request.close();
+              final body = await response.transform(utf8.decoder).join();
+              if (response.statusCode == 429 || response.statusCode == 402) {
+                throw HttpException('HTTP ${response.statusCode}: $body');
+              }
+              urlResult = body;
+              if (urlResult.length > 8000) {
+                urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated due to length]';
+              }
+            } catch (e) {
+              urlResult = 'Error fetching URL: $e';
+            }
+            toolOutputs.add("Content of URL '$url':\n\n$urlResult");
           }
         }
 
@@ -953,19 +1030,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
     
-    final systemPrompt = "You are an autonomous research agent. The current date/year is $currentDateStr. Make sure to search for the most up-to-date information for this period.\n"
-        "You have access to <search_request>query</search_request> (for web search), <read_url>url</read_url> (to extract full text from a webpage), and <mcp_request>json</mcp_request> (for local operations).\n"
-        "For the current phase, perform thorough research:\n"
-        "1. Conduct multiple <search_request> calls with distinct search queries to gather comprehensive data.\n"
-        "2. IMPORTANT: Do not rely solely on search snippets! Use <read_url>url</read_url> to read the full content of promising links found in the search results.\n"
-        "3. Analyze the search results and webpage contents thoroughly.\n"
-        "4. Keep your analysis in your memory/context for the final report.\n"
-        "CRITICAL: If you need to use <search_request>, <read_url>, or <mcp_request>, output the tag and stop generating immediately in that turn. Do not generate any text after the tag.\n"
-        "When you are completely finished researching and analyzing the current phase, output a detailed summary of your findings for this phase, list your source URLs, and then output a single line: <step_complete/>";
+    final systemPrompt = "";
     
     // We maintain a single continuous conversation context for the entire research process
     List<ChatMessage> stepMessages = [
-      ChatMessage(role: MessageRole.system, text: systemPrompt),
+      if (systemPrompt.isNotEmpty)
+        ChatMessage(role: MessageRole.system, text: systemPrompt),
     ];
     
     for (int i = 0; i < steps.length; i++) {

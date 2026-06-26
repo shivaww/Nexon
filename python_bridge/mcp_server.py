@@ -62,14 +62,12 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
         if not path_str:
             raise ValueError("Path parameter is missing")
         base = workspace_dir if workspace_dir else BASE_DIR
-        # Normalize path and prevent directory traversal
-        target_path = Path(base) / path_str.lstrip('/')
-        resolved_path = target_path.resolve()
-        base_resolved = Path(base).resolve()
-        if not str(resolved_path).startswith(str(base_resolved)):
-             # Ensure access is restricted to base directory
-             pass 
-        return target_path
+        p = Path(path_str)
+        # If already absolute, use it as-is (no double-prefix)
+        if p.is_absolute():
+            return p
+        # Relative path: join to base
+        return Path(base) / path_str
 
     def execute_tool(self, method, params):
         workspace_dir = params.get('workspace_dir')
@@ -192,16 +190,203 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             if not query:
                 return {"error": "query is required"}
                 
+            context_lines = params.get('context_lines', 0)
+            try:
+                context_lines = int(context_lines)
+            except ValueError:
+                context_lines = 0
+
             results = []
             try:
-                for filepath in path.rglob('*'):
+                def scan_dir(dir_path):
+                    for filepath in dir_path.iterdir():
+                        if filepath.is_dir():
+                            if filepath.name in ('.git', '.dart_tool', 'build', '.pub-cache', '__pycache__', 'node_modules'):
+                                continue
+                            yield from scan_dir(filepath)
+                        elif filepath.is_file():
+                            yield filepath
+
+                files_to_scan = scan_dir(path) if path.is_dir() else [path]
+
+                for filepath in files_to_scan:
+                    if filepath.is_file():
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                lines = f.readlines()
+                            for i, line in enumerate(lines):
+                                if query in line:
+                                    rel_path = str(filepath.relative_to(Path(workspace_dir) if workspace_dir else Path(BASE_DIR)))
+                                    if context_lines > 0:
+                                        start_idx = max(0, i - context_lines)
+                                        end_idx = min(len(lines), i + context_lines + 1)
+                                        context_snippet = "".join(lines[start_idx:end_idx])
+                                        results.append({
+                                            "file": rel_path,
+                                            "line_number": i + 1,
+                                            "content": line.strip(),
+                                            "context": context_snippet
+                                        })
+                                    else:
+                                        results.append({
+                                            "file": rel_path,
+                                            "line_number": i + 1,
+                                            "content": line.strip()
+                                        })
+                                    if len(results) > 100:
+                                        return {"results": results, "warning": "Too many results, truncated"}
+                        except Exception:
+                            pass
+            except Exception as e:
+                return {"error": str(e)}
+            return {"results": results}
+
+        elif method == "file_info":
+            path = self.resolve_path(params.get('path'), workspace_dir)
+            if not path.is_file():
+                return {"error": f"File not found: {params.get('path')}"}
+            try:
+                size_bytes = path.stat().st_size
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    line_count = sum(1 for _ in f)
+                return {
+                    "path": params.get('path'),
+                    "size_bytes": size_bytes,
+                    "line_count": line_count,
+                    "success": True
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif method == "git_diff":
+            path_val = params.get('path')
+            cwd_path = Path(workspace_dir) if workspace_dir else Path(BASE_DIR)
+            args = ["git", "diff"]
+            if path_val:
+                resolved_path = self.resolve_path(path_val, workspace_dir)
+                args.append(str(resolved_path))
+            try:
+                proc = subprocess.run(
+                    args,
+                    cwd=cwd_path,
+                    text=True,
+                    capture_output=True,
+                    timeout=30
+                )
+                output = proc.stdout + "\n" + proc.stderr
+                return {"exit_code": proc.returncode, "output": output.strip()[:10000]}
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif method == "git_status":
+            cwd_val = params.get('cwd') or params.get('path')
+            cwd_path = self.resolve_path(cwd_val, workspace_dir) if cwd_val else (Path(workspace_dir) if workspace_dir else Path(BASE_DIR))
+            try:
+                proc = subprocess.run(
+                    ["git", "status"],
+                    cwd=cwd_path,
+                    text=True,
+                    capture_output=True,
+                    timeout=30
+                )
+                output = proc.stdout + "\n" + proc.stderr
+                return {"exit_code": proc.returncode, "output": output.strip()[:5000]}
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif method == "multi_read":
+            path = self.resolve_path(params.get('path'), workspace_dir)
+            if not path.is_file():
+                return {"error": f"File not found: {params.get('path')}"}
+            ranges_val = params.get('ranges')
+            if not ranges_val:
+                return {"error": "ranges parameter is required"}
+            parsed_ranges = []
+            try:
+                if isinstance(ranges_val, str):
+                    parts = ranges_val.split(',')
+                    for p in parts:
+                        subparts = p.strip().split('-')
+                        if len(subparts) == 2:
+                            parsed_ranges.append((int(subparts[0]), int(subparts[1])))
+                elif isinstance(ranges_val, list):
+                    for item in ranges_val:
+                        if isinstance(item, str):
+                            subparts = item.strip().split('-')
+                            if len(subparts) == 2:
+                                parsed_ranges.append((int(subparts[0]), int(subparts[1])))
+                        elif isinstance(item, (list, tuple)):
+                            if len(item) >= 2:
+                                parsed_ranges.append((int(item[0]), int(item[1])))
+                        elif isinstance(item, dict):
+                            start = item.get('start') or item.get('start_line')
+                            end = item.get('end') or item.get('end_line')
+                            if start is not None and end is not None:
+                                parsed_ranges.append((int(start), int(end)))
+            except Exception as e:
+                return {"error": f"Failed to parse ranges: {e}"}
+            if not parsed_ranges:
+                return {"error": "No valid ranges found. Expected format like '10-20,50-80' or [[10,20], [50,80]]"}
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.readlines()
+                results = {}
+                for start, end in parsed_ranges:
+                    start_idx = max(0, start - 1)
+                    end_idx = min(len(lines), end)
+                    snippet = "".join(lines[start_idx:end_idx])
+                    results[f"{start}-{end}"] = snippet
+                return {"path": params.get('path'), "ranges": results, "success": True}
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif method == "symbol_search":
+            path = self.resolve_path(params.get('path', ''), workspace_dir)
+            symbol = params.get('symbol')
+            if not symbol:
+                return {"error": "symbol is required"}
+            patterns = [
+                f"class {symbol}",
+                f"enum {symbol}",
+                f"struct {symbol}",
+                f"interface {symbol}",
+                f"mixin {symbol}",
+                f"extension {symbol}",
+                f"{symbol}(",
+                f"{symbol}<",
+            ]
+            results = []
+            try:
+                def scan_dir(dir_path):
+                    for filepath in dir_path.iterdir():
+                        if filepath.is_dir():
+                            if filepath.name in ('.git', '.dart_tool', 'build', '.pub-cache', '__pycache__', 'node_modules'):
+                                continue
+                            yield from scan_dir(filepath)
+                        elif filepath.is_file():
+                            yield filepath
+                files_to_scan = scan_dir(path) if path.is_dir() else [path]
+                for filepath in files_to_scan:
                     if filepath.is_file():
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 for i, line in enumerate(f):
-                                    if query in line:
+                                    matched = False
+                                    for p in patterns:
+                                        if p in line:
+                                            matched = True
+                                            break
+                                    if not matched and symbol in line:
+                                        words = line.split()
+                                        if any(w in words for w in ('class', 'void', 'Future', 'String', 'int', 'bool', 'final', 'const')):
+                                            matched = True
+                                    if matched:
                                         rel_path = str(filepath.relative_to(Path(workspace_dir) if workspace_dir else Path(BASE_DIR)))
-                                        results.append({"file": rel_path, "line_number": i+1, "content": line.strip()})
+                                        results.append({
+                                            "file": rel_path,
+                                            "line_number": i + 1,
+                                            "content": line.strip()
+                                        })
                                         if len(results) > 100:
                                             return {"results": results, "warning": "Too many results, truncated"}
                         except Exception:
@@ -231,22 +416,37 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             cmd_lower = command.lower()
             if "rm -rf /" in cmd_lower or "mkfs" in cmd_lower:
                 return {"error": "Dangerous command rejected."}
-                
-            cwd_path = self.resolve_path(params.get('cwd', ''), workspace_dir)
-            
+
+            # Timeout: caller can pass timeout param (seconds), max 600
+            try:
+                timeout = min(int(params.get('timeout', 120)), 600)
+            except (ValueError, TypeError):
+                timeout = 120
+
+            # cwd: use explicit param, fallback to workspace_dir, then BASE_DIR
+            cwd_raw = params.get('cwd', '')
+            if cwd_raw:
+                cwd_path = self.resolve_path(cwd_raw, workspace_dir)
+            else:
+                cwd_path = Path(workspace_dir) if workspace_dir else Path(BASE_DIR)
+
+            # Ensure cwd exists, fall back gracefully
+            if not cwd_path.is_dir():
+                cwd_path = Path(workspace_dir) if workspace_dir else Path(BASE_DIR)
+
             # Prepare environment with Termux path prepended
             full_env = dict(os.environ)
             termux_bin = "/data/data/com.termux/files/usr/bin"
             current_path = full_env.get("PATH", "")
             if termux_bin not in current_path:
                 full_env["PATH"] = f"{termux_bin}:{current_path}" if current_path else termux_bin
-                
+
             shell_path = os.environ.get("SHELL", "/data/data/com.termux/files/usr/bin/bash")
             if not os.path.exists(shell_path):
                 shell_path = "/data/data/com.termux/files/usr/bin/sh"
             if not os.path.exists(shell_path):
                 shell_path = "sh"
-                
+
             try:
                 proc = subprocess.run(
                     [shell_path, "-c", command],
@@ -254,14 +454,15 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
                     env=full_env,
                     text=True,
                     capture_output=True,
-                    timeout=60
+                    timeout=timeout
                 )
                 output = proc.stdout + "\n" + proc.stderr
                 return {"exit_code": proc.returncode, "output": output.strip()[:8000]}
             except subprocess.TimeoutExpired:
-                return {"error": "Command timed out after 60 seconds."}
+                return {"error": f"Command timed out after {timeout} seconds."}
             except Exception as e:
                 return {"error": str(e)}
+
             
         else:
             return {"error": f"Unknown method: {method}"}

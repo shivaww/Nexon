@@ -153,6 +153,9 @@ class TermuxForgeBridge:
         r.register("edit_file", self._edit_file)
         r.register("list_files", self._list_files)
         r.register("search_files", self._search_files)
+        r.register("file_info", self._file_info)
+        r.register("multi_read", self._multi_read)
+        r.register("symbol_search", self._symbol_search)
 
         # ── Git operations ────────────────────────────────────────────
         r.register("git_status", self._git_status)
@@ -367,6 +370,134 @@ class TermuxForgeBridge:
                     "content": parts[2].strip(),
                 })
         return {"query": query, "matches": matches, "count": len(matches)}
+
+    async def _file_info(self, path: str) -> dict:
+        """Get file info: size and line count."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            p = Path(path)
+            if not p.is_file():
+                raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, f"File not found: {path}")
+            size_bytes = p.stat().st_size
+            with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+                line_count = sum(1 for _ in f)
+            return {
+                "path": path,
+                "size_bytes": size_bytes,
+                "line_count": line_count,
+                "success": True,
+            }
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _multi_read(self, path: str, ranges: list | str) -> dict:
+        """Batch N line ranges in one call."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            p = Path(path)
+            if not p.is_file():
+                raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, f"File not found: {path}")
+            
+            parsed_ranges = []
+            if isinstance(ranges, str):
+                parts = ranges.split(',')
+                for part in parts:
+                    subparts = part.strip().split('-')
+                    if len(subparts) == 2:
+                        parsed_ranges.append((int(subparts[0]), int(subparts[1])))
+            elif isinstance(ranges, list):
+                for item in ranges:
+                    if isinstance(item, str):
+                        subparts = item.strip().split('-')
+                        if len(subparts) == 2:
+                            parsed_ranges.append((int(subparts[0]), int(subparts[1])))
+                    elif isinstance(item, (list, tuple)):
+                        if len(item) >= 2:
+                            parsed_ranges.append((int(item[0]), int(item[1])))
+                    elif isinstance(item, dict):
+                        start = item.get('start') or item.get('start_line')
+                        end = item.get('end') or item.get('end_line')
+                        if start is not None and end is not None:
+                            parsed_ranges.append((int(start), int(end)))
+                            
+            if not parsed_ranges:
+                raise JsonRpcError(ErrorCode.INVALID_PARAMS, "No valid ranges specified.")
+                
+            with open(p, 'r', encoding='utf-8', errors='replace') as f:
+                lines = f.readlines()
+                
+            results = {}
+            for start, end in parsed_ranges:
+                start_idx = max(0, start - 1)
+                end_idx = min(len(lines), end)
+                snippet = "".join(lines[start_idx:end_idx])
+                results[f"{start}-{end}"] = snippet
+                
+            return {"path": path, "ranges": results, "success": True}
+        except JsonRpcError:
+            raise
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _symbol_search(self, symbol: str, path: str = DEFAULT_CWD) -> dict:
+        """Search for class/function definitions for a symbol."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            p = Path(path)
+            patterns = [
+                f"class {symbol}",
+                f"enum {symbol}",
+                f"struct {symbol}",
+                f"interface {symbol}",
+                f"mixin {symbol}",
+                f"extension {symbol}",
+                f"{symbol}(",
+                f"{symbol}<",
+            ]
+            
+            results = []
+            def scan_dir(dir_path):
+                for filepath in dir_path.iterdir():
+                    if filepath.is_dir():
+                        if filepath.name in ('.git', '.dart_tool', 'build', '.pub-cache', '__pycache__', 'node_modules'):
+                            continue
+                        yield from scan_dir(filepath)
+                    elif filepath.is_file():
+                        yield filepath
+
+            files_to_scan = scan_dir(p) if p.is_dir() else [p]
+            for filepath in files_to_scan:
+                if filepath.is_file():
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            for i, line in enumerate(f):
+                                matched = False
+                                for pattern in patterns:
+                                    if pattern in line:
+                                        matched = True
+                                        break
+                                if not matched and symbol in line:
+                                    words = line.split()
+                                    if any(w in words for w in ('class', 'void', 'Future', 'String', 'int', 'bool', 'final', 'const')):
+                                        matched = True
+                                if matched:
+                                    results.append({
+                                        "file": str(filepath),
+                                        "line_number": i + 1,
+                                        "content": line.strip()
+                                    })
+                                    if len(results) > 100:
+                                        break
+                        if len(results) > 100:
+                            break
+                    except Exception:
+                        pass
+            return {"symbol": symbol, "results": results, "count": len(results)}
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     # ── Git operations ────────────────────────────────────────────────
 

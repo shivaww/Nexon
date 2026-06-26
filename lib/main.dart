@@ -84,6 +84,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   String _agenticWorkspace = '/data/data/com.termux/files/home';
   String _customMcpUrl = '';
   bool _deepResearchEnabled = false;
+  String _toolStatus = ''; // live tool status shown in UI banner
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -304,7 +305,76 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
+    // Auto-generate GitHub Actions workflow if Flutter project detected
+    _ensureFlutterWorkflow(_agenticWorkspace);
   }
+
+  /// Auto-generates .github/workflows/build.yml for Flutter projects.
+  /// Safe: never overwrites an existing workflow file.
+  Future<void> _ensureFlutterWorkflow(String workspace) async {
+    try {
+      final dir = Directory(workspace);
+      if (!dir.existsSync()) return;
+      // Detect Flutter project
+      final pubspec = File('$workspace/pubspec.yaml');
+      if (!pubspec.existsSync()) return;
+      final pubContent = pubspec.readAsStringSync();
+      if (!pubContent.contains('flutter:')) return;
+
+      final workflowDir = Directory('$workspace/.github/workflows');
+      final workflowFile = File('${workflowDir.path}/build.yml');
+      if (workflowFile.existsSync()) return; // never overwrite
+
+      workflowDir.createSync(recursive: true);
+
+      // Extract app name from pubspec
+      String appName = 'app';
+      final nameMatch = RegExp(r'^name:\s*(.+)$', multiLine: true).firstMatch(pubContent);
+      if (nameMatch != null) appName = nameMatch.group(1)!.trim();
+
+      const workflow = '''name: Build Flutter APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: dart analyze --fatal-infos || true
+
+      - name: Build APK (release)
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
+''';
+      workflowFile.writeAsStringSync(workflow);
+      debugPrint('[Forge] Auto-generated .github/workflows/build.yml for $appName');
+    } catch (e) {
+      debugPrint('[Forge] Workflow auto-gen failed: $e');
+    }
+  }
+
 
   Future<void> _selectProvider(String providerId) async {
     setState(() {
@@ -422,26 +492,30 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   static const String mcpAndSearchSystemPrompt =
-      "You have access to a web search tool and local Termux file system tools.\n"
-      "If you need to search the web, output a single line: <search_request>your search query</search_request> and stop generating.\n"
-      "If you need to use the local file system tools, use XML tags. Output a SINGLE <tool_request> block per turn and STOP generating.\n"
-      "Example format:\n"
-      "<tool_request>\n"
-      "<method>code_search</method>\n"
-      "<query>Error: foo</query>\n"
-      "<path>lib/</path>\n"
-      "</tool_request>\n\n"
-      "Available methods and parameters (provide parameters as child XML tags):\n"
-      "- file_read: <path>, <start_line>, <end_line>\n"
-      "- file_write: <path>, <content>\n"
-      "- file_edit: <path>, <start_line>, <end_line>, <replacement>\n"
-      "- file_delete: <path>\n"
-      "- dir_list: <path>\n"
-      "- dir_create: <path>\n"
-      "- code_search: <path>, <query>\n"
-      "- file_search: <path>, <pattern>\n"
-      "- run_command: <command>, <cwd>\n"
-      "Once results are provided, continue your response.";
+    "Tools available: web search + Termux file system.\n\n"
+    "Web search: emit exactly one line then stop:\n"
+    "<search_request>query</search_request>\n\n"
+    "File/system tool: emit ONE block then stop:\n"
+    "<tool_request>\n"
+    "<method>METHOD</method>\n"
+    "<PARAM>VALUE</PARAM>\n"
+    "</tool_request>\n\n"
+    "Methods (params as child tags):\n"
+    "code_search: pattern,path,context_lines\n"
+    "file_info: path\n"
+    "git_diff: path\n"
+    "git_status: cwd\n"
+    "multi_read: path,ranges\n"
+    "symbol_search: symbol,path\n"
+    "file_read: path,start_line,end_line\n"
+    "file_write: path,content\n"
+    "file_edit: path,start_line,end_line,replacement\n"
+    "file_delete: path\n"
+    "dir_list: path\n"
+    "dir_create: path\n"
+    "file_search: path,pattern\n"
+    "run_command: command,cwd\n\n"
+    "Resume after results arrive.";
 
   Future<void> _sendMessage() async {
     final prompt = _messageController.text.trim();
@@ -531,73 +605,84 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
         final List<ChatMessage> historyForApi = [];
         final currentDateStr = DateTime.now().toString().substring(0, 10);
-        String systemPromptText = "The current date/year is $currentDateStr. Make sure to search for and refer to the most up-to-date information for this period (e.g. current year 2026 data, rather than outdated 2025 or earlier data unless requested).\\n\\n"
-            "You have powerful visual rendering capabilities! You can render the following blocks by outputting standard markdown code blocks:\\n"
-            "- Mathematical equations using LaTeX: `\\\\[ ... \\\\]` or `\\\\( ... \\\\)`.\\n"
-            "- SVG Graphics (Use this for ALL diagrams and visuals): ```svg\n"
-            "  CRITICAL SVG MOBILE DESIGN RULES:\n"
-            "  1. Root: ALWAYS set width=\\\"100%\\\" and a tall height (e.g. 400px or 500px). NEVER use fixed pixel widths like 600px, they will get clipped.\n"
-            "  2. Padding: Add generous inner margins (at least 60px left for y-axis labels, 40px top, 40px right, 50px bottom). Do not squeeze the chart.\n"
-            "  3. Font Sizes: Axis labels MUST be 11-12px, Titles 14-16px. Smaller fonts are unreadable on mobile screens.\n"
-            "  4. Lines & Points: Stroke width of 2-2.5px on lines. Data point circles MUST be r=\\\"4\\\" with a 2px stroke. Do not make them too thin.\n"
-            "  5. Grid Lines: Use opacity=\\\"0.15\\\" or 0.2 for grid lines so they don't compete with data.\n"
-            "  6. Gradients: Use a <linearGradient> from opacity 0.4 at the top to opacity 0 at the bottom to give depth without being heavy.\n"
-            "- Native Charts (Bar/Pie): ```chart with JSON data (e.g., {\\\"type\\\": \\\"bar\\\", \\\"title\\\": \\\"...\\\", \\\"data\\\": [{\\\"label\\\": \\\"...\\\", \\\"value\\\": 10, \\\"color\\\": \\\"#FF5555\\\"}]})\n"
-            "- Interactive HTML/JS Web Apps: ```html or ```javascript or ```react or ```artifact\n"
-            "CRITICAL: Whenever explaining Math, Physics, Chemistry, Data, or complex flows, AUTONOMOUSLY DECIDE to generate these visuals. Do NOT wait for the user to ask for them. Always enhance their understanding with charts or SVGs when helpful. Keep visuals clean and minimal: DO NOT put long text or explanations inside the visual itself (use the normal chat text for explanations). You may use rich, beautiful colors to enhance the visual experience.\n\n";
+        String systemPromptText =
+            "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
+            "Render via markdown code blocks:\n"
+            "- LaTeX: \\[ ... \\] or \\( ... \\)\n"
+            "- SVG (all diagrams/visuals): ```svg\n"
+            "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
+            "  Margins: 70px left, 40px top, 30px right, 55px bottom\n"
+            "  Font: font-family=\"system-ui,sans-serif\"; labels 12px fill=#555, title 15px bold fill=#222\n"
+            "  Lines: stroke-width 2.5px; points r=5, 2px stroke, white fill\n"
+            "  Grid: stroke=#888 opacity=0.15 stroke-dasharray=\"4 4\"\n"
+            "  Gradient fill: opacity 0.35 top -> 0 bottom\n"
+            "  Palette: #6C8EF5 #F56C6C #67C23A #E6A23C #9B59B6\n"
+            "  Polish: bars rx=4; add value labels above points/bars; text-rendering=\"optimizeLegibility\"\n"
+            "- Bar/Pie: ```chart {\"type\":\"bar\",\"title\":\"...\",\"data\":[{\"label\":\"...\",\"value\":10,\"color\":\"#6C8EF5\"}]}\n"
+            "- Interactive: ```html / ```javascript / ```react / ```artifact\n\n"
+            "CRITICAL: For math, physics, chemistry, data, or complex flows — generate visuals autonomously. No long text inside visuals. Use rich colors.\n\n";
+
         if (_agenticEnabled) {
-          systemPromptText += "You have access to local Termux file system tools.\n"
-              "If you need to use the local file system tools, use XML tags. Output a SINGLE <tool_request> block per turn and STOP generating.\n"
-              "Example format:\n"
-              "<tool_request>\n"
-              "<method>code_search</method>\n"
-              "<query>Error: foo</query>\n"
-              "<path>lib/</path>\n"
-              "</tool_request>\n\n"
-              "CRITICAL TOKEN SAVING WORKFLOW:\n"
-              "1. Symbol/AST Indexing & Dependency Tracing: Parse every file mentally. When a bug is suspected, look up the symbol and trace only that call chain. Ignore unrelated modules entirely.\n"
-              "2. Grep/Regex Search (Before reading): Before touching any file, ALWAYS search for the error string, function, or variable using 'code_search'. Returns file:line hits only. Then read just those ranges.\n"
-              "3. Chunked File Reading with Line Ranges: Read ONLY 20-80 lines around the hit using 'file_read' (with <start_line> and <end_line>). NEVER read the whole file. This is the biggest token saver.\n"
-              "4. Vector Embedding + Semantic Search (RAG): If applicable, embed the bug description, retrieve top-k relevant chunks by cosine similarity. No full file read.\n"
-              "5. Diff/Patch Writing: Use 'str_replace' to surgically edit files. Send only the changed lines, massive token reduction on writes.\n"
-              "6. Project Memory: Maintain a 'MEMORY.md' file in the project root. Read it via 'file_read' at the start to load context. Update it via 'str_replace' or 'file_write' when new patterns/decisions are made.\n\n"
-              "The minimal tool set you need (provide parameters as child XML tags):\n"
-              "- code_search: <pattern>, <path> (grep across repo, returns file:line hits)\n"
-              "- file_read: <path>, <start_line>, <end_line> (line-range read, massive token saver)\n"
-              "- dir_list: <path> (structure awareness)\n"
-              "- str_replace: <path>, <old>, <new> (surgical edit)\n"
-              "- run_command: <command>, <cwd> (lint/test to verify fix)\n"
-              "- file_write: <path>, <content> (only for new files)\n"
-              "- file_delete: <path>\n"
-              "Once results are provided, continue your response.\n\n"
-              "CRITICAL: Do NOT refuse to create or edit files. You are fully capable of doing this via <tool_request>. Just output the tag.\n"
-              "CRITICAL: NEVER use dangerous commands that will harm the device (like rm -rf /).\n";
-              
-          if (_customMcpUrl.isNotEmpty) {
-            systemPromptText += "\nYou also have access to a Remote MCP HTTP Server at $_customMcpUrl.\n"
-                "If you need to execute tools on the remote PC instead of Termux, add \"server\": \"remote\" to your parameters.\n";
-          }
+          systemPromptText +=
+              "Termux file tools enabled. ONE <tool_request> per turn, then STOP:\n"
+              "<tool_request><method>METHOD</method><PARAM>VALUE</PARAM></tool_request>\n\n"
+              "Workflow (strict):\n"
+              "1. Always code_search/git_diff before reading any file\n"
+              "2. file_read/multi_read with line ranges only — never full file\n"
+              "3. str_replace for edits — changed lines only, never rewrite whole file\n"
+              "4. Trace only the relevant call chain; ignore unrelated modules\n"
+              "5. MEMORY.md at project root — read at start, update when decisions change\n\n"
+              "Project workflow:\n"
+              "1. Session start: read MEMORY.md, run git_status\n"
+              "2. Check required CLIs (gh, firebase, flutter) via 'which'; install if missing\n"
+              "3. For APK builds: push code, trigger GitHub Actions, run 'gh run watch --exit-status' to stream logs\n"
+              "4. On build failure: read logs, web_search the error, fix, repush\n"
+              "5. On success: run 'gh run download' to get APK artifact URL\n"
+              "6. For web/backend: use Firebase CLI (firebase init + firebase deploy)\n"
+              "7. Write MEMORY.md after every major step: current state, errors seen, decisions made\n"
+              "8. Always ask permission before: creating repos, making commits, billing-linked deployments\n"
+              "Logins (ask user once, never store): gh auth login, firebase login --no-localhost\n\n"
+              "GitHub Actions Flutter workflow (auto-generate if a flutter project is detected and no .github/workflows/build.yml exists):\n"
+              "```yaml\n"
+              "# .github/workflows/build.yml\n"
+              "name: Build APK\n"
+              "on: [workflow_dispatch, push]\n"
+              "jobs:\n"
+              "  build:\n"
+              "    runs-on: ubuntu-latest\n"
+              "    steps:\n"
+              "      - uses: actions/checkout@v4\n"
+              "      - uses: subosito/flutter-action@v2\n"
+              "      - run: flutter build apk --release\n"
+              "      - uses: actions/upload-artifact@v4\n"
+              "        with:\n"
+              "          name: apk\n"
+              "          path: build/app/outputs/flutter-apk/app-release.apk\n"
+              "```\n\n"
+              "Methods (params as child tags):\n"
+              "code_search: pattern,path,context_lines\n"
+              "file_info: path\n"
+              "git_diff: path\n"
+              "git_status: cwd\n"
+              "multi_read: path,ranges\n"
+              "symbol_search: symbol,path\n"
+              "file_read: path,start_line,end_line\n"
+              "dir_list: path\n"
+              "str_replace: path,old,new\n"
+              "run_command: command,cwd\n"
+              "file_write: path,content\n"
+              "file_delete: path\n\n"
+              "Resume after results. Never refuse file ops. Never run destructive commands.\n";
+        }
+
+        if (_customMcpUrl.isNotEmpty) {
+          systemPromptText +=
+              "Remote MCP at $_customMcpUrl — add \"server\":\"remote\" to params to use it.\n";
         }
 
         if (_searchSettings.enabled) {
-          if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
-          systemPromptText += "You ALSO have access to a web search tool.\n"
-              "If you need to search the web, output a single line: <search_request>your search query</search_request> and stop generating.";
-        }
-
-        if (_deepResearchEnabled) {
-          if (systemPromptText.isNotEmpty) systemPromptText += "\n\n";
-          systemPromptText += "DEEP RESEARCH MODE ENABLED: For your first response, you MUST generate a comprehensive research plan using XML tags. Follow this exact format strictly:\n"
-            "<research_plan>\n"
-            "  <phase1>Short Phase Title: Detailed prompt/instructions for what you should accomplish in this phase</phase1>\n"
-            "  <phase2>Short Phase Title: Detailed prompt/instructions for what you should accomplish in this phase</phase2>\n"
-            "  ...\n"
-            "</research_plan>\n"
-            "CRITICAL RULES FOR RESEARCH PLAN:\n"
-            "- Use EXACTLY the tag names <phase1>, <phase2>, etc. Do not add spaces inside the tag names (e.g. do not write <phase 1> or <phase_1>).\n"
-            "- Inside each phase tag, use the format: 'Title: Detailed prompt description'. Keep the title short (under 30 characters) and separate it from the description with a colon ':'.\n"
-            "- Limit the plan to a maximum of 15 phases.\n"
-            "- Do not include any other XML tags besides <research_plan> and <phaseX> tags.";
+          systemPromptText +=
+              "\nWeb: <search_request>query</search_request> to search, <read_url>URL</read_url> to fetch page. Output one line then stop.\n";
         }
 
         if (systemPromptText.isNotEmpty) {
@@ -687,9 +772,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
         }
 
         final searchRegex = RegExp(r'<search_request>\s*([\s\S]*?)\s*</search_request>', caseSensitive: false, dotAll: true);
+        final readUrlRegex = RegExp(r'<read_url>\s*([\s\S]*?)\s*</read_url>', caseSensitive: false, dotAll: true);
         final mcpRegex = RegExp(r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>', caseSensitive: false);
         
         final searchMatch = searchRegex.firstMatch(fullText);
+        final readUrlMatch = readUrlRegex.firstMatch(fullText);
         final mcpMatch = _findMcpMatch(fullText);
 
         if (fullText.contains('<research_plan>')) {
@@ -755,18 +842,52 @@ class _ChatHomePageState extends State<ChatHomePage> {
           for (final match in searchMatches) {
             executedTools = true;
             final query = match.group(1)?.trim() ?? '';
+            if (mounted) setState(() => _toolStatus = '🔍 Searching: "$query"');
             final searchResultRaw = await _chatClient.searchWeb(
               query,
               _searchSettings.provider,
               [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
               googleCx: _searchSettings.googleCx,
             );
+            if (mounted) setState(() => _toolStatus = '');
             
             String searchResult = searchResultRaw;
             if (searchResult.length > 4000) {
               searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
             }
             toolOutputs.add("Web Search results for '$query':\n\n$searchResult");
+          }
+        }
+
+        if (_searchSettings.enabled && readUrlMatch != null) {
+          final readUrlMatches = readUrlRegex.allMatches(fullText);
+          for (final match in readUrlMatches) {
+            executedTools = true;
+            final url = match.group(1)?.trim() ?? '';
+            final shortUrl = url.length > 50 ? '${url.substring(0, 47)}…' : url;
+            if (mounted) setState(() => _toolStatus = '🌐 Fetching: $shortUrl');
+            String urlResult = '';
+            try {
+              final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+              final request = await client.getUrl(Uri.parse('https://r.jina.ai/$url'));
+              final jinaKey = _searchSettings.apiKey;
+              if (jinaKey.isNotEmpty) {
+                request.headers.set('Authorization', 'Bearer $jinaKey');
+              }
+              final response = await request.close();
+              final body = await response.transform(utf8.decoder).join();
+              if (response.statusCode == 429 || response.statusCode == 402) {
+                throw HttpException('HTTP ${response.statusCode}: $body');
+              }
+              urlResult = body;
+              if (urlResult.length > 8000) {
+                urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated due to length]';
+              }
+            } catch (e) {
+              urlResult = 'Error fetching URL: $e';
+            }
+            if (mounted) setState(() => _toolStatus = '');
+            toolOutputs.add("Content of URL '$url':\n\n$urlResult");
           }
         }
 
@@ -778,23 +899,29 @@ class _ChatHomePageState extends State<ChatHomePage> {
             jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
             
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
+            String toolMethod = 'tool';
+            Map<String, dynamic> toolParams = {};
             try {
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
-              final params = parsed['params'] as Map<String, dynamic>? ?? {};
+              toolMethod = parsed['method']?.toString() ?? 'tool';
+              toolParams = parsed['params'] as Map<String, dynamic>? ?? {};
               
-              if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
+              if (toolParams['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
                 mcpEndpoint = _customMcpUrl;
-                params.remove('server');
+                toolParams.remove('server');
               }
               
-              params['workspace_dir'] = _agenticWorkspace;
-              parsed['params'] = params;
+              toolParams['workspace_dir'] = _agenticWorkspace;
+              parsed['params'] = toolParams;
               jsonString = jsonEncode(parsed);
             } catch (_) {}
 
+            // Show live status banner
+            if (mounted) setState(() => _toolStatus = _toolStatusLabel(toolMethod, toolParams));
+
             String mcpResult = '';
             try {
-              final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+              final client = HttpClient()..connectionTimeout = const Duration(seconds: 60);
               final request = await client.postUrl(Uri.parse(mcpEndpoint));
               request.headers.contentType = ContentType.json;
               
@@ -811,7 +938,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
             } catch (e) {
               mcpResult = '{"error": "$e"}';
             }
-            toolOutputs.add("MCP Result:\n\n$mcpResult");
+            if (mounted) setState(() => _toolStatus = '');
+            toolOutputs.add("Tool Result [${toolMethod}]:\n\n$mcpResult");
           }
         }
 
@@ -962,6 +1090,79 @@ class _ChatHomePageState extends State<ChatHomePage> {
     return 'research_$slug.md';
   }
 
+  /// Returns a human-readable status label for a tool call, e.g.:
+  ///   "📖 Reading main.dart lines 10–50"
+  ///   "✏️ Writing /home/project/lib/main.dart"
+  ///   "🚀 Deploying to Firebase"
+  ///   "🔧 Running: git status"
+  String _toolStatusLabel(String method, Map<String, dynamic> params) {
+    String p(String key) => params[key]?.toString() ?? '';
+    String shortPath(String path) {
+      if (path.isEmpty) return '';
+      final parts = path.split('/');
+      return parts.length > 2 ? '…/${parts.last}' : path;
+    }
+    switch (method) {
+      case 'file_read':
+        final path = shortPath(p('path'));
+        final start = p('start_line');
+        final end = p('end_line');
+        if (start.isNotEmpty && end.isNotEmpty) {
+          return '📖 Reading $path lines $start–$end';
+        }
+        return '📖 Reading $path';
+      case 'file_write':
+        return '✏️  Writing ${shortPath(p('path'))}';
+      case 'file_edit':
+        final path = shortPath(p('path'));
+        final start = p('start_line');
+        final end = p('end_line');
+        if (start.isNotEmpty && end.isNotEmpty) {
+          return '✏️  Editing $path lines $start–$end';
+        }
+        return '✏️  Editing $path';
+      case 'file_delete':
+        return '🗑️  Deleting ${shortPath(p('path'))}';
+      case 'dir_list':
+        return '📂 Listing ${shortPath(p('path'))}';
+      case 'dir_create':
+        return '📁 Creating dir ${shortPath(p('path'))}';
+      case 'file_search':
+        return '🔎 Searching files: ${p('pattern')}';
+      case 'code_search':
+        return '🔎 Code search: ${p('query')} in ${shortPath(p('path'))}';
+      case 'symbol_search':
+        return '🔎 Symbol search: ${p('symbol')}';
+      case 'file_info':
+        return '📋 File info: ${shortPath(p('path'))}';
+      case 'multi_read':
+        return '📖 Batch reading files…';
+      case 'run_command':
+        final cmd = p('command');
+        final short = cmd.length > 45 ? '${cmd.substring(0, 42)}…' : cmd;
+        // Detect common high-level operations
+        if (cmd.contains('firebase deploy')) return '🚀 Deploying to Firebase…';
+        if (cmd.contains('gh workflow run')) return '⚙️  Triggering GitHub Actions…';
+        if (cmd.contains('gh run watch')) return '⏳ Watching GitHub Actions build…';
+        if (cmd.contains('gh run download')) return '⬇️  Downloading build artifact…';
+        if (cmd.contains('git commit')) return '📦 Committing to Git…';
+        if (cmd.contains('git push')) return '📤 Pushing to GitHub…';
+        if (cmd.contains('git status')) return '📊 Checking git status…';
+        if (cmd.contains('git diff')) return '🔍 Checking git diff…';
+        if (cmd.contains('flutter build')) return '🔨 Building Flutter app…';
+        if (cmd.contains('flutter test')) return '🧪 Running Flutter tests…';
+        if (cmd.contains('dart analyze')) return '🧹 Running Dart analysis…';
+        if (cmd.contains('pkg install')) return '📦 Installing package…';
+        return '🔧 Running: $short';
+      case 'git_status':
+        return '📊 Checking git status…';
+      case 'git_diff':
+        return '🔍 Checking git diff…';
+      default:
+        return '⚙️  Tool: $method';
+    }
+  }
+
   void _startResearchLoop(int messageIndex) {
     final activeSession = _sessions.firstWhere((s) => s.id == _activeSessionId);
     final sessionIndex = _sessions.indexOf(activeSession);
@@ -1018,20 +1219,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
     
-    final systemPrompt = "You are an autonomous research agent. The current date/year is $currentDateStr. Make sure to search for the most up-to-date information for this period.\n"
-        "You have access to <search_request>query</search_request> (for web search), <read_url>url</read_url> (to extract full text from a webpage), and <tool_request> (for local operations).\n"
-        "For the current phase, perform thorough research:\n"
-        "1. Conduct multiple <search_request> calls with distinct search queries to gather comprehensive data.\n"
-        "2. IMPORTANT: Do not rely solely on search snippets! Use <read_url>url</read_url> to read the full content of promising links found in the search results.\n"
-        "3. Cross-check your sources to ensure high accuracy and reliability of the data.\n"
-        "4. Analyze the search results and webpage contents thoroughly.\n"
-        "5. Keep your analysis in your memory/context for the final report.\n"
-        "CRITICAL: If you need to use <search_request>, <read_url>, or <tool_request>, output the tag and stop generating immediately in that turn. Do not generate any text after the tag.\n"
-        "When you are completely finished researching and analyzing the current phase, output a detailed summary of your findings for this phase, list your source URLs, and then output a single line: <step_complete/>";
+    final systemPrompt = "";
     
     // We maintain a single continuous conversation context for the entire research process
     List<ChatMessage> stepMessages = [
-      ChatMessage(role: MessageRole.system, text: systemPrompt),
+      if (systemPrompt.isNotEmpty)
+        ChatMessage(role: MessageRole.system, text: systemPrompt),
     ];
     
     for (int i = 0; i < steps.length; i++) {
@@ -1609,6 +1802,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
                 messageController: _messageController,
                 scrollController: _scrollController,
                 isSending: _sendingSessionIds.contains(_activeSessionId),
+                toolStatus: _toolStatus,
                 onOpenProvider: () => _openProviderSheet(_selectedProviderId),
                 onOpenModel: _openModelSheet,
                 onSend: _sendMessage,
@@ -1741,6 +1935,7 @@ class ChatSurface extends StatelessWidget {
     required this.messageController,
     required this.scrollController,
     required this.isSending,
+    required this.toolStatus,
     required this.onOpenProvider,
     required this.onOpenModel,
     required this.onSend,
@@ -1764,6 +1959,7 @@ class ChatSurface extends StatelessWidget {
   final TextEditingController messageController;
   final ScrollController scrollController;
   final bool isSending;
+  final String toolStatus;
   final String fileName;
   final VoidCallback onOpenProvider;
   final VoidCallback onOpenModel;
@@ -1810,7 +2006,7 @@ class ChatSurface extends StatelessWidget {
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
-                  if (msg.text.contains('<mcp_request>')) {
+                  if (msg.text.contains('<mcp_request>') || msg.text.contains('<tool_request>')) {
                     state = AvatarAnimationState.mcp;
                   } else if (msg.text.contains('<search_request>')) {
                     state = AvatarAnimationState.searching;
@@ -1834,6 +2030,48 @@ class ChatSurface extends StatelessWidget {
                 );
               },
             ),
+          ),
+          // Live tool status banner
+          AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeInOut,
+            child: toolStatus.isNotEmpty
+                ? Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEEF4FF),
+                      border: Border(
+                        top: BorderSide(color: const Color(0xFFBDD3F8), width: 1),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF3B82F6)),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            toolStatus,
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF1D4ED8),
+                              fontFamily: 'monospace',
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
           ),
           Composer(
             controller: messageController,
@@ -2056,9 +2294,74 @@ class McpToolBlock extends StatefulWidget {
 class _McpToolBlockState extends State<McpToolBlock> {
   bool _expanded = false;
 
+  /// Returns (icon, label, subtitle) for a method + params.
+  (IconData, Color, String, String?) _describe(String method, Map<String, dynamic> params) {
+    String p(String key) => params[key]?.toString() ?? '';
+    String shortPath(String path) {
+      if (path.isEmpty) return '';
+      final parts = path.split('/');
+      return parts.length > 2 ? '…/${parts.last}' : path;
+    }
+    switch (method) {
+      case 'file_read':
+        final path = shortPath(p('path'));
+        final start = p('start_line');
+        final end = p('end_line');
+        final sub = (start.isNotEmpty && end.isNotEmpty) ? 'lines $start–$end' : null;
+        return (Icons.menu_book_outlined, const Color(0xFF0369A1), 'Read  $path', sub);
+      case 'file_write':
+        return (Icons.edit_document, const Color(0xFF059669), 'Write  ${shortPath(p('path'))}', null);
+      case 'file_edit':
+        final path = shortPath(p('path'));
+        final start = p('start_line');
+        final end = p('end_line');
+        final sub = (start.isNotEmpty && end.isNotEmpty) ? 'lines $start–$end' : null;
+        return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Edit  $path', sub);
+      case 'file_delete':
+        return (Icons.delete_outline, const Color(0xFFDC2626), 'Delete  ${shortPath(p('path'))}', null);
+      case 'dir_list':
+        return (Icons.folder_open_outlined, const Color(0xFFD97706), 'List  ${shortPath(p('path'))}', null);
+      case 'dir_create':
+        return (Icons.create_new_folder_outlined, const Color(0xFFD97706), 'Create dir  ${shortPath(p('path'))}', null);
+      case 'file_search':
+        return (Icons.search, const Color(0xFF0369A1), 'Search files', p('pattern').isNotEmpty ? '\"${p('pattern')}\"' : null);
+      case 'code_search':
+        return (Icons.manage_search, const Color(0xFF0369A1), 'Code search', '\"${p('query')}\" in ${shortPath(p('path'))}');
+      case 'symbol_search':
+        return (Icons.functions, const Color(0xFF7C3AED), 'Symbol search', p('symbol'));
+      case 'file_info':
+        return (Icons.info_outline, const Color(0xFF475569), 'File info', shortPath(p('path')));
+      case 'multi_read':
+        return (Icons.library_books_outlined, const Color(0xFF0369A1), 'Batch read files', null);
+      case 'run_command':
+        final cmd = p('command');
+        final short = cmd.length > 55 ? '${cmd.substring(0, 52)}…' : cmd;
+        if (cmd.contains('firebase deploy')) return (Icons.cloud_upload_outlined, const Color(0xFFEA4335), '🚀 Deploy to Firebase', null);
+        if (cmd.contains('gh workflow run')) return (Icons.play_circle_outline, const Color(0xFF24292E), '⚙️ Trigger GitHub Actions', null);
+        if (cmd.contains('gh run watch')) return (Icons.timelapse, const Color(0xFF24292E), '⏳ Watch Actions build', null);
+        if (cmd.contains('gh run download')) return (Icons.download_outlined, const Color(0xFF24292E), '⬇️ Download artifact', null);
+        if (cmd.contains('git commit')) return (Icons.commit, const Color(0xFFF05032), '📦 Git commit', null);
+        if (cmd.contains('git push')) return (Icons.upload_outlined, const Color(0xFFF05032), '📤 Git push', null);
+        if (cmd.contains('git status')) return (Icons.info_outline, const Color(0xFFF05032), '📊 Git status', null);
+        if (cmd.contains('git diff')) return (Icons.difference_outlined, const Color(0xFFF05032), '🔍 Git diff', null);
+        if (cmd.contains('flutter build')) return (Icons.build_outlined, const Color(0xFF0175C2), '🔨 Flutter build', null);
+        if (cmd.contains('flutter test')) return (Icons.science_outlined, const Color(0xFF0175C2), '🧪 Flutter test', null);
+        if (cmd.contains('dart analyze')) return (Icons.analytics_outlined, const Color(0xFF0175C2), '🧹 Dart analyze', null);
+        if (cmd.contains('pkg install')) return (Icons.install_desktop_outlined, const Color(0xFF475569), '📦 Install package', null);
+        return (Icons.terminal, const Color(0xFF1E293B), short, p('cwd').isNotEmpty ? 'cwd: ${shortPath(p('cwd'))}' : null);
+      case 'git_status':
+        return (Icons.info_outline, const Color(0xFFF05032), 'Git status', null);
+      case 'git_diff':
+        return (Icons.difference_outlined, const Color(0xFFF05032), 'Git diff', null);
+      default:
+        return (Icons.build_circle_outlined, const Color(0xFF2B6CB0), method, null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    String method = 'Unknown Tool';
+    String method = 'unknown';
+    Map<String, dynamic> params = {};
     String formattedContent = widget.mcpJson;
 
     if (widget.isXml) {
@@ -2066,23 +2369,30 @@ class _McpToolBlockState extends State<McpToolBlock> {
       if (methodMatch != null) {
         method = methodMatch.group(1)?.trim() ?? method;
       }
+      // Parse XML params for description
+      final paramRegex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
+      for (final m in paramRegex.allMatches(widget.mcpJson)) {
+        final key = m.group(1)!;
+        if (key != 'method') params[key] = m.group(2)?.trim() ?? '';
+      }
       formattedContent = widget.mcpJson.trim();
     } else {
       try {
-        final decoded = jsonDecode(widget.mcpJson);
-        if (decoded['method'] != null) {
-          method = decoded['method'].toString();
-        }
+        final decoded = jsonDecode(widget.mcpJson) as Map<String, dynamic>;
+        method = decoded['method']?.toString() ?? method;
+        params = (decoded['params'] as Map<String, dynamic>?) ?? {};
         formattedContent = const JsonEncoder.withIndent('  ').convert(decoded);
       } catch (_) {}
     }
 
+    final (icon, color, label, subtitle) = _describe(method, params);
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF0F5FA),
+        color: color.withOpacity(0.05),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFD0E0F0)),
+        border: Border.all(color: color.withOpacity(0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2094,35 +2404,57 @@ class _McpToolBlockState extends State<McpToolBlock> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Row(
                 children: [
-                  const Icon(Icons.build_circle_outlined, size: 18, color: Color(0xFF2B6CB0)),
+                  Icon(icon, size: 17, color: color),
                   const SizedBox(width: 8),
-                  Text(
-                    'Agentic Tool Use: $method',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2B6CB0),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: color,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        if (subtitle != null)
+                          Text(
+                            subtitle,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: color.withOpacity(0.75),
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                  const Spacer(),
                   Icon(
                     _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
                     size: 18,
-                    color: const Color(0xFF2B6CB0),
+                    color: color.withOpacity(0.6),
                   ),
                 ],
               ),
             ),
           ),
           if (_expanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            Container(
+              margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E2E),
+                borderRadius: BorderRadius.circular(8),
+              ),
               child: SelectableText(
                 formattedContent,
                 style: const TextStyle(
-                  fontSize: 12.0,
+                  fontSize: 11.5,
                   fontFamily: 'monospace',
-                  color: Color(0xFF4A5568),
+                  color: Color(0xFFCDD6F4),
+                  height: 1.5,
                 ),
               ),
             ),
@@ -2131,6 +2463,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
     );
   }
 }
+
 
 class CodeBlockWidget extends StatelessWidget {
   const CodeBlockWidget({
@@ -2550,50 +2883,90 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             if (message.role == MessageRole.system)
-              Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF7F4EF),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFE7D8C4)),
-                ),
-                child: ExpansionTile(
-                  title: Text(
-                    message.text.split('\n').first,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF7B4E2E),
-                    ),
+              Builder(builder: (context) {
+                // Parse a smart header for tool results
+                final text = message.text;
+                String header;
+                IconData headerIcon;
+                Color headerColor;
+                final hasError = text.contains('"error"') || text.contains('Error:');
+                if (hasError) {
+                  headerIcon = Icons.error_outline;
+                  headerColor = const Color(0xFFDC2626);
+                } else {
+                  headerIcon = Icons.check_circle_outline;
+                  headerColor = const Color(0xFF059669);
+                }
+
+                // Extract tool name from "Tool Result [method]:" or "Web Search results" etc.
+                final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]').firstMatch(text);
+                final webSearchMatch = text.startsWith('Web Search results');
+                final urlMatch = text.startsWith("Content of URL");
+                if (toolResultMatch != null) {
+                  final method = toolResultMatch.group(1) ?? 'tool';
+                  final sizeKb = (text.length / 1024).toStringAsFixed(1);
+                  header = hasError
+                      ? '❌ Failed: $method'
+                      : '✅ Tool Result [$method]  ·  ${sizeKb} KB';
+                  headerIcon = hasError ? Icons.error_outline : Icons.check_circle_outline;
+                } else if (webSearchMatch) {
+                  header = '🔍 Web Search Results';
+                  headerIcon = Icons.search;
+                  headerColor = const Color(0xFF0369A1);
+                } else if (urlMatch) {
+                  header = '🌐 URL Content Fetched';
+                  headerIcon = Icons.language;
+                  headerColor = const Color(0xFF0369A1);
+                } else {
+                  header = text.split('\n').first;
+                }
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: headerColor.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: headerColor.withOpacity(0.2)),
                   ),
-                  leading: const Icon(Icons.table_rows_outlined, color: Color(0xFF7B4E2E), size: 18),
-                  collapsedBackgroundColor: Colors.transparent,
-                  backgroundColor: Colors.transparent,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: MarkdownBody(
-                          data: message.text
-                              .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
-                              .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
-                              .replaceAll(r'\boldsymbol', r'\mathbf'),
-                          selectable: true,
-                          builders: {
-                            'latex': LatexElementBuilder(),
-                          },
-                          extensionSet: md.ExtensionSet(
-                            [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
-                            [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
-                          ),
-                          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)),
-                        ),
+                  child: ExpansionTile(
+                    title: Text(
+                      header,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: headerColor,
+                        fontFamily: 'monospace',
                       ),
                     ),
-                  ],
-                ),
-              )
+                    leading: Icon(headerIcon, color: headerColor, size: 17),
+                    collapsedBackgroundColor: Colors.transparent,
+                    backgroundColor: Colors.transparent,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: MarkdownBody(
+                            data: message.text
+                                .replaceAllMapped(RegExp(r'\\\[([\\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
+                                .replaceAllMapped(RegExp(r'\\\(([\\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
+                                .replaceAll(r'\boldsymbol', r'\mathbf'),
+                            selectable: true,
+                            builders: {
+                              'latex': LatexElementBuilder(),
+                            },
+                            extensionSet: md.ExtensionSet(
+                              [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
+                              [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
+                            ),
+                            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              })
             else if (isUser)
               Container(
                 width: double.infinity,
@@ -2829,10 +3202,17 @@ class MessageBubble extends StatelessWidget {
           );
         }
         if (block.language.toLowerCase() == 'svg') {
-          return SvgDiagramWidget(svgString: block.content);
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: -14),
+            child: SvgDiagramWidget(svgString: block.content),
+          );
         }
-        if (block.language.toLowerCase() == 'chart' || block.language.toLowerCase() == 'json-chart') {
-          return ChartDiagramWidget(jsonString: block.content);
+        if (block.language.toLowerCase() == 'chart' ||
+            block.language.toLowerCase() == 'json-chart') {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: -14),
+            child: ChartDiagramWidget(jsonString: block.content),
+          );
         }
         if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
           return HtmlArtifactWidget(htmlContent: block.content);
@@ -5972,19 +6352,24 @@ class ChartDiagramWidget extends StatelessWidget {
   final String jsonString;
   const ChartDiagramWidget({super.key, required this.jsonString});
 
-  Color _parseHexColor(String? hexString, int index) {
-    if (hexString == null || hexString.isEmpty) {
-      return Colors.primaries[index % Colors.primaries.length];
+  // Curated professional palette
+  static const _palette = [
+    Color(0xFF6366F1), Color(0xFF8B5CF6), Color(0xFFEC4899),
+    Color(0xFF06B6D4), Color(0xFF10B981), Color(0xFFF59E0B),
+    Color(0xFFEF4444), Color(0xFF3B82F6), Color(0xFFF97316),
+    Color(0xFF84CC16),
+  ];
+
+
+  Color _color(String? hex, int i) {
+    if (hex != null && hex.isNotEmpty) {
+      try {
+        final h = hex.replaceAll('#', '');
+        if (h.length == 6) return Color(int.parse('FF$h', radix: 16));
+        if (h.length == 8) return Color(int.parse(h, radix: 16));
+      } catch (_) {}
     }
-    try {
-      final hex = hexString.replaceAll('#', '');
-      if (hex.length == 6) {
-        return Color(int.parse('FF$hex', radix: 16));
-      } else if (hex.length == 8) {
-        return Color(int.parse(hex, radix: 16));
-      }
-    } catch (_) {}
-    return Colors.primaries[index % Colors.primaries.length];
+    return _palette[i % _palette.length];
   }
 
   @override
@@ -5992,182 +6377,314 @@ class ChartDiagramWidget extends StatelessWidget {
     try {
       final data = jsonDecode(jsonString);
       final type = data['type']?.toString().toLowerCase() ?? 'bar';
-      
+      final title = data['title']?.toString();
+      final List items = data['data'] ?? [];
+      if (items.isEmpty) return const SizedBox.shrink();
+
       Widget chart;
-      if (type == 'pie') {
-        final List items = data['data'] ?? [];
+
+      if (type == 'pie' || type == 'donut') {
+        final centerRadius = type == 'donut' ? 55.0 : 0.0;
         chart = PieChart(
           PieChartData(
-            sectionsSpace: 2,
-            centerSpaceRadius: 40,
+            sectionsSpace: 3,
+            centerSpaceRadius: centerRadius,
+            startDegreeOffset: -90,
             sections: items.asMap().entries.map((e) {
-              final Map item = e.value;
-              final color = _parseHexColor(item['color']?.toString(), e.key);
+              final item = e.value as Map;
+              final c = _color(item['color']?.toString(), e.key);
+              final v = (item['value'] as num).toDouble();
+              final total = items.fold<double>(0, (s, x) => s + (x['value'] as num).toDouble());
+              final pct = total > 0 ? (v / total * 100).toStringAsFixed(1) : '0';
               return PieChartSectionData(
-                color: color,
-                value: (item['value'] as num).toDouble(),
-                title: item['label']?.toString() ?? '',
-                radius: 50,
-                titleStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                color: c,
+                value: v,
+                title: '${item['label'] ?? ''}\n$pct%',
+                radius: 80,
+                titleStyle: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600,
+                  color: Colors.white, shadows: [Shadow(blurRadius: 2)],
+                ),
               );
             }).toList(),
           ),
+          swapAnimationDuration: const Duration(milliseconds: 500),
         );
       } else {
-        final List items = data['data'] ?? [];
+        // Bar chart
+        final maxY = items.map((e) => (e['value'] as num).toDouble()).reduce((a, b) => a > b ? a : b);
+        final niceMax = maxY * 1.15;
         chart = BarChart(
           BarChartData(
             alignment: BarChartAlignment.spaceAround,
-            maxY: items.isNotEmpty ? items.map((e) => (e['value'] as num).toDouble()).reduce((a, b) => a > b ? a : b) * 1.2 : 10,
-            barTouchData: BarTouchData(enabled: true),
+            maxY: niceMax,
+            barTouchData: BarTouchData(
+              enabled: true,
+              touchTooltipData: BarTouchTooltipData(
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                  final item = items[groupIndex] as Map;
+                  return BarTooltipItem(
+                    '${item['label']}\n',
+                    const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    children: [
+                      TextSpan(
+                        text: rod.toY.toStringAsFixed(rod.toY == rod.toY.truncateToDouble() ? 0 : 1),
+                        style: TextStyle(color: _color(item['color']?.toString(), groupIndex), fontSize: 14, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
             titlesData: FlTitlesData(
-              show: true,
               bottomTitles: AxisTitles(
                 sideTitles: SideTitles(
                   showTitles: true,
-                  reservedSize: 42,
+                  reservedSize: 48,
                   getTitlesWidget: (value, meta) {
-                    if (value.toInt() >= 0 && value.toInt() < items.length) {
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: Transform.rotate(
-                          angle: -0.5,
-                          child: Text(items[value.toInt()]['label']?.toString() ?? '', style: const TextStyle(fontSize: 9, color: Colors.black54)),
-                        ),
-                      );
-                    }
-                    return const SizedBox.shrink();
+                    final i = value.toInt();
+                    if (i < 0 || i >= items.length) return const SizedBox.shrink();
+                    final label = (items[i] as Map)['label']?.toString() ?? '';
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        label.length > 10 ? '${label.substring(0, 9)}…' : label,
+                        style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8), fontWeight: FontWeight.w500),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
                   },
                 ),
               ),
               leftTitles: AxisTitles(
                 sideTitles: SideTitles(
                   showTitles: true,
-                  reservedSize: 30,
+                  reservedSize: 44,
                   getTitlesWidget: (value, meta) {
-                    return Text(value.toInt().toString(), style: const TextStyle(fontSize: 9, color: Colors.black54));
+                    if (value == meta.max || value == 0) return const SizedBox.shrink();
+                    final s = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
+                    return Text(s, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)));
                   },
                 ),
               ),
               topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             ),
-            gridData: const FlGridData(show: false),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: niceMax / 5,
+              getDrawingHorizontalLine: (v) => const FlLine(color: Color(0xFF1E293B), strokeWidth: 1),
+            ),
             borderData: FlBorderData(show: false),
             barGroups: items.asMap().entries.map((e) {
-              final color = _parseHexColor(e.value['color']?.toString(), e.key);
+              final item = e.value as Map;
+              final c = _color(item['color']?.toString(), e.key);
               return BarChartGroupData(
                 x: e.key,
                 barRods: [
                   BarChartRodData(
-                    toY: (e.value['value'] as num).toDouble(),
-                    color: color,
-                    width: 16,
-                    borderRadius: BorderRadius.circular(4),
-                  )
+                    toY: (item['value'] as num).toDouble(),
+                    gradient: LinearGradient(
+                      colors: [c.withOpacity(0.7), c],
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                    ),
+                    width: items.length > 8 ? 12 : 20,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                    backDrawRodData: BackgroundBarChartRodData(
+                      show: true,
+                      toY: niceMax,
+                      color: const Color(0xFF0F172A),
+                    ),
+                  ),
                 ],
               );
             }).toList(),
           ),
+          swapAnimationDuration: const Duration(milliseconds: 400),
         );
       }
 
-      return Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(16),
-        height: 300,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE7D8C4)),
-          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (data['title'] != null) ...[
-              Text(
-                data['title'].toString(),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
-                textAlign: TextAlign.center,
+      return RepaintBoundary(
+        child: Container(
+          // No margin, no padding — full-bleed professional
+          height: 340,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0B1120),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (title != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    6, title != null ? 8 : 16, 6, 12,
+                  ),
+                  child: chart,
+                ),
               ),
-              const SizedBox(height: 16),
             ],
-            Expanded(child: chart),
-          ],
+          ),
         ),
       );
     } catch (e) {
       return Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(12),
-        color: Colors.red.shade50,
-        child: Text('Chart rendering error: $e', style: TextStyle(color: Colors.red.shade900)),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A0A0A),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.shade800),
+        ),
+        child: Text('Chart error: $e',
+            style: TextStyle(color: Colors.red.shade400, fontSize: 12, fontFamily: 'monospace')),
       );
     }
   }
 }
 
-class SvgDiagramWidget extends StatefulWidget {
-  final String svgString;
-  const SvgDiagramWidget({super.key, required this.svgString});
 
-  @override
-  State<SvgDiagramWidget> createState() => _SvgDiagramWidgetState();
-}
+
 
 class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
+  // Force-render incomplete SVGs after this many seconds (handles stuck state)
+  static const _forceRenderAfterMs = 6000;
+  bool _forceRender = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(milliseconds: _forceRenderAfterMs), () {
+      if (mounted) setState(() => _forceRender = true);
+    });
+  }
+
+  /// Strip everything before <svg and normalize width/height to 100%
+  String _cleanSvg(String raw) {
+    String s = raw;
+    final svgIdx = s.indexOf('<svg');
+    if (svgIdx > 0) s = s.substring(svgIdx);
+
+    // Remove fixed pixel width/height attributes so we can control sizing
+    // e.g. width="480" height="320" → width="100%" height="100%"
+    s = s.replaceFirstMapped(
+      RegExp(r'''(<svg[^>]*?)\s+width=["']?[\d.]+["']?''', caseSensitive: false),
+      (m) => '${m.group(1)} width="100%"',
+    );
+    s = s.replaceFirstMapped(
+      RegExp(r'''(<svg[^>]*?)\s+height=["']?[\d.]+["']?''', caseSensitive: false),
+      (m) => '${m.group(1)} height="100%"',
+    );
+    // If no width/height at all, inject them
+    if (!s.contains('width=')) {
+      s = s.replaceFirst('<svg', '<svg width="100%" height="100%"');
+    }
+    return s;
+  }
+
   @override
   Widget build(BuildContext context) {
-    String cleanSvg = widget.svgString;
-    if (cleanSvg.contains('<svg')) {
-      cleanSvg = cleanSvg.substring(cleanSvg.indexOf('<svg'));
-    }
-    
-    // OPTIMIZATION 1: Do not parse partial SVGs during LLM streaming.
-    // Parsing broken XML every frame causes massive CPU spikes.
-    final bool isComplete = cleanSvg.trim().endsWith('</svg>');
-    
+    String cleanSvg = _cleanSvg(widget.svgString);
+
+    // Check completeness — or use force-render after timeout
+    final bool isComplete = cleanSvg.trim().endsWith('</svg>') || _forceRender;
+
     if (!isComplete) {
       return Container(
         width: double.infinity,
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(32),
+        height: 80,
         decoration: BoxDecoration(
-          color: const Color(0xFFF7F2E8),
+          color: const Color(0xFF0B1120),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE7D8C4)),
         ),
-        child: Column(
-          children: const [
-            CircularProgressIndicator(color: Color(0xFF7B4E2E)),
-            SizedBox(height: 16),
-            Text("Rendering SVG...", style: TextStyle(color: Color(0xFF7B4E2E), fontWeight: FontWeight.bold)),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 16, height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
+              ),
+            ),
+            SizedBox(width: 12),
+            Text('Rendering diagram…',
+                style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13)),
           ],
         ),
       );
     }
 
-    return RepaintBoundary( // OPTIMIZATION 2: Isolate complex SVG repaints from the scroll view
-      child: Container(
-        width: double.infinity,
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        child: InteractiveViewer(
-          panEnabled: true,
-          minScale: 0.1,
-          maxScale: 10.0,
-          child: Center(
-            child: SvgPicture.string(
-              cleanSvg,
-              fit: BoxFit.contain,
-              placeholderBuilder: (context) => const Padding(
-                padding: EdgeInsets.all(20),
-                child: CircularProgressIndicator(color: Color(0xFF7B4E2E)),
+    return RepaintBoundary(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Parse viewBox to determine aspect ratio for proper height
+          double aspectRatio = 16 / 9; // default
+          final vbMatch = RegExp(
+            r'''viewBox=["']([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)["']''',
+            caseSensitive: false,
+          ).firstMatch(cleanSvg);
+          if (vbMatch != null) {
+            final w = double.tryParse(vbMatch.group(3) ?? '') ?? 0;
+            final h = double.tryParse(vbMatch.group(4) ?? '') ?? 0;
+            if (w > 0 && h > 0) {
+              aspectRatio = w / h;
+              // Cap extreme ratios
+              aspectRatio = aspectRatio.clamp(0.4, 4.0);
+            }
+          }
+
+          final availWidth = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : MediaQuery.of(context).size.width - 36;
+          final renderHeight = (availWidth / aspectRatio).clamp(200.0, 600.0);
+
+          return Container(
+            width: double.infinity,
+            height: renderHeight,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0B1120),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            clipBehavior: Clip.hardEdge,
+            child: InteractiveViewer(
+              panEnabled: true,
+              scaleEnabled: true,
+              minScale: 0.5,
+              maxScale: 8.0,
+              child: SvgPicture.string(
+                cleanSvg,
+                width: availWidth,
+                height: renderHeight,
+                fit: BoxFit.contain,
+                alignment: Alignment.topCenter,
+                placeholderBuilder: (context) => const Center(
+                  child: CircularProgressIndicator(
+                    color: Color(0xFF6366F1), strokeWidth: 2,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
 }
+
