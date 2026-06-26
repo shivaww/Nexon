@@ -617,12 +617,28 @@ jobs:
             "  Grid: stroke=#888 opacity=0.15 stroke-dasharray=\"4 4\"\n"
             "  Gradient fill: opacity 0.35 top -> 0 bottom\n"
             "  Palette: #6C8EF5 #F56C6C #67C23A #E6A23C #9B59B6\n"
-            "  Polish: bars rx=4; add value labels above points/bars; text-rendering=\"optimizeLegibility\"\n"
-            "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
-            "- Bar/Pie: ```chart {\"type\":\"bar\",\"title\":\"...\",\"data\":[{\"label\":\"...\",\"value\":10,\"color\":\"#6C8EF5\"}]}\n"
-            "- Interactive: ```html / ```javascript / ```react / ```artifact\n\n"
-            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate diagrams or charts whenever discussing data, comparisons, architectures, flows, math, physics, or complex concepts. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.\n\n";
+            "  Typography: Title 20px 600w, Axis 13px 400w, Labels 12px 500w, Tooltips 12px monospace
+"
+            "  Layout: Container 20px padding, 1px border, 8px radius. Chart area: 12px top, 16px right, 32px bottom, 40px left. Legend gap 16px. Min-height 320px, max 600px
+"
+            "  Bar Chart: 4px top radius, opacity 1.0 (hover +0.15), 20% group spacing. Gridlines 0.5px opacity 0.6
+"
+            "  Line Chart: Stroke 2px rounded caps/joins. Points 3.5px radius (hover 5px). Fill opacity 0.08. Gridlines 0.5px opacity 0.5
+"
+            "  Scatter Chart: Points 4.5px radius (hover 6px). Stroke 1px white. Trend lines 1.5px dashed opacity 0.5. Gridlines 0.5px opacity 0.4
+"
+            "  Animations: Load 200-400ms cubic-bezier, Hover 120-150ms ease-out
+"
+            "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.
+"
+            "- Bar/Pie/Line: ```chart {\"type\":\"bar\",\"title\":\"...\",\"data\":[{\"label\":\"...\",\"value\":10,\"color\":\"#6C8EF5\"}]}
+"
+            "- Interactive: ```html / ```javascript / ```react / ```artifact
 
+"
+            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate diagrams or charts whenever discussing data, comparisons, architectures, flows, math, physics, or complex concepts. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.
+
+";
 
         if (_agenticEnabled) {
           systemPromptText +=
@@ -6385,6 +6401,41 @@ class ChartDiagramWidget extends StatelessWidget {
 
       Widget chart;
 
+      final titlesData = FlTitlesData(
+        bottomTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 32,
+            getTitlesWidget: (value, meta) {
+              final i = value.toInt();
+              if (i < 0 || i >= items.length) return const SizedBox.shrink();
+              final label = (items[i] as Map)['label']?.toString() ?? '';
+              return Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  label.length > 10 ? '${label.substring(0, 9)}…' : label,
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8), fontWeight: FontWeight.w400),
+                  textAlign: TextAlign.center,
+                ),
+              );
+            },
+          ),
+        ),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 40,
+            getTitlesWidget: (value, meta) {
+              if (value == meta.max || value == 0) return const SizedBox.shrink();
+              final s = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
+              return Text(s, style: const TextStyle(fontSize: 13, color: Color(0xFF64748B), fontWeight: FontWeight.w400));
+            },
+          ),
+        ),
+        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+      );
+
       if (type == 'pie' || type == 'donut') {
         final centerRadius = type == 'donut' ? 55.0 : 0.0;
         chart = PieChart(
@@ -6401,16 +6452,80 @@ class ChartDiagramWidget extends StatelessWidget {
               return PieChartSectionData(
                 color: c,
                 value: v,
-                title: '${item['label'] ?? ''}\n$pct%',
+                title: '${item['label'] ?? ''}
+$pct%',
                 radius: 80,
                 titleStyle: const TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600,
+                  fontSize: 12, fontWeight: FontWeight.w500,
                   color: Colors.white, shadows: [Shadow(blurRadius: 2)],
                 ),
               );
             }).toList(),
           ),
-          swapAnimationDuration: const Duration(milliseconds: 500),
+          swapAnimationDuration: const Duration(milliseconds: 300),
+          swapAnimationCurve: Curves.easeOutCubic,
+        );
+      } else if (type == 'line') {
+        final maxY = items.map((e) => (e['value'] as num).toDouble()).reduce((a, b) => a > b ? a : b);
+        final niceMax = maxY * 1.15;
+        chart = LineChart(
+          LineChartData(
+            maxY: niceMax,
+            lineTouchData: LineTouchData(
+              enabled: true,
+              touchTooltipData: LineTouchTooltipData(
+                getTooltipItems: (touchedSpots) {
+                  return touchedSpots.map((spot) {
+                    final item = items[spot.spotIndex] as Map;
+                    return LineTooltipItem(
+                      '${item['label']}
+',
+                      const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace'),
+                      children: [
+                        TextSpan(
+                          text: spot.y.toStringAsFixed(spot.y == spot.y.truncateToDouble() ? 0 : 1),
+                          style: TextStyle(color: _color(item['color']?.toString(), spot.spotIndex), fontSize: 14, fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                    );
+                  }).toList();
+                },
+              ),
+            ),
+            titlesData: titlesData,
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: niceMax / 5,
+              getDrawingHorizontalLine: (v) => FlLine(color: Colors.white.withOpacity(0.5), strokeWidth: 0.5),
+            ),
+            borderData: FlBorderData(show: false),
+            lineBarsData: [
+              LineChartBarData(
+                spots: items.asMap().entries.map((e) => FlSpot(e.key.toDouble(), (e.value['value'] as num).toDouble())).toList(),
+                isCurved: true,
+                color: _color(items.first['color']?.toString(), 0),
+                barWidth: 2,
+                isStrokeCapRound: true,
+                isStrokeJoinRound: true,
+                dotData: FlDotData(
+                  show: true,
+                  getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                    radius: 3.5,
+                    color: barData.color ?? Colors.blue,
+                    strokeWidth: 1,
+                    strokeColor: Colors.white,
+                  ),
+                ),
+                belowBarData: BarAreaData(
+                  show: true,
+                  color: (_color(items.first['color']?.toString(), 0)).withOpacity(0.08),
+                ),
+              ),
+            ],
+          ),
+          swapAnimationDuration: const Duration(milliseconds: 300),
+          swapAnimationCurve: Curves.easeOutCubic,
         );
       } else {
         // Bar chart
@@ -6423,11 +6538,12 @@ class ChartDiagramWidget extends StatelessWidget {
             barTouchData: BarTouchData(
               enabled: true,
               touchTooltipData: BarTouchTooltipData(
-                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                getTooltipItems: (group, groupIndex, rod, rodIndex) {
                   final item = items[groupIndex] as Map;
                   return BarTooltipItem(
-                    '${item['label']}\n',
-                    const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    '${item['label']}
+',
+                    const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace'),
                     children: [
                       TextSpan(
                         text: rod.toY.toStringAsFixed(rod.toY == rod.toY.truncateToDouble() ? 0 : 1),
@@ -6438,45 +6554,12 @@ class ChartDiagramWidget extends StatelessWidget {
                 },
               ),
             ),
-            titlesData: FlTitlesData(
-              bottomTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 48,
-                  getTitlesWidget: (value, meta) {
-                    final i = value.toInt();
-                    if (i < 0 || i >= items.length) return const SizedBox.shrink();
-                    final label = (items[i] as Map)['label']?.toString() ?? '';
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        label.length > 10 ? '${label.substring(0, 9)}…' : label,
-                        style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8), fontWeight: FontWeight.w500),
-                        textAlign: TextAlign.center,
-                      ),
-                    );
-                  },
-                ),
-              ),
-              leftTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 44,
-                  getTitlesWidget: (value, meta) {
-                    if (value == meta.max || value == 0) return const SizedBox.shrink();
-                    final s = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
-                    return Text(s, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)));
-                  },
-                ),
-              ),
-              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            ),
+            titlesData: titlesData,
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
               horizontalInterval: niceMax / 5,
-              getDrawingHorizontalLine: (v) => const FlLine(color: Color(0xFF1E293B), strokeWidth: 1),
+              getDrawingHorizontalLine: (v) => const FlLine(color: Color(0xFF1E293B), strokeWidth: 0.5),
             ),
             borderData: FlBorderData(show: false),
             barGroups: items.asMap().entries.map((e) {
@@ -6493,7 +6576,7 @@ class ChartDiagramWidget extends StatelessWidget {
                       end: Alignment.topCenter,
                     ),
                     width: items.length > 8 ? 12 : 20,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
                     backDrawRodData: BackgroundBarChartRodData(
                       show: true,
                       toY: niceMax,
@@ -6504,17 +6587,19 @@ class ChartDiagramWidget extends StatelessWidget {
               );
             }).toList(),
           ),
-          swapAnimationDuration: const Duration(milliseconds: 400),
+          swapAnimationDuration: const Duration(milliseconds: 300),
+          swapAnimationCurve: Curves.easeOutCubic,
         );
       }
 
       return RepaintBoundary(
         child: Container(
-          // No margin, no padding — full-bleed professional
-          height: 340,
+          constraints: const BoxConstraints(minHeight: 320, maxHeight: 600),
+          padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: const Color(0xFF0B1120),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
           ),
           clipBehavior: Clip.hardEdge,
           child: Column(
@@ -6522,22 +6607,19 @@ class ChartDiagramWidget extends StatelessWidget {
             children: [
               if (title != null)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+                  padding: const EdgeInsets.only(bottom: 12),
                   child: Text(
                     title,
                     style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
                       color: Colors.white,
-                      letterSpacing: 0.3,
                     ),
                   ),
                 ),
               Expanded(
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    6, title != null ? 8 : 16, 6, 12,
-                  ),
+                  padding: const EdgeInsets.fromLTRB(40, 12, 16, 32),
                   child: chart,
                 ),
               ),
