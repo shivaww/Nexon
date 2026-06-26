@@ -618,9 +618,11 @@ jobs:
             "  Gradient fill: opacity 0.35 top -> 0 bottom\n"
             "  Palette: #6C8EF5 #F56C6C #67C23A #E6A23C #9B59B6\n"
             "  Polish: bars rx=4; add value labels above points/bars; text-rendering=\"optimizeLegibility\"\n"
+            "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
             "- Bar/Pie: ```chart {\"type\":\"bar\",\"title\":\"...\",\"data\":[{\"label\":\"...\",\"value\":10,\"color\":\"#6C8EF5\"}]}\n"
             "- Interactive: ```html / ```javascript / ```react / ```artifact\n\n"
-            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate diagrams or charts whenever discussing data, comparisons, architectures, flows, math, physics, or complex concepts. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise.\n\n";
+            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate diagrams or charts whenever discussing data, comparisons, architectures, flows, math, physics, or complex concepts. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.\n\n";
+
 
         if (_agenticEnabled) {
           systemPromptText +=
@@ -6571,38 +6573,7 @@ class SvgDiagramWidget extends StatefulWidget {
 }
 
 class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
-  // Force-render incomplete SVGs after stream inactivity
-  static const _timeoutMs = 6000;
-  bool _forceRender = false;
-  Timer? _timer;
 
-  @override
-  void initState() {
-    super.initState();
-    _startTimer();
-  }
-
-  @override
-  void didUpdateWidget(SvgDiagramWidget oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.svgString != oldWidget.svgString) {
-      _startTimer();
-    }
-  }
-
-  void _startTimer() {
-    _timer?.cancel();
-    _forceRender = false;
-    _timer = Timer(const Duration(milliseconds: _timeoutMs), () {
-      if (mounted) setState(() => _forceRender = true);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
 
   /// Strip everything before <svg and normalize width/height to 100%
   String _cleanSvg(String raw) {
@@ -6631,12 +6602,8 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
   Widget build(BuildContext context) {
     String cleanSvg = _cleanSvg(widget.svgString);
 
-    // Check completeness — or use force-render after timeout
+    // Check completeness
     bool isComplete = cleanSvg.trim().endsWith('</svg>');
-    if (!isComplete && _forceRender) {
-      isComplete = true;
-      cleanSvg = '$cleanSvg\n</svg>';
-    }
 
     if (!isComplete) {
       return Container(
