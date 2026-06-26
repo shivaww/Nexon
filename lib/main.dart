@@ -630,26 +630,27 @@ jobs:
 
         if (_agenticEnabled) {
           systemPromptText +=
-              "Termux file tools enabled. ONE <tool_request> per turn, then STOP and wait.\n"
-              "EXACT FORMAT — copy this structure precisely:\n"
-              "<tool_request>\n"
-              "  <method>METHOD_NAME</method>\n"
-              "  <param_name>value</param_name>\n"
-              "</tool_request>\n\n"
-              "RULES:\n"
-              "• Tag names are lowercase. <method> is REQUIRED. All other tags are param names.\n"
-              "• ONE tool call per reply. Output text BEFORE the tag, never after.\n"
-              "• Do NOT use JSON inside <tool_request>. Use plain XML child tags only.\n"
-              "• Do NOT wrap in markdown code blocks. Raw XML only.\n\n"
-              "CORRECT examples:\n"
-              "  <tool_request><method>file_read</method><path>/foo/bar.dart</path><start_line>1</start_line><end_line>50</end_line></tool_request>\n"
+              "AGENTIC TOOLS — read carefully, the format is strict.\n"
+              "ONE <tool_request> per turn. STOP after it. Wait for result before next.\n\n"
+              "══ CORRECT FORMAT ══\n"
+              "Each parameter is its OWN XML TAG (not an attribute):\n\n"
+              "  <tool_request>\n"
+              "    <method>file_read</method>\n"
+              "    <path>/full/path/to/file.dart</path>\n"
+              "    <start_line>1</start_line>\n"
+              "    <end_line>50</end_line>\n"
+              "  </tool_request>\n\n"
+              "══ MORE CORRECT EXAMPLES ══\n"
               "  <tool_request><method>run_command</method><command>flutter pub get</command><cwd>/project</cwd></tool_request>\n"
-              "  <tool_request><method>str_replace</method><path>/foo/bar.dart</path><old>old text</old><new>new text</new></tool_request>\n\n"
-              "WRONG (never do this):\n"
-              "  ❌ <tool_use><name>file_read</name>...  ← wrong outer tag\n"
-              "  ❌ <function_calls><invoke>...          ← wrong format entirely\n"
-              "  ❌ ```xml <tool_request>...             ← don't wrap in code block\n"
-              "  ❌ {\"method\":\"file_read\",...}         ← JSON inside tool_request not allowed\n\n"
+              "  <tool_request><method>dir_list</method><path>/project/lib</path></tool_request>\n"
+              "  <tool_request><method>str_replace</method><path>/file.dart</path><old>oldText</old><new>newText</new></tool_request>\n\n"
+              "══ WRONG — DO NOT DO THIS ══\n"
+              "  ❌ WRONG: <PARAM name=\"path\">/foo</PARAM>   → params are NOT attributes\n"
+              "  ❌ WRONG: <parameter name=\"path\">/foo</parameter>   → same mistake\n"
+              "  ❌ WRONG: <tool_use><name>file_read</name>   → wrong outer tag\n"
+              "  ❌ WRONG: <function_calls><invoke>           → Anthropic format, not supported\n"
+              "  ❌ WRONG: wrapped in ```xml code block       → raw XML only, no fences\n\n"
+              "RULE: param name IS the tag. <path>/foo</path> not <PARAM name=\"path\">/foo</PARAM>\n\n"
               "Workflow (strict):\n"
               "1. Always code_search/git_diff before reading any file\n"
               "2. file_read/multi_read with line ranges only — never full file\n"
@@ -1020,14 +1021,58 @@ jobs:
   }
 
   Match? _findMcpMatch(String fullText) {
-    // 1. Try pure XML format
+    // 1. Try pure XML format: <tool_request>...<method>x</method>...<param>val</param>...</tool_request>
     final xmlStart = fullText.indexOf('<tool_request>');
     if (xmlStart != -1) {
        final xmlEnd = fullText.indexOf('</tool_request>', xmlStart);
        if (xmlEnd != -1) {
            final xmlContent = fullText.substring(xmlStart + 14, xmlEnd);
            final Map<String, dynamic> result = {};
+
+           // Primary: <tagname>value</tagname>
            final regex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
+           for (final match in regex.allMatches(xmlContent)) {
+             final key = match.group(1)!.toLowerCase();
+             var val = match.group(2)!;
+             val = val.trim();
+             result[key] = val;
+           }
+
+           // Fallback: <PARAM name="key">value</PARAM> — LLMs sometimes emit this
+           if (!result.containsKey('method')) {
+             final paramRegex = RegExp(
+               r'<[Pp][Aa][Rr][Aa][Mm]\s+name=["\']([a-zA-Z0-9_]+)["\']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>',
+             );
+             for (final m in paramRegex.allMatches(xmlContent)) {
+               final key = m.group(1)!.toLowerCase();
+               result[key] = m.group(2)!.trim();
+             }
+             // Also try <parameter name="key">value</parameter>
+             final paramRegex2 = RegExp(
+               r'<[Pp]arameter\s+name=["\']([a-zA-Z0-9_]+)["\']\s*>([\s\S]*?)</[Pp]arameter>',
+             );
+             for (final m in paramRegex2.allMatches(xmlContent)) {
+               final key = m.group(1)!.toLowerCase();
+               result[key] = m.group(2)!.trim();
+             }
+           }
+
+           if (result.containsKey('method')) {
+             // Keys already lowercased above, trim all values
+             for (final key in ['method', 'path', 'query', 'start_line', 'end_line', 'pattern', 'command']) {
+               if (result.containsKey(key) && result[key] is String) {
+                 result[key] = (result[key] as String).trim();
+               }
+             }
+             // TEMP: reuse old code path below via dummy match
+             final method = result['method'];
+             result.remove('method');
+             final jsonStr = jsonEncode({'method': method, 'params': result});
+             return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+           }
+
+           // Legacy path (only reached if no method found via new path above)
+           final Map<String, dynamic> legacyResult = {};
            for (final match in regex.allMatches(xmlContent)) {
              final key = match.group(1)!;
              var val = match.group(2)!;
@@ -1037,12 +1082,12 @@ jobs:
                if (val.startsWith('\n')) val = val.substring(1);
                if (val.endsWith('\n')) val = val.substring(0, val.length - 1);
              }
-             result[key] = val;
+             legacyResult[key] = val;
            }
-           if (result.containsKey('method')) {
-             final method = result['method'];
-             result.remove('method');
-             final jsonStr = jsonEncode({'method': method, 'params': result});
+           if (legacyResult.containsKey('method')) {
+             final method = legacyResult['method'];
+             legacyResult.remove('method');
+             final jsonStr = jsonEncode({'method': method, 'params': legacyResult});
              return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
            }
        }
