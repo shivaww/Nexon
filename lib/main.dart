@@ -3220,17 +3220,11 @@ class MessageBubble extends StatelessWidget {
           );
         }
         if (block.language.toLowerCase() == 'svg') {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: -14),
-            child: SvgDiagramWidget(svgString: block.content),
-          );
+          return SvgDiagramWidget(svgString: block.content);
         }
         if (block.language.toLowerCase() == 'chart' ||
             block.language.toLowerCase() == 'json-chart') {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: -14),
-            child: ChartDiagramWidget(jsonString: block.content),
-          );
+          return ChartDiagramWidget(jsonString: block.content);
         }
         if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
           return HtmlArtifactWidget(htmlContent: block.content);
@@ -6378,7 +6372,6 @@ class ChartDiagramWidget extends StatelessWidget {
     Color(0xFF84CC16),
   ];
 
-
   Color _color(String? hex, int i) {
     if (hex != null && hex.isNotEmpty) {
       try {
@@ -6388,6 +6381,13 @@ class ChartDiagramWidget extends StatelessWidget {
       } catch (_) {}
     }
     return _palette[i % _palette.length];
+  }
+
+  double _val(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v) ?? 0.0;
+    return 0.0;
   }
 
   @override
@@ -6446,8 +6446,8 @@ class ChartDiagramWidget extends StatelessWidget {
             sections: items.asMap().entries.map((e) {
               final item = e.value as Map;
               final c = _color(item['color']?.toString(), e.key);
-              final v = (item['value'] as num).toDouble();
-              final total = items.fold<double>(0, (s, x) => s + (x['value'] as num).toDouble());
+              final v = _val(item['value']);
+              final total = items.fold<double>(0, (s, x) => s + _val(x['value']));
               final pct = total > 0 ? (v / total * 100).toStringAsFixed(1) : '0';
               return PieChartSectionData(
                 color: c,
@@ -6466,8 +6466,8 @@ $pct%',
           swapAnimationCurve: Curves.easeOutCubic,
         );
       } else if (type == 'line') {
-        final maxY = items.map((e) => (e['value'] as num).toDouble()).reduce((a, b) => a > b ? a : b);
-        final niceMax = maxY * 1.15;
+        final maxY = items.map((e) => _val(e['value'])).reduce((a, b) => a > b ? a : b);
+        final niceMax = maxY * 1.15 == 0 ? 10.0 : maxY * 1.15;
         chart = LineChart(
           LineChartData(
             maxY: niceMax,
@@ -6502,7 +6502,7 @@ $pct%',
             borderData: FlBorderData(show: false),
             lineBarsData: [
               LineChartBarData(
-                spots: items.asMap().entries.map((e) => FlSpot(e.key.toDouble(), (e.value['value'] as num).toDouble())).toList(),
+                spots: items.asMap().entries.map((e) => FlSpot(e.key.toDouble(), _val(e.value['value']))).toList(),
                 isCurved: true,
                 color: _color(items.first['color']?.toString(), 0),
                 barWidth: 2,
@@ -6529,8 +6529,8 @@ $pct%',
         );
       } else {
         // Bar chart
-        final maxY = items.map((e) => (e['value'] as num).toDouble()).reduce((a, b) => a > b ? a : b);
-        final niceMax = maxY * 1.15;
+        final maxY = items.map((e) => _val(e['value'])).reduce((a, b) => a > b ? a : b);
+        final niceMax = maxY * 1.15 == 0 ? 10.0 : maxY * 1.15;
         chart = BarChart(
           BarChartData(
             alignment: BarChartAlignment.spaceAround,
@@ -6538,7 +6538,7 @@ $pct%',
             barTouchData: BarTouchData(
               enabled: true,
               touchTooltipData: BarTouchTooltipData(
-                getTooltipItems: (group, groupIndex, rod, rodIndex) {
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
                   final item = items[groupIndex] as Map;
                   return BarTooltipItem(
                     '${item['label']}
@@ -6569,7 +6569,7 @@ $pct%',
                 x: e.key,
                 barRods: [
                   BarChartRodData(
-                    toY: (item['value'] as num).toDouble(),
+                    toY: _val(item['value']),
                     gradient: LinearGradient(
                       colors: [c.withOpacity(0.7), c],
                       begin: Alignment.bottomCenter,
