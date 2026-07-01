@@ -8,6 +8,60 @@
 
 ---
 
+## 📋 Table of Contents
+| Section | Lines |
+|---|---|
+| Overview | L10 |
+| Architecture | L16–L54 |
+| Features | L55–L89 |
+| What's New — v1.1.0 | L~this section |
+| Getting Started | L90–L123 |
+| Tool Calling Protocol | L124–L149 |
+| Tech Stack | L150–L159 |
+| License | L160+ |
+
+---
+
+## 🆕 What's New — v1.1.0
+
+### 🛡️ Shell Command Permission System
+Before the AI executes any shell command, the app now shows a native permission dialog — just like professional IDEs (VS Code, Android Studio):
+- **Yes** — allow this one command
+- **This chat** — allow all commands for the current session
+- **Always ✓** — remember and never ask again (saved to device storage)
+- **No** — block execution, AI receives a denial error and can recover
+
+Permission preference is persisted via `SharedPreferences` (`shell_permission_v1`) and loaded on every app start.
+
+### 🔧 Python Bridge: `<command>` XML Support
+The MCP server (`python_bridge/mcp_server.py`) now accepts raw XML `<command>` blocks directly — not just JSON:
+```xml
+<command>ls lib/</command>
+<workspace_dir>/data/.../my_project</workspace_dir>
+```
+Both paths (XML and JSON RPC) are supported simultaneously.
+
+### 🗂️ Workspace-Aware Command Execution
+All shell commands now correctly run inside the **user-configured workspace directory**:
+- `cwd` is automatically injected as `_agenticWorkspace` if not explicitly set
+- Both dispatch blocks (main chat + deep research) inject `workspace_dir` AND `cwd`
+- Path resolution in `mcp_server.py` fixed: no more double-prefix bug when workspace is a subdirectory of Termux home
+
+### 🧠 Upgraded Agentic System Prompt
+The agentic system prompt is now concise and structured:
+- **CORE RULE**: one `<command>` per turn, stop and wait
+- **SHELL TOOLKIT**: full list of available Termux tool categories
+- **QUALITY STANDARDS**: read before edit, verify after edit, no placeholders
+- **PROJECT DOCUMENTATION**: AI automatically maintains `README.md` with a Table of Contents (line ranges) for every project
+
+### 🔄 Path Resolution Fixes (`mcp_server.py`)
+- `~/` expands to the configured workspace (not Termux root)
+- Absolute Termux paths no longer get double-prefixed when workspace is a subdir
+- `resolve_path()` correctly guards against remapping paths already inside the workspace
+
+---
+
+
 ## Overview
 
 Nexon provides a beautiful Flutter-based agentic workspace that communicates directly with LLM API providers for streaming chat, while routing local tool calls to a zero-dependency Python-based Model Context Protocol (MCP) server running inside Termux.

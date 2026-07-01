@@ -40,9 +40,44 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             body = self.rfile.read(content_length).decode('utf-8')
+        except Exception as e:
+            self.send_json_response(400, {"error": f"Failed to read body: {e}"})
+            return
+
+        # 1. Try to parse as XML command: <command>...</command>
+        cmd_match = re.search(r'<command>(.*?)</command>', body, re.DOTALL)
+        if cmd_match:
+            command = cmd_match.group(1).strip()
+            cwd_match = re.search(r'<cwd>(.*?)</cwd>', body, re.DOTALL)
+            ws_match = re.search(r'<workspace_dir>(.*?)</workspace_dir>', body, re.DOTALL)
+            timeout_match = re.search(r'<timeout>(\d+)</timeout>', body)
+            timeout = int(timeout_match.group(1)) if timeout_match else 120
+
+            # workspace_dir from tag, or cwd tag, fallback BASE_DIR
+            workspace_dir_val = ws_match.group(1).strip() if ws_match else ""
+            cwd_val = cwd_match.group(1).strip() if cwd_match else ""
+
+            params = {"command": command, "timeout": timeout}
+            if workspace_dir_val:
+                params["workspace_dir"] = workspace_dir_val
+            if cwd_val:
+                params["cwd"] = cwd_val
+            elif workspace_dir_val:
+                # default cwd to workspace so relative paths work
+                params["cwd"] = workspace_dir_val
+
+            try:
+                result = self.execute_tool("run_command", params)
+                self.send_json_response(200, {"result": result})
+            except Exception as e:
+                self.send_json_response(500, {"error": str(e)})
+            return
+
+        # 2. Otherwise fallback to parsing as JSON payload
+        try:
             request_data = json.loads(body)
         except json.JSONDecodeError:
-            self.send_json_response(400, {"error": "Invalid JSON payload"})
+            self.send_json_response(400, {"error": "Invalid request format (expected JSON or <command> XML)"})
             return
 
         method = request_data.get('method')
@@ -61,13 +96,31 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
     def resolve_path(self, path_str, workspace_dir=None):
         if not path_str:
             raise ValueError("Path parameter is missing")
+        
+        # Strip file:// URI scheme if present
+        if path_str.startswith("file://"):
+            path_str = path_str[7:]
+            
         base = workspace_dir if workspace_dir else BASE_DIR
+        
+        termux_home = "/data/data/com.termux/files/home"
+        
+        # Replace ~/  shorthand with base
+        if path_str.startswith("~/"):
+            path_str = base.rstrip('/') + path_str[1:]
+        elif path_str == "~":
+            path_str = base
+        # Only remap bare termux_home prefix if the path does NOT already fall
+        # under workspace_dir (avoids double-prefix when workspace_dir is a subdir)
+        elif path_str.startswith(termux_home) and not path_str.startswith(base):
+            path_str = base.rstrip('/') + path_str[len(termux_home):]
+            
         p = Path(path_str)
-        # If already absolute, use it as-is (no double-prefix)
+        # If already absolute, use it as-is
         if p.is_absolute():
-            return p
+            return p.resolve()
         # Relative path: join to base
-        return Path(base) / path_str
+        return (Path(base) / path_str).resolve()
 
     def execute_tool(self, method, params):
         workspace_dir = params.get('workspace_dir')
@@ -445,7 +498,36 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             command = params.get('command')
             if not command:
                 return {"error": "command is required"}
-            # Restrict some obviously dangerous commands, though users run this locally.
+
+            # Resolve effective workspace: workspace_dir param > BASE_DIR
+            effective_ws = (workspace_dir or BASE_DIR).rstrip('/')
+            termux_home = "/data/data/com.termux/files/home"
+
+            # Translate Termux home paths in the command to effective_ws.
+            # Guard: if effective_ws is already a subdirectory of termux_home,
+            # a naive replace would cause double-prefix. Only replace occurrences
+            # of termux_home that are NOT already inside effective_ws.
+            if termux_home in command:
+                if effective_ws.startswith(termux_home):
+                    # workspace is subdir of termux_home: only remap paths that
+                    # sit directly under termux_home (not already under effective_ws)
+                    import re as _re
+                    def _remap(m):
+                        full = m.group(0)
+                        # If the full path starts with effective_ws, leave it alone
+                        if full.startswith(effective_ws):
+                            return full
+                        return effective_ws + full[len(termux_home):]
+                    command = _re.sub(re.escape(termux_home) + r'(/[^\s\'"]*|)', _remap, command)
+                else:
+                    command = command.replace(termux_home, effective_ws)
+
+            # Expand ~ shorthand to effective workspace
+            command = command.replace("~/", effective_ws.rstrip('/') + '/')
+            if command == "~":
+                command = effective_ws
+
+            # Restrict obviously dangerous commands
             cmd_lower = command.lower()
             if "rm -rf /" in cmd_lower or "mkfs" in cmd_lower:
                 return {"error": "Dangerous command rejected."}
@@ -456,16 +538,16 @@ class MCPServerHandler(http.server.BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 timeout = 120
 
-            # cwd: use explicit param, fallback to workspace_dir, then BASE_DIR
+            # cwd: explicit <cwd> param > workspace_dir > BASE_DIR
             cwd_raw = params.get('cwd', '')
             if cwd_raw:
-                cwd_path = self.resolve_path(cwd_raw, workspace_dir)
+                cwd_path = self.resolve_path(cwd_raw, effective_ws)
             else:
-                cwd_path = Path(workspace_dir) if workspace_dir else Path(BASE_DIR)
+                cwd_path = Path(effective_ws)
 
             # Ensure cwd exists, fall back gracefully
             if not cwd_path.is_dir():
-                cwd_path = Path(workspace_dir) if workspace_dir else Path(BASE_DIR)
+                cwd_path = Path(effective_ws) if Path(effective_ws).is_dir() else Path(BASE_DIR)
 
             # Prepare environment with Termux path prepended
             full_env = dict(os.environ)

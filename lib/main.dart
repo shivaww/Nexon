@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +17,8 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,6 +85,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
+  // Shell command permission: 'ask', 'session', 'always', 'never'
+  String _shellPermission = 'ask';
+  // Per-session always-allow flag (reset when app restarts)
+  bool _shellSessionAllow = false;
   String _agenticWorkspace = '/data/data/com.termux/files/home';
   String _customMcpUrl = '';
   final Map<String, StreamSubscription<String>> _activeSubscriptions = {};
@@ -200,11 +208,30 @@ class _ChatHomePageState extends State<ChatHomePage> {
     return _provider.models.first;
   }
 
+  Future<void> _requestStoragePermissions() async {
+    if (Platform.isAndroid) {
+      try {
+        final storageStatus = await Permission.storage.status;
+        if (!storageStatus.isGranted) {
+          await Permission.storage.request();
+        }
+        final manageStatus = await Permission.manageExternalStorage.status;
+        if (!manageStatus.isGranted) {
+          await Permission.manageExternalStorage.request();
+        }
+      } catch (e) {
+        debugPrint('Error requesting permissions: $e');
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _requestStoragePermissions();
   }
+
 
   @override
   void dispose() {
@@ -267,6 +294,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _settings = nextSettings;
       _searchSettings = loadedSearchSettings;
       _agenticEnabled = agenticRaw ?? true;
+      _shellPermission = prefs.getString('shell_permission_v1') ?? 'ask';
       _agenticWorkspace = agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
       _deepResearchEnabled = deepResearchRaw ?? false;
@@ -304,6 +332,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setString(_selectedProviderKey, _selectedProviderId);
     await prefs.setString('search_settings_v1', jsonEncode(_searchSettings.toJson()));
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
+    await prefs.setString('shell_permission_v1', _shellPermission);
     await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
@@ -494,30 +523,11 @@ jobs:
   }
 
   static const String mcpAndSearchSystemPrompt =
-    "Tools available: web search + Termux file system.\n\n"
+    "Tools available: web search + Termux shell.\n\n"
     "Web search: emit exactly one line then stop:\n"
     "<search_request>query</search_request>\n\n"
-    "File/system tool: emit ONE block then stop:\n"
-    "<tool_request>\n"
-    "<method>METHOD</method>\n"
-    "<PARAM>VALUE</PARAM>\n"
-    "</tool_request>\n\n"
-    "Methods (params as child tags):\n"
-    "code_search: pattern,path,context_lines\n"
-    "file_info: path\n"
-    "git_diff: path\n"
-    "git_status: cwd\n"
-    "multi_read: path,ranges\n"
-    "symbol_search: symbol,path\n"
-    "file_read: path,start_line,end_line\n"
-    "file_write: path,content\n"
-    "file_edit: path,start_line,end_line,replacement\n"
-    "file_delete: path\n"
-    "dir_list: path\n"
-    "dir_create: path\n"
-    "file_search: path,pattern\n"
-    "find_paths: path,pattern,type\n"
-    "run_command: command,cwd\n\n"
+    "Run command: emit ONE block then stop:\n"
+    "<command>COMMAND</command>\n\n"
     "Resume after results arrive.";
 
   void _stopResponse(String sessionId) {
@@ -605,7 +615,7 @@ jobs:
     });
 
     if (targetSessionId == _activeSessionId) {
-      _scrollToBottom();
+      _scrollToBottom(force: true);
     }
 
     int toolCallCount = 0;
@@ -631,7 +641,7 @@ jobs:
         });
 
         if (targetSessionId == _activeSessionId) {
-          _scrollToBottom();
+          _scrollToBottom(force: true);
         }
 
         final List<ChatMessage> historyForApi = [];
@@ -661,77 +671,35 @@ jobs:
             "SVG MIND MAP REQUIREMENT: Mind maps MUST be drawn strictly as vertical tree structures (top-to-bottom hierarchy layouts), never horizontal or radial.\\n\\n";
 
         if (_agenticEnabled) {
-          systemPromptText +=
-              "AGENTIC TOOLS — read carefully, the format is strict.\n"
-              "ONE <tool_request> per turn. STOP after it. Wait for result before next.\n\n"
-              "══ CORRECT FORMAT ══\n"
-              "Each parameter is its OWN XML TAG (not an attribute):\n\n"
-              "  <tool_request>\n"
-              "    <method>file_read</method>\n"
-              "    <path>/full/path/to/file.dart</path>\n"
-              "    <start_line>1</start_line>\n"
-              "    <end_line>50</end_line>\n"
-              "  </tool_request>\n\n"
-              "══ MORE CORRECT EXAMPLES ══\n"
-              "  <tool_request><method>run_command</method><command>flutter pub get</command><cwd>/project</cwd></tool_request>\n"
-              "  <tool_request><method>dir_list</method><path>/project/lib</path></tool_request>\n"
-              "  <tool_request><method>str_replace</method><path>/file.dart</path><old>oldText</old><new>newText</new></tool_request>\n\n"
-              "══ WRONG — DO NOT DO THIS ══\n"
-              "  ❌ WRONG: <PARAM name=\"path\">/foo</PARAM>   → params are NOT attributes\n"
-              "  ❌ WRONG: <parameter name=\"path\">/foo</parameter>   → same mistake\n"
-              "  ❌ WRONG: <tool_use><name>file_read</name>   → wrong outer tag\n"
-              "  ❌ WRONG: <function_calls><invoke>           → Anthropic format, not supported\n"
-              "  ❌ WRONG: wrapped in ```xml code block       → raw XML only, no fences\n\n"
-              "CRITICAL RULE: NEVER use <PARAM name=\"...\"> or <parameter name=\"...\">. Every parameter name must be its own XML tag. Use <path>/foo</path> instead of <PARAM name=\"path\">/foo</PARAM>.\n\n"
-              "Workflow (strict):\n"
-              "1. Always code_search/git_diff before reading any file\n"
-              "2. file_read/multi_read with line ranges only — never full file\n"
-              "3. str_replace for edits — changed lines only, never rewrite whole file\n"
-              "4. Trace only the relevant call chain; ignore unrelated modules\n"
-              "5. MEMORY.md at project root — read at start, update when decisions change\n\n"
-              "Project workflow:\n"
-              "1. Session start: read MEMORY.md, run git_status\n"
-              "2. Check required CLIs (gh, firebase, flutter) via 'which'; install if missing\n"
-              "3. For APK builds: push code, trigger GitHub Actions, run 'gh run watch --exit-status' to stream logs\n"
-              "4. On build failure: read logs, web_search the error, fix, repush\n"
-              "5. On success: run 'gh run download' to get APK artifact URL\n"
-              "6. For web/backend: use Firebase CLI (firebase init + firebase deploy)\n"
-              "7. Write MEMORY.md after every major step: current state, errors seen, decisions made\n"
-              "8. Always ask permission before: creating repos, making commits, billing-linked deployments\n"
-              "Logins (ask user once, never store): gh auth login, firebase login --no-localhost\n\n"
-              "GitHub Actions Flutter workflow (auto-generate if a flutter project is detected and no .github/workflows/build.yml exists):\n"
-              "```yaml\n"
-              "# .github/workflows/build.yml\n"
-              "name: Build APK\n"
-              "on: [workflow_dispatch, push]\n"
-              "jobs:\n"
-              "  build:\n"
-              "    runs-on: ubuntu-latest\n"
-              "    steps:\n"
-              "      - uses: actions/checkout@v4\n"
-              "      - uses: subosito/flutter-action@v2\n"
-              "      - run: flutter build apk --release\n"
-              "      - uses: actions/upload-artifact@v4\n"
-              "        with:\n"
-              "          name: apk\n"
-              "          path: build/app/outputs/flutter-apk/app-release.apk\n"
-              "```\n\n"
-              "Methods (params as child tags):\n"
-              "code_search: pattern,path,context_lines\n"
-              "file_info: path\n"
-              "git_diff: path\n"
-              "git_status: cwd\n"
-              "multi_read: path,ranges (ranges format: '1-50,100-150' comma-separated line ranges)\n"
-              "symbol_search: symbol,path\n"
-              "file_read: path,start_line,end_line\n"
-              "dir_list: path\n"
-              "file_search: path,pattern\n"
-              "find_paths: path,pattern,type\n"
-              "str_replace: path,old,new\n"
-              "run_command: command,cwd\n"
-              "file_write: path,content\n"
-              "file_delete: path\n\n"
-              "Resume after results. Never refuse file ops. Never run destructive commands.\n";
+          systemPromptText += r"""
+AGENTIC IDE — You are the AI engine of a real, production-grade mobile IDE powered by Termux on Android.
+You have full shell access with the user's permission. Use Termux at its MAXIMUM capability.
+
+━━ CORE RULE ━━
+Emit ONE <command> block per turn, then STOP. Wait for output. Then decide the next step.
+FORMAT: <command>any shell command here</command>
+
+━━ SHELL TOOLKIT ━━
+- File ops      : cat, sed, awk, grep, find, diff, cp, mv, rm, mkdir, touch, wc, stat
+- Write/edit    : heredoc (cat > file << 'EOF'), sed -i, python3 inline replace
+- Code tools    : dart, flutter, git, npm, pip, firebase, build_runner, dart fix
+- Shell power   : pipes, &&, ||, xargs, loops, env vars, process substitution, tee
+Think like a senior engineer. Choose the best tool for the situation.
+
+━━ QUALITY STANDARDS ━━
+- Always READ before editing (cat -n to see exact line numbers)
+- Always VERIFY after editing (flutter analyze / dart format / dart fix --apply)
+- Write clean, production-grade code — no placeholders, no TODOs left behind
+- Handle errors explicitly; never silently ignore failures
+
+━━ PROJECT DOCUMENTATION ━━
+For every project, maintain a README.md at the project root:
+- Lines 1–30: Table of Contents with line ranges so any section can be jumped to directly
+  Example:  "## Auth Feature .............. L45–L120"
+- Document project status, architecture decisions, and feature progress
+- Update README whenever you add or change a significant feature
+""";
+
         }
 
         if (_customMcpUrl.isNotEmpty) {
@@ -1006,9 +974,23 @@ jobs:
               }
               
               toolParams['workspace_dir'] = _agenticWorkspace;
+              // Always set cwd to workspace so relative paths work
+              if (!toolParams.containsKey('cwd') || (toolParams['cwd'] as String?)?.isEmpty == true) {
+                toolParams['cwd'] = _agenticWorkspace;
+              }
               parsed['params'] = toolParams;
               jsonString = jsonEncode(parsed);
             } catch (_) {}
+
+            // Permission check before running shell commands
+            if (toolMethod == 'run_command' || toolMethod == 'shell_exec') {
+              final cmd = toolParams['command']?.toString() ?? '';
+              final allowed = await _askShellPermission(cmd);
+              if (!allowed) {
+                toolOutputs.add('Tool Result [${toolMethod}]:\n\n{"error": "User denied shell command execution."}');
+                continue;
+              }
+            }
 
             // Show live status banner
             if (mounted) setState(() => _toolStatus = _toolStatusLabel(toolMethod, toolParams));
@@ -1095,7 +1077,122 @@ jobs:
     }
   }
 
+
+  /// Show permission dialog before executing a shell command.
+  /// Returns true if the command should proceed.
+  Future<bool> _askShellPermission(String command) async {
+    // Already allowed globally
+    if (_shellPermission == 'always') return true;
+    // Already allowed for this session
+    if (_shellSessionAllow) return true;
+    // User previously denied always
+    if (_shellPermission == 'never') return false;
+
+    if (!mounted) return false;
+
+    final short = command.length > 80 ? command.substring(0, 77) + '…' : command;
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(children: const [
+          Icon(Icons.terminal, color: Color(0xFF89B4FA), size: 20),
+          SizedBox(width: 8),
+          Text('Run Shell Command?',
+              style: TextStyle(color: Color(0xFFCDD6F4), fontSize: 16, fontWeight: FontWeight.w600)),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('The AI wants to execute:', style: TextStyle(color: Color(0xFF6C7086), fontSize: 12)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF11111B),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF313244)),
+              ),
+              child: SelectableText(short,
+                  style: const TextStyle(color: Color(0xFFA6E3A1), fontSize: 12, fontFamily: 'monospace')),
+            ),
+          ],
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+        actions: [
+          Row(
+            children: [
+              // NO — left side
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'no'),
+                child: const Text('No', style: TextStyle(color: Color(0xFFF38BA8))),
+              ),
+              const Spacer(),
+              // YES, ALWAYS REMEMBER
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'always'),
+                child: const Text('Always ✓', style: TextStyle(color: Color(0xFFCBA6F7), fontSize: 12)),
+              ),
+              const SizedBox(width: 4),
+              // YES, THIS CHAT
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'session'),
+                child: const Text('This chat', style: TextStyle(color: Color(0xFF89DCEB), fontSize: 12)),
+              ),
+              const SizedBox(width: 4),
+              // YES ONCE
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF89B4FA),
+                  foregroundColor: const Color(0xFF1E1E2E),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+                onPressed: () => Navigator.pop(ctx, 'yes'),
+                child: const Text('Yes', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    if (result == null || result == 'no') return false;
+    if (result == 'always') {
+      setState(() => _shellPermission = 'always');
+      await _saveSettings();
+      return true;
+    }
+    if (result == 'session') {
+      setState(() => _shellSessionAllow = true);
+      return true;
+    }
+    return true; // 'yes'
+  }
+
   Match? _findMcpMatch(String fullText) {
+    // 0. Try direct command format: <command>...</command>
+    final cmdStart = fullText.indexOf('<command>');
+    if (cmdStart != -1) {
+      final cmdEnd = fullText.indexOf('</command>', cmdStart);
+      if (cmdEnd != -1) {
+        final commandVal = fullText.substring(cmdStart + 9, cmdEnd).trim();
+        // cwd injected at dispatch time via _agenticWorkspace; embed it
+        // here as a placeholder — it gets overwritten by dispatch block anyway
+        final jsonStr = jsonEncode({
+          'method': 'run_command',
+          'params': {
+            'command': commandVal,
+            'cwd': '', // will be set to _agenticWorkspace in dispatch block
+          }
+        });
+        return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+      }
+    }
+
     // 1. Try pure XML format: <tool_request>...<method>x</method>...<param>val</param>...</tool_request>
     final xmlStart = fullText.indexOf('<tool_request>');
     if (xmlStart != -1) {
@@ -1525,6 +1622,9 @@ jobs:
                 params.remove('server');
               }
               params['workspace_dir'] = _agenticWorkspace;
+              if (!params.containsKey('cwd') || (params['cwd'] as String?)?.isEmpty == true) {
+                params['cwd'] = _agenticWorkspace;
+              }
               parsed['params'] = params;
               jsonString = jsonEncode(parsed);
             } catch (_) {}
@@ -1892,14 +1992,20 @@ jobs:
     _saveSessions();
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
-      );
+      final position = _scrollController.position;
+      final maxScroll = position.maxScrollExtent;
+      final currentScroll = position.pixels;
+      
+      if (force || (maxScroll - currentScroll) <= 150.0) {
+        _scrollController.animateTo(
+          maxScroll,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+        );
+      }
     });
   }
 
@@ -2153,7 +2259,7 @@ class ChatSurface extends StatelessWidget {
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
-                  if (msg.text.contains('<mcp_request>') || msg.text.contains('<tool_request>')) {
+                  if (msg.text.contains('<mcp_request>') || msg.text.contains('<tool_request>') || msg.text.contains('<command>')) {
                     state = AvatarAnimationState.mcp;
                   } else if (msg.text.contains('<search_request>')) {
                     state = AvatarAnimationState.searching;
@@ -2723,27 +2829,43 @@ String getExtension(String lang) {
 Future<void> _saveCodeBlock(BuildContext context, String code, String language) async {
   try {
     final ext = getExtension(language);
-    final dir = Directory('/data/data/com.termux/files/home/downloads');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
     final filename = 'code_${DateTime.now().millisecondsSinceEpoch}.$ext';
-    final file = File('${dir.path}/$filename');
-    await file.writeAsString(code);
     
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('File saved: downloads/$filename'),
-        backgroundColor: const Color(0xFF36764D),
-      ),
+    if (Platform.isAndroid) {
+      await Permission.storage.request();
+    }
+    
+    final bytes = Uint8List.fromList(utf8.encode(code));
+    final String? path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save Code Block',
+      fileName: filename,
+      bytes: bytes,
     );
+    
+    if (path == null) {
+      return; // User cancelled
+    }
+    
+    final file = File(path);
+    await file.writeAsBytes(bytes);
+    
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('File saved: ${file.path.split('/').last}'),
+          backgroundColor: const Color(0xFF36764D),
+        ),
+      );
+    }
   } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Failed to save file: $e'),
-        backgroundColor: const Color(0xFF9B4D39),
-      ),
-    );
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save file: $e'),
+          backgroundColor: const Color(0xFF9B4D39),
+        ),
+      );
+    }
   }
 }
 
@@ -3279,19 +3401,26 @@ class MessageBubble extends StatelessWidget {
                     return const Text('Error rendering read_url request', style: TextStyle(color: Colors.red));
                   }
                 })
-              else if (message.text.contains('<mcp_request>') || message.text.contains('<tool_request>'))
+              else if (message.text.contains('<mcp_request>') || message.text.contains('<tool_request>') || message.text.contains('<command>'))
                 Builder(builder: (context) {
                   try {
-                    final isXml = message.text.contains('<tool_request>');
-                    final openTag = isXml ? '<tool_request>' : '<mcp_request>';
-                    final closeTag = isXml ? '</tool_request>' : '</mcp_request>';
+                    final isXml = message.text.contains('<tool_request>') || message.text.contains('<command>');
+                    final openTag = message.text.contains('<tool_request>') 
+                        ? '<tool_request>' 
+                        : (message.text.contains('<command>') ? '<command>' : '<mcp_request>');
+                    final closeTag = message.text.contains('</tool_request>') 
+                        ? '</tool_request>' 
+                        : (message.text.contains('</command>') ? '</command>' : '</mcp_request>');
                     
                     final startIndex = message.text.indexOf(openTag);
                     final endIndex = message.text.indexOf(closeTag);
                     final textBefore = message.text.substring(0, startIndex).trim();
                     
                     if (endIndex == -1) {
-                      final contentStr = message.text.substring(startIndex + openTag.length).trim();
+                      var contentStr = message.text.substring(startIndex + openTag.length).trim();
+                      if (openTag == '<command>') {
+                        contentStr = '<method>run_command</method><command>$contentStr</command>';
+                      }
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -3300,7 +3429,10 @@ class MessageBubble extends StatelessWidget {
                         ],
                       );
                     } else {
-                      final contentStr = message.text.substring(startIndex + openTag.length, endIndex).trim();
+                      var contentStr = message.text.substring(startIndex + openTag.length, endIndex).trim();
+                      if (openTag == '<command>') {
+                        contentStr = '<method>run_command</method><command>$contentStr</command>';
+                      }
                       final textAfter = message.text.substring(endIndex + closeTag.length).trim();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -6116,16 +6248,28 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     }
 
     try {
-      final dir = Directory('/data/data/com.termux/files/home/downloads');
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
+      if (Platform.isAndroid) {
+        await Permission.storage.request();
       }
-      final file = File('${dir.path}/${widget.fileName}');
-      await file.writeAsString(contentToSave);
+      
+      final bytes = Uint8List.fromList(utf8.encode(contentToSave));
+      final String? path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Research Report',
+        fileName: widget.fileName,
+        bytes: bytes,
+      );
+      
+      if (path == null) {
+        return; // User cancelled
+      }
+      
+      final file = File(path);
+      await file.writeAsBytes(bytes);
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to downloads/${widget.fileName}'),
+            content: Text('Saved to ${file.path.split('/').last}'),
             backgroundColor: const Color(0xFF36764D),
           ),
         );
@@ -6428,17 +6572,29 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
 
   Future<void> _downloadFile() async {
     try {
-      final dir = Directory('/data/data/com.termux/files/home/downloads');
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
+      if (Platform.isAndroid) {
+        await Permission.storage.request();
       }
+      
       final filename = 'page_${DateTime.now().millisecondsSinceEpoch}.html';
-      final file = File('${dir.path}/$filename');
-      await file.writeAsString(widget.htmlContent);
+      final bytes = Uint8List.fromList(utf8.encode(widget.htmlContent));
+      final String? path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save HTML Page',
+        fileName: filename,
+        bytes: bytes,
+      );
+      
+      if (path == null) {
+        return; // User cancelled
+      }
+      
+      final file = File(path);
+      await file.writeAsBytes(bytes);
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to downloads/$filename'),
+            content: Text('Saved to ${file.path.split('/').last}'),
             backgroundColor: const Color(0xFF36764D),
           ),
         );

@@ -129,6 +129,11 @@ class SecurityManager:
         extra_blocked: list[tuple[str, str]] | None = None,
     ) -> None:
         self.approved_paths = approved_paths or list(DEFAULT_APPROVED_PATHS)
+        # Dynamically add host's actual home directory to approved paths
+        actual_home = os.path.realpath(os.path.expanduser("~"))
+        if actual_home not in [os.path.realpath(p) for p in self.approved_paths]:
+            self.approved_paths.append(actual_home)
+
         self.blocked_patterns = list(BLOCKED_PATTERNS)
         if extra_blocked:
             for pattern, desc in extra_blocked:

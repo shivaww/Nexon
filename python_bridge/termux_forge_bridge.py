@@ -752,10 +752,52 @@ class TermuxForgeBridge:
         finally:
             self._clients.discard(websocket)
 
+    def translate_termux_path(self, path_str: Any) -> Any:
+        if not isinstance(path_str, str):
+            return path_str
+        
+        # Strip file:// URI scheme if present
+        if path_str.startswith("file://"):
+            path_str = path_str[7:]
+            
+        termux_home = "/data/data/com.termux/files/home"
+        actual_home = os.path.expanduser("~")
+        
+        if path_str.startswith(termux_home):
+            path_str = path_str.replace(termux_home, actual_home, 1)
+        elif path_str.startswith("~/"):
+            path_str = path_str.replace("~/", actual_home + "/", 1)
+            
+        return path_str
+
+    def translate_termux_path_in_str(self, val: Any) -> Any:
+        if not isinstance(val, str):
+            return val
+        termux_home = "/data/data/com.termux/files/home"
+        actual_home = os.path.expanduser("~")
+        return val.replace(termux_home, actual_home)
+
+    def resolve_params_paths(self, params: Any) -> Any:
+        if isinstance(params, dict):
+            new_params = {}
+            for k, v in params.items():
+                if k in ("path", "cwd", "workspace_dir", "workspaceDir", "directory"):
+                    new_params[k] = self.translate_termux_path(v)
+                elif k in ("command", "args"):
+                    new_params[k] = self.translate_termux_path_in_str(v) if isinstance(v, str) else ([self.translate_termux_path_in_str(item) for item in v] if isinstance(v, list) else v)
+                else:
+                    new_params[k] = self.resolve_params_paths(v)
+            return new_params
+        elif isinstance(params, list):
+            return [self.resolve_params_paths(item) for item in params]
+        return params
+
     async def _process_message(self, raw: str) -> str | None:
         """Parse and dispatch a JSON-RPC message."""
         try:
             request = JsonRpcRequest.from_json(raw)
+            if request.params:
+                request.params = self.resolve_params_paths(request.params)
         except JsonRpcError as exc:
             return JsonRpcResponse(id=None, error=exc.to_dict()).to_json()
 
