@@ -149,6 +149,7 @@ npm install -g firebase-tools
 
 # Install Nexon Bridge
 curl -sL https://github.com/shivaww/Nexon/raw/main/install_bridge.sh | bash
+termux-wake-lock
 ```
 
 #### 2. Start the Local Python MCP Gateway
