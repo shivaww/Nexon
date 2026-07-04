@@ -18,6 +18,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:nexon/widgets/nexon_chart.dart';
 
 
 Future<void> main() async {
@@ -270,7 +271,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   Future<void> _checkAndRequestPermissionsOnStartup() async {
-    ensureStoragePermission(context, _requestStoragePermissions);
+    final prefs = await SharedPreferences.getInstance();
+    final hasAsked = prefs.getBool('has_asked_startup_storage_permission_v1') ?? false;
+    if (!hasAsked) {
+      await prefs.setBool('has_asked_startup_storage_permission_v1', true);
+      if (mounted) {
+        ensureStoragePermission(context, _requestStoragePermissions);
+      }
+    }
   }
 
   @override
@@ -700,23 +708,86 @@ jobs:
             "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
             "Render via markdown code blocks:\n"
             "- LaTeX: \\[ ... \\] or \\( ... \\)\n"
-            "- SVG (all diagrams/visuals): ```svg\n"
+            "- SVG (ONLY for non-graph diagrams like flowcharts, mind maps, architecture, illustrations): ```svg\n"
             "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
-            "  Margins: 70px left, 40px top, 30px right, 55px bottom\n"
-            "  Font: font-family=\"system-ui,sans-serif\"; labels 12px fill=#555, title 15px bold fill=#222\n"
-            "  Lines: stroke-width 2.5px; points r=5, 2px stroke, white fill\n"
-            "  Grid: stroke=#555 opacity=0.45 stroke-dasharray=\"4 4\" (Make grid lines and data ticks dark and clear so data values are easily read, not just decorative)\n"
-            "  Gradient fill: opacity 0.35 top -> 0 bottom\n"
-            "  Palette: #6C8EF5 #F56C6C #67C23A #E6A23C #9B59B6\n"
-            "  Typography: Title 20px 600w, Axis 13px 400w, Labels 12px 500w, Tooltips 12px monospace\\n"
-            "  Layout: Container 20px padding, 1px border, 8px radius. Chart area: 12px top, 16px right, 32px bottom, 40px left. Legend gap 16px. Min-height 320px, max 600px\\n"
-            "  Bar Chart: 4px top radius, opacity 1.0 (hover +0.15), 20% group spacing. Gridlines 0.5px opacity 0.6\\n"
-            "  Line Chart: Stroke 2px rounded caps/joins. Points 3.5px radius (hover 5px). Fill opacity 0.08. Gridlines 0.5px opacity 0.5\\n"
-            "  Scatter Chart: Points 4.5px radius (hover 6px). Stroke 1px white. Trend lines 1.5px dashed opacity 0.5. Gridlines 0.5px opacity 0.4\\n"
-            "  Animations: Load 200-400ms cubic-bezier, Hover 120-150ms ease-out\\n"
-            "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\\n"
-            "- Bar/Pie/Line: ```chart {\\\"type\\\":\\\"bar\\\",\\\"title\\\":\\\"...\\\",\\\"data\\\":[{\\\"label\\\":\\\"...\\\",\\\"value\\\":10,\\\"color\\\":\\\"#6C8EF5\\\"}]}\\n"
-"- Interactive: ```html / ```javascript / ```react / ```artifact\n"
+            "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
+            "  SVG MIND MAP REQUIREMENT: Mind maps MUST be drawn strictly as vertical tree structures.\n"
+            "  NEVER use SVG for charts/graphs. Use ```chart instead.\n\n"
+            "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked): ```chart\n"
+            "  Simple line-based format. LLM passes only values. Examples:\n\n"
+            "  BAR/GROUPED BAR:\n"
+            "  type: bar\n"
+            "  title: Revenue by Quarter\n"
+            "  range: 0-100\n"
+            "  labels: Q1, Q2, Q3, Q4\n"
+            "  series: Revenue = 45, 67, 89, 52\n"
+            "  series: Costs = 30, 45, 60, 40\n\n"
+            "  STACKED BAR:\n"
+            "  type: stacked\n"
+            "  title: Stack Example\n"
+            "  labels: Q1, Q2, Q3\n"
+            "  series: A = 30, 40, 50\n"
+            "  series: B = 20, 30, 10\n\n"
+            "  LINE/CURVE (single or multi-series):\n"
+            "  type: line\n"
+            "  title: Growth Trend\n"
+            "  labels: Jan, Feb, Mar, Apr\n"
+            "  series: Users = 100, 250, 400, 800\n\n"
+            "  AREA CHART:\n"
+            "  type: area\n"
+            "  title: Traffic\n"
+            "  labels: Mon, Tue, Wed\n"
+            "  series: Visits = 500, 800, 650\n\n"
+            "  PIE/DONUT (shorthand — just label: value):\n"
+            "  type: pie\n"
+            "  title: Market Share\n"
+            "  Android: 45\n"
+            "  iOS: 30\n"
+            "  Web: 25\n\n"
+            "  SCATTER:\n"
+            "  type: scatter\n"
+            "  title: Distribution\n"
+            "  labels: A, B, C, D, E\n"
+            "  series: Points = 10, 25, 15, 40, 30\n\n"
+            "  RADAR/SPIDER:\n"
+            "  type: radar\n"
+            "  title: Skills\n"
+            "  labels: Speed, Power, Defense, Agility, Stamina\n"
+            "  series: Player A = 80, 65, 90, 70, 85\n"
+            "  series: Player B = 60, 80, 70, 90, 75\n\n"
+            "  HISTOGRAM:\n"
+            "  type: histogram\n"
+            "  title: Score Distribution\n"
+            "  labels: 0-20, 21-40, 41-60, 61-80, 81-100\n"
+            "  series: Frequency = 5, 12, 25, 18, 8\n\n"
+            "  HEATMAP:\n"
+            "  type: heatmap\n"
+            "  title: Activity\n"
+            "  xlabels: Mon, Tue, Wed\n"
+            "  ylabels: Morning, Afternoon, Evening\n"
+            "  row: 3, 7, 5\n"
+            "  row: 8, 4, 9\n"
+            "  row: 2, 6, 1\n\n"
+            "  BUBBLE:\n"
+            "  type: bubble\n"
+            "  title: Market Size\n"
+            "  labels: Tech, Health, Finance\n"
+            "  series: Size = 80, 45, 120\n\n"
+            "  GANTT/TIMELINE:\n"
+            "  type: gantt\n"
+            "  title: Project Plan\n"
+            "  task: Design = 0, 3\n"
+            "  task: Develop = 2, 7\n"
+            "  task: Test = 6, 9\n"
+            "  task: Deploy = 8, 10\n\n"
+            "  GAUGE/PROGRESS:\n"
+            "  type: gauge\n"
+            "  title: CPU Usage\n"
+            "  value: 73\n"
+            "  max: 100\n"
+            "  label: percent\n\n"
+            "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n"
+            "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
             "- Microsoft Word Document: ```docx\n"
             "  title: Document Title\n"
             "  subtitle: Optional Subtitle\n"
@@ -729,8 +800,7 @@ jobs:
             "  |---|---|\n"
             "  | Cell | Cell |\n"
             "  ```\n\n"
-            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate SVG diagrams or charts whenever discussing mathematics, physics, science concepts, data analysis/metrics, complex workflows, processes, architectures, or system flows. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.\n"
-            "SVG MIND MAP REQUIREMENT: Mind maps MUST be drawn strictly as vertical tree structures (top-to-bottom hierarchy layouts), never horizontal or radial.\\n\\n";
+            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, mind maps, architecture, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
 
         if (_agenticEnabled) {
           systemPromptText += r"""
@@ -3720,7 +3790,7 @@ class MessageBubble extends StatelessWidget {
         }
         if (block.language.toLowerCase() == 'chart' ||
             block.language.toLowerCase() == 'json-chart') {
-          return ChartDiagramWidget(jsonString: block.content);
+          return NexonChartWidget(chartBlock: block.content);
         }
         if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
           return HtmlArtifactWidget(htmlContent: block.content);
@@ -6762,6 +6832,14 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   }
 
   Future<void> _downloadFile() async {
+    final granted = await ensureStoragePermission(context, () async {
+      if (Platform.isAndroid) {
+        await Permission.storage.request();
+        await Permission.manageExternalStorage.request();
+      }
+    });
+    if (!granted) return;
+
     String contentToSave = widget.stateMap['final_report'] as String? ?? '';
     if (contentToSave.isEmpty) {
       final steps = widget.stateMap['steps'] as List? ?? [];
@@ -6778,9 +6856,6 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     }
 
     try {
-      if (Platform.isAndroid) {
-        await Permission.storage.request();
-      }
       
       final bytes = Uint8List.fromList(utf8.encode(contentToSave));
       final String? path = await FilePicker.platform.saveFile(
@@ -7107,10 +7182,15 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
   }
 
   Future<void> _downloadFile() async {
-    try {
+    final granted = await ensureStoragePermission(context, () async {
       if (Platform.isAndroid) {
         await Permission.storage.request();
+        await Permission.manageExternalStorage.request();
       }
+    });
+    if (!granted) return;
+
+    try {
       
       final filename = 'page_${DateTime.now().millisecondsSinceEpoch}.html';
       final bytes = Uint8List.fromList(utf8.encode(widget.htmlContent));
@@ -7199,287 +7279,6 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
     );
   }
 }
-
-class ChartDiagramWidget extends StatelessWidget {
-  final String jsonString;
-  const ChartDiagramWidget({super.key, required this.jsonString});
-
-  // Curated professional palette
-  static const _palette = [
-    Color(0xFF6366F1), Color(0xFF8B5CF6), Color(0xFFEC4899),
-    Color(0xFF06B6D4), Color(0xFF10B981), Color(0xFFF59E0B),
-    Color(0xFFEF4444), Color(0xFF3B82F6), Color(0xFFF97316),
-    Color(0xFF84CC16),
-  ];
-
-  Color _color(String? hex, int i) {
-    if (hex != null && hex.isNotEmpty) {
-      try {
-        final h = hex.replaceAll('#', '');
-        if (h.length == 6) return Color(int.parse('FF$h', radix: 16));
-        if (h.length == 8) return Color(int.parse(h, radix: 16));
-      } catch (_) {}
-    }
-    return _palette[i % _palette.length];
-  }
-
-  double _val(dynamic v) {
-    if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v) ?? 0.0;
-    return 0.0;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    try {
-      final data = jsonDecode(jsonString);
-      final type = data['type']?.toString().toLowerCase() ?? 'bar';
-      final title = data['title']?.toString();
-      final List items = data['data'] ?? [];
-      if (items.isEmpty) return const SizedBox.shrink();
-
-      Widget chart;
-
-      final titlesData = FlTitlesData(
-        bottomTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 32,
-            getTitlesWidget: (value, meta) {
-              final i = value.toInt();
-              if (i < 0 || i >= items.length) return const SizedBox.shrink();
-              final label = (items[i] as Map)['label']?.toString() ?? '';
-              return Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  label.length > 10 ? '${label.substring(0, 9)}…' : label,
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8), fontWeight: FontWeight.w400),
-                  textAlign: TextAlign.center,
-                ),
-              );
-            },
-          ),
-        ),
-        leftTitles: AxisTitles(
-          sideTitles: SideTitles(
-            showTitles: true,
-            reservedSize: 40,
-            getTitlesWidget: (value, meta) {
-              if (value == meta.max || value == 0) return const SizedBox.shrink();
-              final s = value >= 1000 ? '${(value / 1000).toStringAsFixed(1)}k' : value.toInt().toString();
-              return Text(s, style: const TextStyle(fontSize: 13, color: Color(0xFF64748B), fontWeight: FontWeight.w400));
-            },
-          ),
-        ),
-        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-      );
-
-      if (type == 'pie' || type == 'donut') {
-        final centerRadius = type == 'donut' ? 55.0 : 0.0;
-        chart = PieChart(
-          PieChartData(
-            sectionsSpace: 3,
-            centerSpaceRadius: centerRadius,
-            startDegreeOffset: -90,
-            sections: items.asMap().entries.map((e) {
-              final item = e.value as Map;
-              final c = _color(item['color']?.toString(), e.key);
-              final v = _val(item['value']);
-              final total = items.fold<double>(0, (s, x) => s + _val(x['value']));
-              final pct = total > 0 ? (v / total * 100).toStringAsFixed(1) : '0';
-              return PieChartSectionData(
-                color: c,
-                value: v,
-                title: '${item['label'] ?? ''}\n$pct%',
-                radius: 80,
-                titleStyle: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w500,
-                  color: Colors.white, shadows: [Shadow(blurRadius: 2)],
-                ),
-              );
-            }).toList(),
-          ),
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-      } else if (type == 'line') {
-        final maxY = items.map((e) => _val(e['value'])).reduce((a, b) => a > b ? a : b);
-        final niceMax = maxY * 1.15 == 0 ? 10.0 : maxY * 1.15;
-        chart = LineChart(
-          LineChartData(
-            maxY: niceMax,
-            lineTouchData: LineTouchData(
-              enabled: true,
-              touchTooltipData: LineTouchTooltipData(
-                getTooltipItems: (touchedSpots) {
-                  return touchedSpots.map((spot) {
-                    final item = items[spot.spotIndex] as Map;
-                    return LineTooltipItem(
-                      '${item['label']}\n',
-                      const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace'),
-                      children: [
-                        TextSpan(
-                          text: spot.y.toStringAsFixed(spot.y == spot.y.truncateToDouble() ? 0 : 1),
-                          style: TextStyle(color: _color(item['color']?.toString(), spot.spotIndex), fontSize: 14, fontWeight: FontWeight.w800),
-                        ),
-                      ],
-                    );
-                  }).toList();
-                },
-              ),
-            ),
-            titlesData: titlesData,
-            gridData: FlGridData(
-              show: true,
-              drawVerticalLine: false,
-              horizontalInterval: niceMax / 5,
-              getDrawingHorizontalLine: (v) => FlLine(color: Colors.white.withOpacity(0.5), strokeWidth: 0.5),
-            ),
-            borderData: FlBorderData(show: false),
-            lineBarsData: [
-              LineChartBarData(
-                spots: items.asMap().entries.map((e) => FlSpot(e.key.toDouble(), _val(e.value['value']))).toList(),
-                isCurved: true,
-                color: _color(items.first['color']?.toString(), 0),
-                barWidth: 2,
-                isStrokeCapRound: true,
-                isStrokeJoinRound: true,
-                dotData: FlDotData(
-                  show: true,
-                  getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
-                    radius: 3.5,
-                    color: barData.color ?? Colors.blue,
-                    strokeWidth: 1,
-                    strokeColor: Colors.white,
-                  ),
-                ),
-                belowBarData: BarAreaData(
-                  show: true,
-                  color: (_color(items.first['color']?.toString(), 0)).withOpacity(0.08),
-                ),
-              ),
-            ],
-          ),
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-      } else {
-        // Bar chart
-        final maxY = items.map((e) => _val(e['value'])).reduce((a, b) => a > b ? a : b);
-        final niceMax = maxY * 1.15 == 0 ? 10.0 : maxY * 1.15;
-        chart = BarChart(
-          BarChartData(
-            alignment: BarChartAlignment.spaceAround,
-            maxY: niceMax,
-            barTouchData: BarTouchData(
-              enabled: true,
-              touchTooltipData: BarTouchTooltipData(
-                getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                  final item = items[groupIndex] as Map;
-                  return BarTooltipItem(
-                    '${item['label']}\n',
-                    const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, fontFamily: 'monospace'),
-                    children: [
-                      TextSpan(
-                        text: rod.toY.toStringAsFixed(rod.toY == rod.toY.truncateToDouble() ? 0 : 1),
-                        style: TextStyle(color: _color(item['color']?.toString(), groupIndex), fontSize: 14, fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-            titlesData: titlesData,
-            gridData: FlGridData(
-              show: true,
-              drawVerticalLine: false,
-              horizontalInterval: niceMax / 5,
-              getDrawingHorizontalLine: (v) => const FlLine(color: Color(0xFF1E293B), strokeWidth: 0.5),
-            ),
-            borderData: FlBorderData(show: false),
-            barGroups: items.asMap().entries.map((e) {
-              final item = e.value as Map;
-              final c = _color(item['color']?.toString(), e.key);
-              return BarChartGroupData(
-                x: e.key,
-                barRods: [
-                  BarChartRodData(
-                    toY: _val(item['value']),
-                    gradient: LinearGradient(
-                      colors: [c.withOpacity(0.7), c],
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                    ),
-                    width: items.length > 8 ? 12 : 20,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                    backDrawRodData: BackgroundBarChartRodData(
-                      show: true,
-                      toY: niceMax,
-                      color: const Color(0xFF0F172A),
-                    ),
-                  ),
-                ],
-              );
-            }).toList(),
-          ),
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOutCubic,
-        );
-      }
-
-      return RepaintBoundary(
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 320, maxHeight: 600),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0B1120),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-          ),
-          clipBehavior: Clip.hardEdge,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (title != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(40, 12, 16, 32),
-                  child: chart,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    } catch (e) {
-      return Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A0A0A),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.red.shade800),
-        ),
-        child: Text('Chart error: $e',
-            style: TextStyle(color: Colors.red.shade400, fontSize: 12, fontFamily: 'monospace')),
-      );
-    }
-}
-}
-
 
 
 class SvgDiagramWidget extends StatefulWidget {
@@ -7867,6 +7666,14 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
   bool _exporting = false;
 
   Future<void> _exportDocx() async {
+    final granted = await ensureStoragePermission(context, () async {
+      if (Platform.isAndroid) {
+        await Permission.storage.request();
+        await Permission.manageExternalStorage.request();
+      }
+    });
+    if (!granted) return;
+
     setState(() => _exporting = true);
     
     try {
@@ -8166,12 +7973,17 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
   bool _saving = false;
 
   Future<void> _saveMdFile() async {
+    final granted = await ensureStoragePermission(context, () async {
+      if (Platform.isAndroid) {
+        await Permission.storage.request();
+        await Permission.manageExternalStorage.request();
+      }
+    });
+    if (!granted) return;
+
     setState(() => _saving = true);
     
     try {
-      if (Platform.isAndroid) {
-        await Permission.storage.request();
-      }
       
       String filename = 'document.md';
       final match = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(widget.mdContent);
