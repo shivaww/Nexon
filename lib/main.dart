@@ -2053,8 +2053,8 @@ For every project, maintain a README.md at the project root:
             await _saveSettings();
           },
           onFetchModels: () => _fetchModels(provider),
-          onConfigureKey: () {
-            _openProviderSheet(provider.id);
+          onConfigureKey: (selectedProvId) {
+            _openProviderSheet(selectedProvId);
           },
         );
       },
@@ -4108,13 +4108,14 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<int> onMaxTokensChanged;
   final ValueChanged<bool> onReasoningEnabledChanged;
   final Future<List<String>> Function() onFetchModels;
-  final VoidCallback onConfigureKey;
+  final ValueChanged<String> onConfigureKey;
 
   @override
   State<MediaAndModelSheet> createState() => _MediaAndModelSheetState();
 }
 
 class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
+  int _activeTab = 0;
   late int _maxTokens;
   var _fetching = false;
   late String _selectedProviderId;
@@ -7907,7 +7908,7 @@ class _DocxArtifactWidgetState extends State<DocxArtifactWidget> {
         ));
       } else if (trimmed.startsWith('>')) {
         widgets.add(Container(
-          margin: const EdgeInsets.only(vertical: 8.0),
+          margin: const EdgeInsets.symmetric(vertical: 8.0),
           padding: const EdgeInsets.all(10.0),
           decoration: BoxDecoration(
             color: const Color(0xFFFAF5EE),
