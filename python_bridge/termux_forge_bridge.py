@@ -56,6 +56,26 @@ from workflow_runner import WorkflowRunner, WorkflowDefinition
 from github_hooks import GitHubHooks
 from media_hooks import MediaHooks
 from checkpoint_hooks import CheckpointManager
+from hybrid_tools import (
+    build_registry,
+    shell_exec as hybrid_shell_exec,
+    read_file_rich,
+    multi_read_rich,
+    write_file_rich,
+    patch_file_rich,
+    replace_lines_rich,
+    insert_lines_rich,
+    delete_lines_rich,
+    file_outline_rich,
+    search_files_rich,
+    tree_rich,
+    diff_files_rich,
+    OutputRenderer,
+)
+from background_service_manager import (
+    BackgroundServiceManager,
+    detect_server_command,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────
 VERSION = "1.0.0"
@@ -125,6 +145,12 @@ class TermuxForgeBridge:
         self.github = GitHubHooks()
         self.media = MediaHooks()
         self.checkpoints = CheckpointManager()
+
+        # Hybrid Tools Framework
+        self.hybrid = build_registry(self.executor, self.security)
+
+        # Background Service Manager
+        self.services = BackgroundServiceManager()
 
         # State
         self._clients: set[WebSocketServerProtocol] = set()
@@ -205,6 +231,32 @@ class TermuxForgeBridge:
         r.register("github_build_status", self._github_build_status)
         r.register("github_download_artifact", self._github_download_artifact)
 
+        # ── Environment / Project Health ──────────────────────────────
+        r.register("env_status", self._env_status)
+        r.register("project_health", self._project_health)
+
+        # ── Hybrid Tools (shell + Python, AI-optimized output) ────────────
+        r.register("read_file_rich",     self._hybrid_read_file_rich)
+        r.register("multi_read_rich",    self._hybrid_multi_read_rich)
+        r.register("write_file_rich",    self._hybrid_write_file_rich)
+        r.register("patch_file",         self._hybrid_patch_file)
+        r.register("replace_lines",      self._hybrid_replace_lines)
+        r.register("insert_lines",       self._hybrid_insert_lines)
+        r.register("delete_lines",       self._hybrid_delete_lines)
+        r.register("file_outline",       self._hybrid_file_outline)
+        r.register("search_rich",        self._hybrid_search_rich)
+        r.register("tree",               self._hybrid_tree)
+        r.register("diff_files",         self._hybrid_diff_files)
+        r.register("tool_help",          self._hybrid_tool_help)
+        r.register("shell_rich",         self._hybrid_shell_rich)
+
+        # ── Background Service Manager ────────────────────────────────
+        r.register("run_background",  self._run_background)
+        r.register("list_services",   self._list_services)
+        r.register("service_status",  self._service_status)
+        r.register("service_logs",    self._service_logs)
+        r.register("stop_service",    self._stop_service)
+
     # ══════════════════════════════════════════════════════════════════
     #  METHOD HANDLERS
     # ══════════════════════════════════════════════════════════════════
@@ -221,6 +273,12 @@ class TermuxForgeBridge:
         process_id: str | None = None,
     ) -> dict:
         """Execute a shell command with safety checks."""
+        # Auto-detect long-running background server commands
+        is_server, _, _ = detect_server_command(command)
+        if is_server:
+            logger.info("Auto-intercepted long-running server command: %s", command)
+            return await self._run_background(command=command, cwd=cwd, env=env)
+
         try:
             if stream:
                 result = await self.executor.execute_streaming(
@@ -721,6 +779,180 @@ class TermuxForgeBridge:
         r = await self.github.get_build_status(workflow, limit, cwd)
         return r.to_dict()
 
+    # ── Environment / Project Health ─────────────────────────────────
+
+    async def _env_status(self) -> dict:
+        """
+        Return a comprehensive environment snapshot for AI orientation.
+
+        Includes OS, architecture, shell, HOME/PREFIX paths, available
+        runtimes (flutter, dart, python3, node, git, etc.), and PATH entries.
+        Call this at the start of a session to avoid blind recon turns.
+        """
+        import platform
+        import shutil
+        import subprocess
+
+        def which_ver(cmd: str, ver_flag: str = "--version") -> dict:
+            """Return {available, path, version} for a binary."""
+            path = shutil.which(cmd)
+            if not path:
+                return {"available": False}
+            try:
+                proc = subprocess.run(
+                    [cmd, ver_flag], capture_output=True, text=True, timeout=5
+                )
+                raw = (proc.stdout + proc.stderr).strip().splitlines()
+                ver = raw[0] if raw else ""
+            except Exception:
+                ver = ""
+            return {"available": True, "path": path, "version": ver}
+
+        termux_prefix = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
+        home = os.path.expanduser("~")
+        cwd = os.getcwd()
+        path_entries = os.environ.get("PATH", "").split(":")
+
+        tools = {
+            "flutter": which_ver("flutter"),
+            "dart":    which_ver("dart"),
+            "python3": which_ver("python3"),
+            "node":    which_ver("node"),
+            "npm":     which_ver("npm"),
+            "git":     which_ver("git"),
+            "gh":      which_ver("gh"),
+            "pkg":     which_ver("pkg"),
+            "pip":     which_ver("pip"),
+            "rg":      which_ver("rg"),
+            "fd":      which_ver("fd"),
+            "jq":      which_ver("jq"),
+            "tree":    which_ver("tree"),
+            "curl":    which_ver("curl"),
+            "ssh":     which_ver("ssh"),
+            "tmux":    which_ver("tmux"),
+        }
+
+        return {
+            "os": platform.system(),
+            "arch": platform.machine(),
+            "python": platform.python_version(),
+            "shell": os.environ.get("SHELL", "unknown"),
+            "home": home,
+            "cwd": cwd,
+            "termuxPrefix": termux_prefix,
+            "pathEntries": path_entries,
+            "tools": tools,
+            "bridge": VERSION,
+            "availableTools": [k for k, v in tools.items() if v.get("available")],
+        }
+
+    async def _project_health(self, path: str = DEFAULT_CWD) -> dict:
+        """
+        Scan a project workspace and return a health summary.
+
+        Reports:
+        - File counts by extension
+        - Git status (branch, uncommitted changes)
+        - Flutter/Dart project detection (pubspec.yaml)
+        - Package dependency count
+        - Whether dart analyze can run (package_config.json present)
+        - README presence
+        - TODO/FIXME count across source files
+        """
+        import re
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+
+        p = Path(path)
+        if not p.is_dir():
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, f"Not a directory: {path}")
+
+        SKIP_DIRS = {".git", ".dart_tool", "build", ".pub-cache",
+                     "__pycache__", "node_modules", ".gradle"}
+
+        ext_counts: dict[str, int] = {}
+        todo_count = 0
+        total_lines = 0
+        largest_files: list[dict] = []
+
+        def scan(dir_path: Path, depth: int = 0) -> None:
+            nonlocal todo_count, total_lines
+            if depth > 8:
+                return
+            try:
+                entries = list(dir_path.iterdir())
+            except PermissionError:
+                return
+            for entry in entries:
+                if entry.is_dir():
+                    if entry.name not in SKIP_DIRS:
+                        scan(entry, depth + 1)
+                elif entry.is_file():
+                    ext = entry.suffix.lower() or "(no ext)"
+                    ext_counts[ext] = ext_counts.get(ext, 0) + 1
+                    # Count lines and TODOs only in text source files
+                    if ext in (".dart", ".py", ".js", ".ts", ".md",
+                               ".yaml", ".yml", ".json", ".sh"):
+                        try:
+                            text = entry.read_text(encoding="utf-8", errors="ignore")
+                            lines = text.count("\n")
+                            total_lines += lines
+                            todo_count += text.upper().count("TODO") + text.upper().count("FIXME")
+                            size = entry.stat().st_size
+                            largest_files.append({"path": str(entry), "lines": lines, "bytes": size})
+                        except Exception:
+                            pass
+
+        scan(p)
+        largest_files.sort(key=lambda x: x["lines"], reverse=True)
+        largest_files = largest_files[:10]
+
+        # Git info
+        git_info: dict = {"isGitRepo": (p / ".git").exists()}
+        if git_info["isGitRepo"]:
+            try:
+                branch_r = await self.executor.execute("git rev-parse --abbrev-ref HEAD", cwd=str(p), timeout=5)
+                git_info["branch"] = branch_r.stdout.strip()
+                status_r = await self.executor.execute("git status --short", cwd=str(p), timeout=5)
+                changed = [l for l in status_r.stdout.splitlines() if l.strip()]
+                git_info["uncommittedFiles"] = len(changed)
+                git_info["changedFiles"] = changed[:20]
+                log_r = await self.executor.execute("git log --oneline -5", cwd=str(p), timeout=5)
+                git_info["recentCommits"] = log_r.stdout.strip().splitlines()
+            except Exception as e:
+                git_info["error"] = str(e)
+
+        # Flutter / Dart project info
+        flutter_info: dict = {"isFlutterProject": False}
+        pubspec_path = p / "pubspec.yaml"
+        if pubspec_path.exists():
+            flutter_info["isFlutterProject"] = True
+            try:
+                import re as _re
+                raw = pubspec_path.read_text(encoding="utf-8")
+                # Count deps
+                deps_match = _re.findall(r"^  [a-z_][a-z0-9_]*:", raw, _re.MULTILINE)
+                flutter_info["dependencyCount"] = len(deps_match)
+                sdk_match = _re.search(r"sdk:\s*([^\n]+)", raw)
+                flutter_info["sdkConstraint"] = sdk_match.group(1).strip() if sdk_match else "unknown"
+                flutter_info["hasPackageConfig"] = (p / ".dart_tool" / "package_config.json").exists()
+                flutter_info["analyzable"] = flutter_info["hasPackageConfig"]
+                if not flutter_info["hasPackageConfig"]:
+                    flutter_info["analyzeWarning"] = "Run 'flutter pub get' first — .dart_tool/package_config.json is missing"
+            except Exception as e:
+                flutter_info["error"] = str(e)
+
+        return {
+            "path": str(p),
+            "fileCountsByExtension": ext_counts,
+            "totalSourceLines": total_lines,
+            "todoCount": todo_count,
+            "largestFiles": largest_files,
+            "git": git_info,
+            "flutter": flutter_info,
+            "hasReadme": (p / "README.md").exists(),
+        }
+
     async def _github_download_artifact(
         self, run_id: str, name: str | None = None,
         output_dir: str | None = None, cwd: str = DEFAULT_CWD,
@@ -729,8 +961,354 @@ class TermuxForgeBridge:
         return r.to_dict()
 
     # ══════════════════════════════════════════════════════════════════
-    #  WEBSOCKET SERVER
+    #  HYBRID TOOLS HANDLERS
+    #  Thin async wrappers around hybrid_tools pure-Python functions.
+    #  Each returns a dict whose "stdout" key contains the AI-readable
+    #  rich block, so _formatBridgeOutput in Dart picks it up cleanly.
     # ══════════════════════════════════════════════════════════════════
+
+    async def _hybrid_read_file_rich(
+        self,
+        path: str,
+        start_line: int = 1,
+        end_line: int | None = None,
+        max_lines: int = 120,
+        encoding: str = "utf-8",
+        show_line_numbers: bool = True,
+    ) -> dict:
+        """Read a file with numbered lines, language header, and navigation hints."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = read_file_rich(
+                path=path,
+                start_line=start_line,
+                end_line=end_line,
+                max_lines=max_lines,
+                encoding=encoding,
+                show_line_numbers=show_line_numbers,
+            )
+            return result.to_dict()
+        except FileNotFoundError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_multi_read_rich(
+        self,
+        reads: list,
+        max_lines_per_file: int = 120,
+    ) -> dict:
+        """Batch-read multiple files or ranges from one file in one call."""
+        # Validate paths before reading
+        for spec in reads:
+            p = spec.get("path", "")
+            if p and not self.security.validate_path(p):
+                raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {p}")
+        try:
+            result = multi_read_rich(reads, max_lines_per_file)
+            return result.to_dict()
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_write_file_rich(
+        self,
+        path: str,
+        content: str,
+        encoding: str = "utf-8",
+        create_dirs: bool = True,
+        backup: bool = True,
+    ) -> dict:
+        """Atomically write a file with auto-backup and write verification block."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = write_file_rich(path, content, encoding, create_dirs, backup)
+            return result.to_dict()
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_patch_file(
+        self,
+        path: str,
+        patches: list,
+        encoding: str = "utf-8",
+        backup: bool = True,
+    ) -> dict:
+        """Apply multiple search-replace patches atomically with unified diff output."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = patch_file_rich(path, patches, encoding, backup)
+            return result.to_dict()
+        except FileNotFoundError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_replace_lines(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        new_content: str,
+        encoding: str = "utf-8",
+        backup: bool = True,
+    ) -> dict:
+        """Replace a line range with new content, returning a diff."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = replace_lines_rich(path, start_line, end_line, new_content, encoding, backup)
+            return result.to_dict()
+        except FileNotFoundError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_insert_lines(
+        self,
+        path: str,
+        after_line: int,
+        content: str,
+        encoding: str = "utf-8",
+    ) -> dict:
+        """Insert lines after a specific line number (0 = beginning of file)."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = insert_lines_rich(path, after_line, content, encoding)
+            return result.to_dict()
+        except FileNotFoundError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_delete_lines(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        encoding: str = "utf-8",
+    ) -> dict:
+        """Delete a specific line range from a file with backup."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = delete_lines_rich(path, start_line, end_line, encoding)
+            return result.to_dict()
+        except FileNotFoundError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_file_outline(
+        self,
+        path: str,
+        encoding: str = "utf-8",
+    ) -> dict:
+        """Extract classes, functions, and methods with line numbers from a source file."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = file_outline_rich(path, encoding)
+            return result.to_dict()
+        except FileNotFoundError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_search_rich(
+        self,
+        query: str,
+        path: str = DEFAULT_CWD,
+        extensions: list | None = None,
+        case_sensitive: bool = False,
+        max_matches: int = 80,
+        context_lines: int = 2,
+    ) -> dict:
+        """Search text/regex across files using ripgrep or grep with context lines."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            result = await search_files_rich(
+                query=query,
+                path=path,
+                extensions=extensions,
+                case_sensitive=case_sensitive,
+                max_matches=max_matches,
+                context_lines=context_lines,
+            )
+            return result.to_dict()
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_tree(
+        self,
+        path: str = DEFAULT_CWD,
+        max_depth: int = 4,
+        show_hidden: bool = False,
+        extensions: list | None = None,
+    ) -> dict:
+        """Annotated directory tree with sizes, ages, and smart directory filtering."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        try:
+            return tree_rich(path, max_depth, show_hidden, extensions)
+        except NotADirectoryError as exc:
+            raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_diff_files(
+        self,
+        path_a: str,
+        path_b: str,
+        context: int = 5,
+    ) -> dict:
+        """Compute a unified diff between two files."""
+        for p in [path_a, path_b]:
+            if not self.security.validate_path(p):
+                raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {p}")
+        try:
+            return diff_files_rich(path_a, path_b, context)
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
+
+    async def _hybrid_tool_help(self) -> dict:
+        """Return a full reference of all hybrid tools with parameter schemas."""
+        block = self.hybrid.tool_help_block()
+        return {"stdout": block, "exitCode": 0, "success": True}
+
+    async def _hybrid_shell_rich(
+        self,
+        command: str,
+        cwd: str = DEFAULT_CWD,
+        timeout: int = 30,
+        env: dict | None = None,
+        max_stdout_lines: int = 120,
+    ) -> dict:
+        """
+        Execute a shell command using the hybrid engine.
+
+        Returns a rich AI block with: header box, exit code, duration,
+        numbered stdout (optional), stderr on failure, and navigation hints.
+        This is the premium alternative to execute_command for AI agents.
+        """
+        # Security check
+        safety = self.security.evaluate(command, cwd)
+        if not safety.allowed:
+            raise JsonRpcError(ErrorCode.COMMAND_BLOCKED, f"Command blocked: {safety.reason}")
+
+        # Auto-detect long-running background server commands
+        is_server, _, _ = detect_server_command(command)
+        if is_server:
+            logger.info("Auto-intercepted long-running server command in shell_rich: %s", command)
+            return await self._run_background(command=command, cwd=cwd, env=env)
+
+        result = await hybrid_shell_exec(command, cwd, timeout, env)
+
+        # Broadcast streaming-style output event to all clients
+        await self._broadcast({
+            "type": "shell_rich_complete",
+            "command": command,
+            "exitCode": result.exit_code,
+            "durationMs": result.duration_ms,
+            "timedOut": result.timed_out,
+        })
+
+        return result.to_dict()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  BACKGROUND SERVICE HANDLERS
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _run_background(
+        self,
+        command: str,
+        cwd: str = DEFAULT_CWD,
+        name: str = "",
+        startup_wait: float = 4.0,
+        env: dict | None = None,
+    ) -> dict:
+        """
+        Launch a long-running process (HTTP server, MCP server, dev server, etc.)
+        as a background service and return immediate rich feedback.
+
+        Instead of hanging forever waiting for a non-terminating command,
+        this method:
+        - Starts the process detached (survives bridge restarts)
+        - Collects startup output for `startup_wait` seconds
+        - Detects which ports are now listening via /proc/net/tcp
+        - Verifies readiness with a TCP connection probe
+        - Returns: PID, URL(s), startup log, management commands
+
+        Parameters
+        ----------
+        command : str
+            Shell command to run (without trailing &).
+        cwd : str
+            Working directory (default: workspace dir).
+        name : str
+            Optional display name for the service.
+        startup_wait : float
+            Seconds to observe startup before returning (default 4.0).
+        env : dict, optional
+            Extra environment variables.
+        """
+        # Security check
+        safety = self.security.evaluate(command, cwd)
+        if not safety.allowed:
+            raise JsonRpcError(ErrorCode.COMMAND_BLOCKED, f"Command blocked: {safety.reason}")
+
+        # Auto-detect service type from command
+        _, _, service_type = detect_server_command(command)
+
+        result = await self.services.start_service(
+            command=command,
+            cwd=cwd or DEFAULT_CWD,
+            name=name,
+            startup_wait=startup_wait,
+            env=env,
+            service_type=service_type or "Server",
+        )
+
+        # Broadcast so the Flutter UI can show a "service started" badge
+        if result.get("success"):
+            await self._broadcast({
+                "type": "service_started",
+                "pid": result.get("pid"),
+                "urls": result.get("urls", []),
+                "name": name or service_type,
+                "command": command[:60],
+            })
+
+        return result
+
+    async def _list_services(self) -> dict:
+        """List all tracked background services with live status."""
+        return self.services.list_services()
+
+    async def _service_status(self, pid: int) -> dict:
+        """Get detailed status for a specific background service PID."""
+        return self.services.service_status(pid)
+
+    async def _service_logs(self, pid: int, lines: int = 60) -> dict:
+        """Tail the log output of a background service."""
+        return self.services.service_logs(pid, lines)
+
+    async def _stop_service(self, pid: int, force: bool = False) -> dict:
+        """Stop a background service by PID. Uses SIGTERM then SIGKILL."""
+        # Security: only allow stopping processes we started
+        rec = self.services._registry.get(pid)
+        if not rec:
+            return {
+                "stdout": f"PID {pid} is not a tracked service. Use list_services to see managed processes.",
+                "exitCode": 1,
+            }
+        return await self.services.stop_service(pid, force)
+
+
 
     async def _handle_client(self, websocket: WebSocketServerProtocol) -> None:
         """Handle a WebSocket client connection."""

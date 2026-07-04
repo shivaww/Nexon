@@ -180,17 +180,61 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
   }
 
-  void _deleteSession(String sessionId) {
+    void _deleteSession(String sessionId) {
     if (_sessions.length <= 1) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cannot delete the last remaining chat.')),
       );
       return;
     }
+
+    final deletedIndex = _sessions.indexWhere((s) => s.id == sessionId);
+    if (deletedIndex == -1) return;
+    final deletedSession = _sessions[deletedIndex];
+
     setState(() {
-      _sessions.removeWhere((s) => s.id == sessionId);
+      _sessions.removeAt(deletedIndex);
       if (_activeSessionId == sessionId) {
         _activeSessionId = _sessions.first.id;
+      }
+    });
+    _saveSessions();
+
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Chat "${deletedSession.title}" deleted.'),
+        duration: const Duration(seconds: 15),
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: const Color(0xFFEADCC9),
+          onPressed: () {
+            setState(() {
+              _sessions.insert(deletedIndex, deletedSession);
+              _activeSessionId = deletedSession.id;
+            });
+            _saveSessions();
+          },
+        ),
+      ),
+    );
+  }
+
+  void _renameSession(String sessionId, String newTitle) {
+    setState(() {
+      final idx = _sessions.indexWhere((s) => s.id == sessionId);
+      if (idx != -1) {
+        _sessions[idx] = _sessions[idx].copyWith(title: newTitle);
+      }
+    });
+    _saveSessions();
+  }
+
+  void _togglePinSession(String sessionId) {
+    setState(() {
+      final idx = _sessions.indexWhere((s) => s.id == sessionId);
+      if (idx != -1) {
+        _sessions[idx] = _sessions[idx].copyWith(isPinned: !_sessions[idx].isPinned);
       }
     });
     _saveSessions();
@@ -666,7 +710,19 @@ jobs:
             "  Animations: Load 200-400ms cubic-bezier, Hover 120-150ms ease-out\\n"
             "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\\n"
             "- Bar/Pie/Line: ```chart {\\\"type\\\":\\\"bar\\\",\\\"title\\\":\\\"...\\\",\\\"data\\\":[{\\\"label\\\":\\\"...\\\",\\\"value\\\":10,\\\"color\\\":\\\"#6C8EF5\\\"}]}\\n"
-            "- Interactive: ```html / ```javascript / ```react / ```artifact\\n\\n"
+"- Interactive: ```html / ```javascript / ```react / ```artifact\\n"
+            "- Microsoft Word Document: ```docx\\n"
+            "  title: Document Title\\n"
+            "  subtitle: Optional Subtitle\\n"
+            "  # Content in clean markdown\\n"
+            "  ## Section Heading\\n"
+            "  This is a paragraph.\\n"
+            "  - Bullet item\\n"
+            "  > Callout block\\n"
+            "  | Table Header | Col |\\n"
+            "  |---|---|\\n"
+            "  | Cell | Cell |\\n"
+            "  ```\\n\\n"
             "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively and autonomously generate SVG diagrams or charts whenever discussing mathematics, physics, science concepts, data analysis/metrics, complex workflows, processes, architectures, or system flows. Do NOT wait for the user to ask. Use rich colors, professional styling, and keep text concise. ALWAYS include the closing </svg> tag.\\n"
             "SVG MIND MAP REQUIREMENT: Mind maps MUST be drawn strictly as vertical tree structures (top-to-bottom hierarchy layouts), never horizontal or radial.\\n\\n";
 
@@ -1095,64 +1151,123 @@ For every project, maintain a README.md at the project root:
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E2E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: Row(children: const [
-          Icon(Icons.terminal, color: Color(0xFF89B4FA), size: 20),
-          SizedBox(width: 8),
-          Text('Run Shell Command?',
-              style: TextStyle(color: Color(0xFFCDD6F4), fontSize: 16, fontWeight: FontWeight.w600)),
-        ]),
+        backgroundColor: const Color(0xFFFFFBF2),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Color(0xFFE5DDD3), width: 1),
+        ),
+        title: Row(
+          children: const [
+            Icon(Icons.gpp_maybe_outlined, color: Color(0xFF7B4E2E), size: 24),
+            SizedBox(width: 10),
+            Text(
+              'Run Shell Command?',
+              style: TextStyle(
+                color: Color(0xFF2D241C),
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('The AI wants to execute:', style: TextStyle(color: Color(0xFF6C7086), fontSize: 12)),
-            const SizedBox(height: 8),
+            const Text(
+              'An AI agent is requesting permission to execute the following command in your Termux environment:',
+              style: TextStyle(color: Color(0xFF6C5946), fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(10),
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF11111B),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF313244)),
+                color: const Color(0xFF1E1915),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFDCCBB8), width: 1),
               ),
-              child: SelectableText(short,
-                  style: const TextStyle(color: Color(0xFFA6E3A1), fontSize: 12, fontFamily: 'monospace')),
+              child: SelectableText(
+                short,
+                style: const TextStyle(
+                  color: Color(0xFFFFF7EC),
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  height: 1.4,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: const [
+                Icon(Icons.info_outline, color: Color(0xFF8A7765), size: 14),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Executing commands can modify files or interact with the system.',
+                    style: TextStyle(
+                      color: Color(0xFF8A7765),
+                      fontSize: 11,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
-        actionsPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         actions: [
-          Row(
+          Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // NO — left side
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'no'),
-                child: const Text('No', style: TextStyle(color: Color(0xFFF38BA8))),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    icon: const Icon(Icons.all_inclusive, size: 14, color: Color(0xFF7B4E2E)),
+                    onPressed: () => Navigator.pop(ctx, 'always'),
+                    label: const Text('Always Allow', style: TextStyle(color: Color(0xFF7B4E2E), fontSize: 12)),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    icon: const Icon(Icons.forum_outlined, size: 14, color: Color(0xFF7B4E2E)),
+                    onPressed: () => Navigator.pop(ctx, 'session'),
+                    label: const Text('Allow this session', style: TextStyle(color: Color(0xFF7B4E2E), fontSize: 12)),
+                  ),
+                ],
               ),
-              const Spacer(),
-              // YES, ALWAYS REMEMBER
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'always'),
-                child: const Text('Always ✓', style: TextStyle(color: Color(0xFFCBA6F7), fontSize: 12)),
-              ),
-              const SizedBox(width: 4),
-              // YES, THIS CHAT
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'session'),
-                child: const Text('This chat', style: TextStyle(color: Color(0xFF89DCEB), fontSize: 12)),
-              ),
-              const SizedBox(width: 4),
-              // YES ONCE
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF89B4FA),
-                  foregroundColor: const Color(0xFF1E1E2E),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                ),
-                onPressed: () => Navigator.pop(ctx, 'yes'),
-                child: const Text('Yes', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFE5DDD3)),
+                        foregroundColor: Colors.red[700],
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, 'no'),
+                      child: const Text('Block', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF7B4E2E),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        elevation: 0,
+                      ),
+                      onPressed: () => Navigator.pop(ctx, 'yes'),
+                      child: const Text('Allow Once', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -2025,11 +2140,13 @@ For every project, maintain a README.md at the project root:
     final wide = width >= 840;
     final activeSession = _activeSession;
     
-    final chatHistoryPanel = ChatHistoryPanel(
+        final chatHistoryPanel = ChatHistoryPanel(
       sessions: _sessions,
       activeSessionId: _activeSessionId,
       onSessionTap: _switchSession,
       onSessionDelete: _deleteSession,
+      onSessionRename: _renameSession,
+      onSessionPinToggle: _togglePinSession,
       onNewChat: _newChat,
     );
 
@@ -2084,6 +2201,8 @@ class ChatHistoryPanel extends StatelessWidget {
     required this.activeSessionId,
     required this.onSessionTap,
     required this.onSessionDelete,
+    required this.onSessionRename,
+    required this.onSessionPinToggle,
     required this.onNewChat,
     super.key,
   });
@@ -2092,10 +2211,20 @@ class ChatHistoryPanel extends StatelessWidget {
   final String? activeSessionId;
   final ValueChanged<String> onSessionTap;
   final ValueChanged<String> onSessionDelete;
+  final void Function(String sessionId, String newTitle) onSessionRename;
+  final ValueChanged<String> onSessionPinToggle;
   final VoidCallback onNewChat;
 
   @override
   Widget build(BuildContext context) {
+    // Sort pinned chats to the top
+    final sortedSessions = List<ChatSession>.from(sessions)
+      ..sort((a, b) {
+        if (a.isPinned && !b.isPinned) return -1;
+        if (!a.isPinned && b.isPinned) return 1;
+        return 0; // Maintain original relative order
+      });
+
     return Container(
       color: const Color(0xFFEFE6D6),
       child: Column(
@@ -2128,9 +2257,9 @@ class ChatHistoryPanel extends StatelessWidget {
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
-              itemCount: sessions.length,
+              itemCount: sortedSessions.length,
               itemBuilder: (context, index) {
-                final session = sessions[index];
+                final session = sortedSessions[index];
                 final selected = session.id == activeSessionId;
                 final messageCount = session.messages.length;
                 return AnimatedContainer(
@@ -2147,7 +2276,17 @@ class ChatHistoryPanel extends StatelessWidget {
                   child: ListTile(
                     dense: true,
                     selected: selected,
-                    leading: const Icon(Icons.chat_bubble_outline, size: 20),
+                    leading: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (session.isPinned)
+                          const Padding(
+                            padding: EdgeInsets.only(right: 4.0),
+                            child: Icon(Icons.push_pin, size: 12, color: Color(0xFF7B4E2E)),
+                          ),
+                        const Icon(Icons.chat_bubble_outline, size: 20),
+                      ],
+                    ),
                     title: Text(
                       session.title,
                       overflow: TextOverflow.ellipsis,
@@ -2166,10 +2305,96 @@ class ChatHistoryPanel extends StatelessWidget {
                       onPressed: () => onSessionDelete(session.id),
                     ),
                     onTap: () => onSessionTap(session.id),
+                    onLongPress: () {
+                      _showOptionsSheet(context, session);
+                    },
                   ),
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showOptionsSheet(BuildContext context, ChatSession session) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFFFFFBF2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
+                child: Text(
+                  session.title,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const Divider(color: Color(0xFFE7D8C4), height: 1),
+              ListTile(
+                leading: Icon(
+                  session.isPinned ? Icons.push_pin_outlined : Icons.push_pin,
+                  color: const Color(0xFF7B4E2E),
+                ),
+                title: Text(
+                  session.isPinned ? 'Unpin chat' : 'Pin chat to top',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onSessionPinToggle(session.id);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.edit_outlined, color: Color(0xFF7B4E2E)),
+                title: const Text('Rename chat', style: TextStyle(fontWeight: FontWeight.bold)),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  _showRenameDialog(context, session);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showRenameDialog(BuildContext context, ChatSession session) {
+    final controller = TextEditingController(text: session.title);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFBF2),
+        title: const Text('Rename Chat', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: 'Chat Title'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final newTitle = controller.text.trim();
+              if (newTitle.isNotEmpty) {
+                onSessionRename(session.id, newTitle);
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('Rename'),
           ),
         ],
       ),
@@ -3220,10 +3445,11 @@ class MessageBubble extends StatelessWidget {
                           alignment: Alignment.centerLeft,
                           child: MarkdownBody(
                             data: message.text
-                                .replaceAllMapped(RegExp(r'\\\[([\\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
-                                .replaceAllMapped(RegExp(r'\\\(([\\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
-                                .replaceAll(r'\boldsymbol', r'\mathbf'),
-                            selectable: true,
+                                .replaceAll('<', '&lt;')
+                                .replaceAll('>', '&gt;')
+                                .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
+                                .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
+                                .replaceAll(r'\boldsymbol', r'\mathbf'),                            selectable: true,
                             builders: {
                               'latex': LatexElementBuilder(),
                             },
@@ -3493,6 +3719,9 @@ class MessageBubble extends StatelessWidget {
         if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
           return HtmlArtifactWidget(htmlContent: block.content);
         }
+        if (block.language.toLowerCase() == 'docx') {
+          return DocxArtifactWidget(docxContent: block.content, workspacePath: agenticWorkspace);
+        }
         return CodeBlockWidget(
           code: block.content,
           language: block.language,
@@ -3503,10 +3732,11 @@ class MessageBubble extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 6.0),
           child: MarkdownBody(
             data: block.content
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
                 .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
                 .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
-                .replaceAll(r'\boldsymbol', r'\mathbf'),
-            selectable: true,
+                .replaceAll(r'\boldsymbol', r'\mathbf'),            selectable: true,
             builders: {
               'latex': LatexElementBuilder(
                 textStyle: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 15.5, fontWeight: FontWeight.w400),
@@ -4033,6 +4263,51 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     );
   }
 
+  Widget _buildTabButton(int index, IconData icon, String label) {
+    final active = _activeTab == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _activeTab = index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF7B4E2E) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: active
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF7B4E2E).withValues(alpha: 0.2),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    )
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: active ? Colors.white : const Color(0xFF6C5946),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: active ? Colors.white : const Color(0xFF6C5946),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentProvider = providerCatalog.firstWhere((p) => p.id == _selectedProviderId);
@@ -4040,6 +4315,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     final visionEnabled = modelHasVision(_selectedModel);
 
     return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.82,
+      ),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       decoration: const BoxDecoration(
         color: Color(0xFFFFFBF2),
@@ -4052,458 +4330,680 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           ),
         ],
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 42,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDCCBB8),
-                  borderRadius: BorderRadius.circular(3),
-                ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Drag handle at top
+          Center(
+            child: Container(
+              width: 42,
+              height: 5,
+              decoration: BoxDecoration(
+                color: const Color(0xFFDCCBB8),
+                borderRadius: BorderRadius.circular(3),
               ),
             ),
-            const SizedBox(height: 20),
-            const Text(
-              'Input & Settings',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF2D241C),
-              ),
+          ),
+          const SizedBox(height: 20),
+          
+          // Header Row
+          const Text(
+            'Input & Settings',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF2D241C),
+              letterSpacing: -0.5,
             ),
-            const SizedBox(height: 16),
-            const Text(
-              'Media Attachment',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF6C5946),
-              ),
+          ),
+          
+          // Custom Tab Bar Selector
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3EBE0),
+              borderRadius: BorderRadius.circular(14),
             ),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+            child: Row(
               children: [
-                _buildMediaItem(
-                  Icons.image_outlined,
-                  'Photos',
-                  isEnabled: visionEnabled,
-                  onTap: () {
-                    if (visionEnabled) {
-                      _pickImage();
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Selected model does not support vision (image input).')),
-                      );
-                    }
-                  },
-                ),
-                _buildMediaItem(
-                  Icons.camera_alt_outlined,
-                  'Camera',
-                  isEnabled: visionEnabled,
-                  onTap: () {
-                    if (visionEnabled) {
-                      _pickImage();
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Selected model does not support vision (image input).')),
-                      );
-                    }
-                  },
-                ),
-                _buildMediaItem(
-                  Icons.insert_drive_file_outlined,
-                  'Document',
-                  isEnabled: true,
-                  onTap: _pickFile,
-                ),
-                _buildMediaItem(
-                  Icons.mic_none_outlined,
-                  'Audio',
-                  isEnabled: false,
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Audio input is not supported yet.')),
-                    );
-                  },
-                ),
+                _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
+                _buildTabButton(1, Icons.explore_outlined, 'Capabilities'),
+                _buildTabButton(2, Icons.attachment_outlined, 'Attach'),
               ],
             ),
-            const SizedBox(height: 24),
-            const Divider(color: Color(0xFFE7D8C4)),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: _selectedProviderId,
-                    dropdownColor: const Color(0xFFFFFBF2),
-                    decoration: const InputDecoration(
-                      labelText: 'AI Provider',
-                      labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                      border: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                      ),
-                      prefixIcon: Icon(Icons.hub_outlined, color: Color(0xFF7B4E2E)),
-                    ),
-                    items: providerCatalog.map((p) {
-                      return DropdownMenuItem<String>(
-                        value: p.id,
-                        child: Text(p.name),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        final nextProvider = providerCatalog.firstWhere((p) => p.id == val);
-                        setState(() {
-                          _selectedProviderId = val;
-                          _selectedModel = nextProvider.models.first;
-                        });
-                        widget.onProviderChanged(val);
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(width: 10),
-                SizedBox(
-                  height: 56,
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Color(0xFFDCCBB8)),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      widget.onConfigureKey();
-                    },
-                    child: const Icon(Icons.key, color: Color(0xFF7B4E2E)),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: models.contains(_selectedModel) ? _selectedModel : models.first,
-                    dropdownColor: const Color(0xFFFFFBF2),
-                    decoration: const InputDecoration(
-                      labelText: 'Model Name',
-                      labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                      border: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                      ),
-                      prefixIcon: Icon(Icons.memory_outlined, color: Color(0xFF7B4E2E)),
-                    ),
-                    items: models.map((m) {
-                      return DropdownMenuItem<String>(
-                        value: m,
-                        child: Text(
-                          m,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() => _selectedModel = val);
-                        widget.onModelChanged(val);
-                      }
-                    },
-                  ),
-                ),
-                const SizedBox(width: 10),
-                SizedBox(
-                  height: 56,
-                  child: OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Color(0xFFDCCBB8)),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    onPressed: _fetching ? null : _fetch,
-                    child: _fetching
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.sync, color: Color(0xFF7B4E2E)),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Max Output Tokens',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    Text(
-                      '$_maxTokens tokens',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF7B4E2E),
-                      ),
-                    ),
-                  ],
-                ),
-                Slider(
-                  value: _maxTokens.toDouble().clamp(128, 16384),
-                  min: 128,
-                  max: 16384,
-                  divisions: 63,
-                  activeColor: const Color(0xFF7B4E2E),
-                  inactiveColor: const Color(0xFFE7D8C4),
-                  onChanged: (val) {
-                    setState(() => _maxTokens = val.round());
-                    widget.onMaxTokensChanged(val.round());
-                  },
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [512, 1024, 2048, 4096, 8192].map((preset) {
-                    final selected = _maxTokens == preset;
-                    return ChoiceChip(
-                      label: Text(
-                        preset.toString(),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: selected ? Colors.white : const Color(0xFF2D241C),
-                        ),
-                      ),
-                      selected: selected,
-                      selectedColor: const Color(0xFF7B4E2E),
-                      backgroundColor: const Color(0xFFFFFCF6),
-                      onSelected: (sel) {
-                        if (sel) {
-                          setState(() => _maxTokens = preset);
-                          widget.onMaxTokensChanged(preset);
-                        }
-                      },
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Divider(color: Color(0xFFE7D8C4)),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'CoT Thinking / Reasoning',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    Text(
-                      'Allow models to think step-by-step',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6C5946),
-                      ),
-                    ),
-                  ],
-                ),
-                Switch(
-                  value: _reasoningEnabled,
-                  activeColor: const Color(0xFF7B4E2E),
-                  onChanged: (val) {
-                    setState(() => _reasoningEnabled = val);
-                    widget.onReasoningEnabledChanged(val);
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            const Divider(color: Color(0xFFE7D8C4)),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Agentic File Access',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    Text(
-                      'Let models read/write local files',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6C5946),
-                      ),
-                    ),
-                  ],
-                ),
-                Switch(
-                  value: _agenticEnabled,
-                  activeColor: const Color(0xFF6A1B9A),
-                  onChanged: (val) {
-                    setState(() => _agenticEnabled = val);
-                    widget.onAgenticEnabledChanged(val);
-                  },
-                ),
-              ],
-            ),
+          ),
+          const Divider(color: Color(0xFFE7D8C4), height: 1),
+          const SizedBox(height: 14),
 
-            if (_agenticEnabled) ...[
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _agenticWorkspaceController,
-                decoration: const InputDecoration(
-                  labelText: 'Workspace Directory Path',
-                  labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. /data/data/com.termux/files/home',
-                ),
-                onChanged: widget.onAgenticWorkspaceChanged,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _customMcpUrlController,
-                decoration: const InputDecoration(
-                  labelText: 'Custom MCP URL (Optional)',
-                  labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. http://192.168.1.10:8390/mcp',
-                ),
-                onChanged: widget.onCustomMcpUrlChanged,
-              ),
-            ],
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Agentic Web Search',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    Text(
-                      'Let models search the web if needed',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6C5946),
-                      ),
-                    ),
-                  ],
-                ),
-                Switch(
-                  value: _searchEnabled,
-                  activeColor: const Color(0xFF7B4E2E),
-                  onChanged: (val) {
-                    setState(() => _searchEnabled = val);
-                    _updateSearchSettings();
-                  },
-                ),
-              ],
+          // Scrollable Content Pane
+          Expanded(
+            child: SingleChildScrollView(
+              child: _buildActiveTabContent(models, visionEnabled),
             ),
-            if (_searchEnabled) ...[
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: _searchProvider,
-                dropdownColor: const Color(0xFFFFFBF2),
-                decoration: const InputDecoration(
-                  labelText: 'Search API Provider',
-                  labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                  border: OutlineInputBorder(),
-                ),
-                items: ['tavily', 'exa', 'firecrawl', 'google'].map((p) {
-                  return DropdownMenuItem<String>(
-                    value: p,
-                    child: Text(p.toUpperCase()),
-                  );
-                }).toList(),
-                onChanged: (val) {
-                  if (val != null) {
-                    setState(() => _searchProvider = val);
-                    _updateSearchSettings();
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _searchKeyController,
-                decoration: const InputDecoration(
-                  labelText: 'Search API Key(s) (comma-separated for fallbacks)',
-                  labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                  border: OutlineInputBorder(),
-                  hintText: 'key1, key2, key3...',
-                ),
-                obscureText: true,
-                onChanged: (_) => _updateSearchSettings(),
-              ),
-              if (_searchProvider == 'google') ...[
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _searchCxController,
-                  decoration: const InputDecoration(
-                    labelText: 'Google Search Engine ID (CX)',
-                    labelStyle: TextStyle(color: Color(0xFF6C5946)),
-                    border: OutlineInputBorder(),
-                  ),
-                  onChanged: (_) => _updateSearchSettings(),
-                ),
-              ],
-            ],
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
+  Widget _buildActiveTabContent(List<String> models, bool visionEnabled) {
+    switch (_activeTab) {
+      case 0:
+        return _buildModelTab(models);
+      case 1:
+        return _buildCapabilitiesTab();
+      case 2:
+        return _buildAttachTab(visionEnabled);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildModelTab(List<String> models) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Dropdowns Group Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7EC),
+            border: Border.all(color: const Color(0xFFEADCC9)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedProviderId,
+                      dropdownColor: const Color(0xFFFFFBF2),
+                      decoration: const InputDecoration(
+                        labelText: 'AI Provider',
+                        labelStyle: TextStyle(color: Color(0xFF6C5946), fontWeight: FontWeight.bold, fontSize: 13),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
+                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF7B4E2E))),
+                        prefixIcon: Icon(Icons.hub_outlined, color: Color(0xFF7B4E2E), size: 20),
+                      ),
+                      items: providerCatalog.map((p) {
+                        return DropdownMenuItem<String>(
+                          value: p.id,
+                          child: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          final nextProvider = providerCatalog.firstWhere((p) => p.id == val);
+                          setState(() {
+                            _selectedProviderId = val;
+                            _selectedModel = nextProvider.models.first;
+                          });
+                          widget.onProviderChanged(val);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    height: 50,
+                    width: 50,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFDCCBB8)),
+                        padding: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        backgroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        widget.onConfigureKey(_selectedProviderId);
+                      },
+                      child: const Icon(Icons.key, color: Color(0xFF7B4E2E), size: 20),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: models.contains(_selectedModel) ? _selectedModel : models.first,
+                      dropdownColor: const Color(0xFFFFFBF2),
+                      decoration: const InputDecoration(
+                        labelText: 'Model Name',
+                        labelStyle: TextStyle(color: Color(0xFF6C5946), fontWeight: FontWeight.bold, fontSize: 13),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
+                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
+                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF7B4E2E))),
+                        prefixIcon: Icon(Icons.memory_outlined, color: Color(0xFF7B4E2E), size: 20),
+                      ),
+                      items: models.map((m) {
+                        return DropdownMenuItem<String>(
+                          value: m,
+                          child: Text(
+                            m,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => _selectedModel = val);
+                          widget.onModelChanged(val);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    height: 50,
+                    width: 50,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFDCCBB8)),
+                        padding: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        backgroundColor: Colors.white,
+                      ),
+                      onPressed: _fetching ? null : _fetch,
+                      child: _fetching
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7B4E2E)),
+                            )
+                          : const Icon(Icons.sync, color: Color(0xFF7B4E2E), size: 20),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+
+        // Token Slider Section
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Max Output Tokens',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '$_maxTokens tokens',
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF7B4E2E)),
+                      ),
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onTap: () async {
+                          final controller = TextEditingController(text: _maxTokens.toString());
+                          final customVal = await showDialog<int>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: const Color(0xFFFFFBF2),
+                              title: const Text('Custom Token Limit', style: TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold)),
+                              content: TextField(
+                                controller: controller,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  labelText: 'Enter token limit',
+                                  hintText: 'e.g. 32768, 128000',
+                                ),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('Cancel'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    final val = int.tryParse(controller.text);
+                                    Navigator.pop(ctx, val);
+                                  },
+                                  child: const Text('Set'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (customVal != null && customVal > 0) {
+                            setState(() {
+                              _maxTokens = customVal;
+                            });
+                            widget.onMaxTokensChanged(customVal);
+                          }
+                        },
+                        child: const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF7B4E2E)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Slider(
+                value: _maxTokens.toDouble().clamp(128, 16384),
+                min: 128,
+                max: 16384,
+                divisions: 63,
+                activeColor: const Color(0xFF7B4E2E),
+                inactiveColor: const Color(0xFFE7D8C4),
+                onChanged: (val) {
+                  setState(() => _maxTokens = val.round());
+                  widget.onMaxTokensChanged(val.round());
+                },
+              ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [512, 1024, 2048, 4096, 8192].map((preset) {
+                    final selected = _maxTokens == preset;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6.0),
+                      child: ChoiceChip(
+                        label: Text(
+                          preset.toString(),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: selected ? Colors.white : const Color(0xFF6C5946),
+                          ),
+                        ),
+                        selected: selected,
+                        selectedColor: const Color(0xFF7B4E2E),
+                        backgroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        side: BorderSide(color: selected ? Colors.transparent : const Color(0xFFE5DDD3)),
+                        onSelected: (sel) {
+                          if (sel) {
+                            setState(() => _maxTokens = preset);
+                            widget.onMaxTokensChanged(preset);
+                          }
+                        },
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Thinking / Reasoning Switch Card
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'CoT Thinking / Reasoning',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Allow models to think step-by-step',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _reasoningEnabled,
+                activeColor: const Color(0xFF7B4E2E),
+                onChanged: (val) {
+                  setState(() => _reasoningEnabled = val);
+                  widget.onReasoningEnabledChanged(val);
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCapabilitiesTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // File Access Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7EC),
+            border: Border.all(color: const Color(0xFFEADCC9)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Agentic File Access',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Let models read/write local files',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                      ),
+                    ],
+                  ),
+                  Switch(
+                    value: _agenticEnabled,
+                    activeColor: const Color(0xFF7B4E2E),
+                    onChanged: (val) {
+                      setState(() => _agenticEnabled = val);
+                      widget.onAgenticEnabledChanged(val);
+                    },
+                  ),
+                ],
+              ),
+              if (_agenticEnabled) ...[
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _agenticWorkspaceController,
+                  decoration: const InputDecoration(
+                    labelText: 'Workspace Directory Path',
+                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    border: OutlineInputBorder(),
+                    hintText: 'e.g. /data/data/com.termux/files/home',
+                  ),
+                  onChanged: widget.onAgenticWorkspaceChanged,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _customMcpUrlController,
+                  decoration: const InputDecoration(
+                    labelText: 'Custom MCP URL (Optional)',
+                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    border: OutlineInputBorder(),
+                    hintText: 'e.g. http://192.168.1.10:8390/mcp',
+                  ),
+                  onChanged: widget.onCustomMcpUrlChanged,
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Web Search Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Agentic Web Search',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Let models search the web if needed',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                      ),
+                    ],
+                  ),
+                  Switch(
+                    value: _searchEnabled,
+                    activeColor: const Color(0xFF7B4E2E),
+                    onChanged: (val) {
+                      setState(() => _searchEnabled = val);
+                      _updateSearchSettings();
+                    },
+                  ),
+                ],
+              ),
+              if (_searchEnabled) ...[
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: _searchProvider,
+                  dropdownColor: const Color(0xFFFFFBF2),
+                  decoration: const InputDecoration(
+                    labelText: 'Search API Provider',
+                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    border: OutlineInputBorder(),
+                  ),
+                  items: ['tavily', 'exa', 'firecrawl', 'google'].map((p) {
+                    return DropdownMenuItem<String>(
+                      value: p,
+                      child: Text(p.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() => _searchProvider = val);
+                      _updateSearchSettings();
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _searchKeyController,
+                  decoration: const InputDecoration(
+                    labelText: 'Search API Key(s) (comma-separated)',
+                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    border: OutlineInputBorder(),
+                    hintText: 'key1, key2...',
+                  ),
+                  obscureText: true,
+                  onChanged: (_) => _updateSearchSettings(),
+                ),
+                if (_searchProvider == 'google') ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _searchCxController,
+                    decoration: const InputDecoration(
+                      labelText: 'Google Search Engine ID (CX)',
+                      labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (_) => _updateSearchSettings(),
+                  ),
+                ],
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAttachTab(bool visionEnabled) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Media & Document Attachments',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Choose photos, capture via camera, or attach documents to send as context.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+              ),
+              const SizedBox(height: 18),
+              
+              // Grid of media attachment buttons
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: 1.4,
+                children: [
+                  _buildAttachTile(
+                    Icons.image_outlined,
+                    'Photos',
+                    'Gallery images',
+                    isEnabled: visionEnabled,
+                    onTap: () {
+                      if (visionEnabled) {
+                        _pickImage();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Selected model does not support vision (image input).')),
+                        );
+                      }
+                    },
+                  ),
+                  _buildAttachTile(
+                    Icons.camera_alt_outlined,
+                    'Camera',
+                    'Capture photo',
+                    isEnabled: visionEnabled,
+                    onTap: () {
+                      if (visionEnabled) {
+                        _pickImage();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Selected model does not support vision (image input).')),
+                        );
+                      }
+                    },
+                  ),
+                  _buildAttachTile(
+                    Icons.insert_drive_file_outlined,
+                    'Document',
+                    'PDF, TXT, MD, Code',
+                    isEnabled: true,
+                    onTap: _pickFile,
+                  ),
+                  _buildAttachTile(
+                    Icons.mic_none_outlined,
+                    'Audio',
+                    'Voice notes',
+                    isEnabled: false,
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Audio input is not supported yet.')),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAttachTile(
+    IconData icon,
+    String title,
+    String subtitle, {
+    required bool isEnabled,
+    required VoidCallback onTap,
+  }) {
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 200),
+      opacity: isEnabled ? 1.0 : 0.45,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isEnabled ? Colors.white : const Color(0xFFF1EAE0),
+            border: Border.all(color: isEnabled ? const Color(0xFFE2D6C5) : Colors.transparent),
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: isEnabled
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF7B4E2E).withValues(alpha: 0.05),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    )
+                  ]
+                : null,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                icon,
+                size: 24,
+                color: isEnabled ? const Color(0xFF7B4E2E) : const Color(0xFF9E8F7F),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: isEnabled ? const Color(0xFF2D241C) : const Color(0xFF9E8F7F),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isEnabled ? const Color(0xFF77624F) : const Color(0xFFB0A59A),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
   Widget _buildMediaItem(IconData icon, String label, {required bool isEnabled, required VoidCallback onTap}) {
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 200),
@@ -5828,6 +6328,7 @@ class ChatSession {
   final int? maxTokens;
   final List<String> attachedImagesBase64;
   final List<AttachedFile> attachedFiles;
+  final bool isPinned;
 
   ChatSession({
     required this.id,
@@ -5838,6 +6339,7 @@ class ChatSession {
     this.maxTokens,
     this.attachedImagesBase64 = const [],
     this.attachedFiles = const [],
+    this.isPinned = false,
   });
 
   ChatSession copyWith({
@@ -5849,6 +6351,7 @@ class ChatSession {
     int? maxTokens,
     List<String>? attachedImagesBase64,
     List<AttachedFile>? attachedFiles,
+    bool? isPinned,
   }) {
     return ChatSession(
       id: id ?? this.id,
@@ -5859,6 +6362,7 @@ class ChatSession {
       maxTokens: maxTokens ?? this.maxTokens,
       attachedImagesBase64: attachedImagesBase64 ?? this.attachedImagesBase64,
       attachedFiles: attachedFiles ?? this.attachedFiles,
+      isPinned: isPinned ?? this.isPinned,
     );
   }
 
@@ -5878,6 +6382,7 @@ class ChatSession {
         'maxTokens': maxTokens,
         'attachedImagesBase64': attachedImagesBase64,
         'attachedFiles': attachedFiles.map((f) => f.toJson()).toList(),
+        'isPinned': isPinned,
       };
 
   factory ChatSession.fromJson(Map<String, dynamic> json) {
@@ -5904,6 +6409,7 @@ class ChatSession {
       maxTokens: json['maxTokens'] as int?,
       attachedImagesBase64: (json['attachedImagesBase64'] as List?)?.map((e) => e.toString()).toList() ?? const [],
       attachedFiles: (json['attachedFiles'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
+      isPinned: json['isPinned'] as bool? ?? false,
     );
   }
 }
@@ -7146,3 +7652,287 @@ class FullScreenSvgViewer extends StatelessWidget {
   }
 }
 
+
+
+class DocxArtifactWidget extends StatefulWidget {
+  final String docxContent;
+  final String workspacePath;
+  const DocxArtifactWidget({super.key, required this.docxContent, required this.workspacePath});
+
+  @override
+  State<DocxArtifactWidget> createState() => _DocxArtifactWidgetState();
+}
+
+class _DocxArtifactWidgetState extends State<DocxArtifactWidget> {
+  bool _exporting = false;
+
+  Future<void> _exportDocx() async {
+    setState(() => _exporting = true);
+    
+    try {
+      final docxDir = Directory('${widget.workspacePath}/.termux_forge');
+      if (!docxDir.existsSync()) {
+        docxDir.createSync(recursive: true);
+      }
+      
+      final tempMdFile = File('${docxDir.path}/temp_doc.md');
+      await tempMdFile.writeAsString(widget.docxContent);
+      
+      // Default to document.docx or check header
+      String outputName = 'document.docx';
+      final match = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(widget.docxContent);
+      if (match != null) {
+        final title = match.group(1)?.replaceAll(RegExp(r'[^a-zA-Z0-9\s-]'), '').trim() ?? '';
+        if (title.isNotEmpty) {
+          outputName = '${title.toLowerCase().replaceAll(' ', '_')}.docx';
+        }
+      }
+      
+      final outputPath = '${widget.workspacePath}/$outputName';
+      
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 45);
+      final request = await client.postUrl(Uri.parse('http://127.0.0.1:8390/mcp'));
+      request.headers.contentType = ContentType.json;
+      
+      final jsonString = jsonEncode({
+        'method': 'run_command',
+        'params': {
+          'command': 'python3 /data/data/com.termux/files/home/projects/termux_forge/python_bridge/generate_docx.py "${tempMdFile.path}" "$outputPath"',
+          'cwd': widget.workspacePath
+        }
+      });
+      
+      final bytes = utf8.encode(jsonString);
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      
+      if (body.contains('Success: Saved document')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Word Document exported successfully to $outputName'),
+            backgroundColor: const Color(0xFF7B4E2E),
+          ),
+        );
+      } else {
+        throw Exception(body);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to export document: $e'),
+          backgroundColor: Colors.red[700],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Parse title if any
+    String titleText = 'Word Document';
+    final titleMatch = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(widget.docxContent);
+    if (titleMatch != null) {
+      titleText = titleMatch.group(1)?.trim() ?? titleText;
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBF2),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5DDD3)),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header Bar
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF3EBE0),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(15)),
+              border: Border(bottom: BorderSide(color: Color(0xFFE5DDD3))),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.description_outlined, color: Color(0xFF7B4E2E), size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    titleText,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                      fontSize: 14,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                SizedBox(
+                  height: 32,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7B4E2E),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    onPressed: _exporting ? null : _exportDocx,
+                    child: _exporting
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.download_outlined, size: 14),
+                              SizedBox(width: 4),
+                              Text('Export Word', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Preview Sheet (Document Page layout)
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFF1EAE0)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: _renderDocxPreview(widget.docxContent),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _renderDocxPreview(String markdown) {
+    final List<Widget> widgets = [];
+    final lines = markdown.split('\n');
+    
+    for (final line in lines) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      
+      // Skip title/subtitle headers since they are in cover header
+      if (RegExp(r'^(title|subtitle):', caseSensitive: false).hasMatch(trimmed)) continue;
+
+      if (trimmed.startsWith('# ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 14.0, bottom: 6.0),
+          child: Text(
+            trimmed.substring(2),
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF7B4E2E),
+              fontFamily: 'serif',
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('## ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 10.0, bottom: 4.0),
+          child: Text(
+            trimmed.substring(3),
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF7B4E2E),
+              fontFamily: 'serif',
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('### ')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(top: 8.0, bottom: 2.0),
+          child: Text(
+            trimmed.substring(4),
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF6C5946),
+            ),
+          ),
+        ));
+      } else if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(left: 12.0, bottom: 4.0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('• ', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7B4E2E))),
+              Expanded(
+                child: Text(
+                  trimmed.substring(1).trim(),
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF2D241C)),
+                ),
+              ),
+            ],
+          ),
+        ));
+      } else if (trimmed.startsWith('>')) {
+        widgets.add(Container(
+          margin: const EdgeInsets.only(vertical: 8.0),
+          padding: const EdgeInsets.all(10.0),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFAF5EE),
+            border: const Border(left: BorderSide(color: Color(0xFF7B4E2E), width: 3.5)),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            trimmed.substring(1).trim(),
+            style: const TextStyle(fontSize: 12.5, fontStyle: FontStyle.italic, color: Color(0xFF6C5946)),
+          ),
+        ));
+      } else {
+        widgets.add(Padding(
+          padding: const EdgeInsets.only(bottom: 8.0),
+          child: Text(
+            trimmed,
+            style: const TextStyle(
+              fontSize: 13,
+              height: 1.4,
+              color: Color(0xFF2D241C),
+            ),
+          ),
+        ));
+      }
+    }
+    return widgets;
+  }
+}

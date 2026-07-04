@@ -31,7 +31,13 @@ android {
         applicationId = "com.termuxforge.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = flutterVersionCode
+        // Use an auto-incrementing timestamp-based versionCode for developer builds
+        // to avoid Android "App not installed" update conflicts.
+        versionCode = if (flutterVersionCode <= 1) {
+            (System.currentTimeMillis() / 10000).toInt()
+        } else {
+            flutterVersionCode
+        }
         versionName = flutterVersionName
         multiDexEnabled = true
     }
@@ -57,8 +63,8 @@ android {
     buildTypes {
         debug {
             isDebuggable = true
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            // Removed applicationIdSuffix and versionNameSuffix to allow seamless
+            // update/overwriting between build configurations.
         }
 
         release {
