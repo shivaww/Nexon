@@ -298,7 +298,7 @@ class NexonChartWidget extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                   child: Text(
                     data.title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
                       color: _kTitleColor,
