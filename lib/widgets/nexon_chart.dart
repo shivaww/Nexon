@@ -14,17 +14,17 @@ import 'package:fl_chart/fl_chart.dart';
 
 final _kChartPalette = [
   Color(0xFF6366F1), // indigo
+  Color(0xFFF59E0B), // amber
   Color(0xFF8B5CF6), // violet
+  Color(0xFF10B981), // emerald
   Color(0xFFEC4899), // pink
   Color(0xFF06B6D4), // cyan
-  Color(0xFF10B981), // emerald
-  Color(0xFFF59E0B), // amber
   Color(0xFFEF4444), // red
+  Color(0xFF84CC16), // lime
   Color(0xFF3B82F6), // blue
   Color(0xFFF97316), // orange
-  Color(0xFF84CC16), // lime
-  Color(0xFF14B8A6), // teal
   Color(0xFFE879F9), // fuchsia
+  Color(0xFF14B8A6), // teal
 ];
 
 Color _paletteColor(int i) => _kChartPalette[i % _kChartPalette.length];
@@ -69,6 +69,9 @@ class _ChartData {
   final double gaugeValue;
   final double gaugeMax;
   final String gaugeLabel;
+  // For mindmap
+  final List<_Node> nodes;
+  final List<_Edge> edges;
 
   _ChartData({
     required this.type,
@@ -84,6 +87,8 @@ class _ChartData {
     this.gaugeValue = 0,
     this.gaugeMax = 100,
     this.gaugeLabel = '',
+    this.nodes = const [],
+    this.edges = const [],
   });
 }
 
@@ -102,6 +107,18 @@ class _GanttItem {
   final Color color;
 
   _GanttItem({required this.label, required this.start, required this.end, required this.color});
+}
+
+class _Node {
+  final String id;
+  final String label;
+  _Node({required this.id, required this.label});
+}
+
+class _Edge {
+  final String from;
+  final String to;
+  _Edge({required this.from, required this.to});
 }
 
 // ── Parser ───────────────────────────────────────────────────────────────────
@@ -166,6 +183,8 @@ _ChartData _parseChartBlock(String raw) {
   double gaugeValue = 0;
   double gaugeMax = 100;
   String gaugeLabel = '';
+  List<_Node> nodes = [];
+  List<_Edge> edges = [];
 
   // Collect lines that are simple key:value (for shorthand single-series)
   final shorthandEntries = <String, double>{};
@@ -219,7 +238,19 @@ _ChartData _parseChartBlock(String raw) {
       gaugeMax = double.tryParse(value) ?? 100;
     } else if (key == 'label' && type.contains('gauge')) {
       gaugeLabel = value;
-    } else if (!['type', 'title', 'range', 'labels', 'series', 'row', 'xlabels', 'ylabels', 'gantt', 'task', 'value', 'max', 'label'].contains(key)) {
+    } else if (key == 'node') {
+      final eqIdx = value.indexOf('=');
+      if (eqIdx > 0) {
+        nodes.add(_Node(id: value.substring(0, eqIdx).trim(), label: value.substring(eqIdx + 1).trim()));
+      } else {
+        nodes.add(_Node(id: value, label: value));
+      }
+    } else if (key == 'edge' || key == 'link') {
+      final arrowIdx = value.indexOf('->');
+      if (arrowIdx > 0) {
+        edges.add(_Edge(from: value.substring(0, arrowIdx).trim(), to: value.substring(arrowIdx + 2).trim()));
+      }
+    } else if (!['type', 'title', 'range', 'labels', 'series', 'row', 'xlabels', 'ylabels', 'gantt', 'task', 'value', 'max', 'label', 'node', 'edge', 'link'].contains(key)) {
       // Shorthand: "Android: 45" or "Android: 45, 30" (for scatter x,y)
       final numVal = double.tryParse(value.split(',').first.trim());
       if (numVal != null) {
@@ -256,6 +287,8 @@ _ChartData _parseChartBlock(String raw) {
     gaugeValue: gaugeValue,
     gaugeMax: gaugeMax,
     gaugeLabel: gaugeLabel,
+    nodes: nodes,
+    edges: edges,
   );
 }
 
@@ -269,7 +302,7 @@ class NexonChartWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     try {
       final data = _parseChartBlock(chartBlock);
-      if (data.series.isEmpty && data.ganttItems.isEmpty && data.matrix.isEmpty && !data.type.contains('gauge')) {
+      if (data.series.isEmpty && data.ganttItems.isEmpty && data.matrix.isEmpty && data.nodes.isEmpty && !data.type.contains('gauge')) {
         return const SizedBox.shrink();
       }
 
@@ -335,6 +368,31 @@ class NexonChartWidget extends StatelessWidget {
                     )).toList(),
                   ),
                 ),
+              if ((data.type.contains('pie') || data.type.contains('donut')) && data.series.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 6,
+                    children: data.series.first.values.asMap().entries.map((e) {
+                      final label = e.key < data.labels.length ? data.labels[e.key] : 'Item ${e.key + 1}';
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 10, height: 10,
+                            decoration: BoxDecoration(
+                              color: _paletteColor(e.key),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(label, style: TextStyle(fontSize: 12, color: _kSubtitleColor)),
+                        ],
+                      );
+                    }).toList(),
+                  ),
+                ),
             ],
           ),
         ),
@@ -397,7 +455,13 @@ class NexonChartWidget extends StatelessWidget {
         return _buildGaugeChart(data);
       case 'geometry':
       case 'geometrygraph':
-        return _buildLineChart(data); // geometry graphs render as line/curve
+      case 'cartesian':
+      case 'cartesiangraph':
+      case 'plane':
+        return _buildCartesianChart(data);
+      case 'mindmap':
+      case 'tree':
+        return _buildMindMapChart(data);
       default:
         return _buildBarChart(data, grouped: data.series.length > 1);
     }
@@ -425,6 +489,7 @@ class NexonChartWidget extends StatelessWidget {
             enabled: true,
             touchTooltipData: BarTouchTooltipData(
               tooltipBorder: BorderSide(color: _kBorderColor),
+              getTooltipColor: (group) => _kTooltipBg,
               getTooltipItem: (group, groupIndex, rod, rodIndex) {
                 final label = groupIndex < labelCount ? data.labels[groupIndex] : '';
                 final seriesName = rodIndex < seriesCount ? data.series[rodIndex].name : '';
@@ -500,6 +565,7 @@ class NexonChartWidget extends StatelessWidget {
             enabled: true,
             touchTooltipData: BarTouchTooltipData(
               tooltipBorder: BorderSide(color: _kBorderColor),
+              getTooltipColor: (group) => _kTooltipBg,
               getTooltipItem: (group, groupIndex, rod, rodIndex) {
                 final label = groupIndex < labelCount ? data.labels[groupIndex] : '';
                 // For stacked, rodIndex is always 0; show total
@@ -569,6 +635,7 @@ class NexonChartWidget extends StatelessWidget {
             enabled: true,
             touchTooltipData: LineTouchTooltipData(
               tooltipBorder: BorderSide(color: _kBorderColor),
+              getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spots) => spots.map((spot) {
                 final sIdx = spot.barIndex;
                 final name = sIdx < data.series.length ? data.series[sIdx].name : '';
@@ -576,7 +643,7 @@ class NexonChartWidget extends StatelessWidget {
                 final valStr = spot.y.toStringAsFixed(spot.y == spot.y.truncateToDouble() ? 0 : 1);
                 return LineTooltipItem(
                   data.series.length > 1 ? '$label\n$name: $valStr' : '$label\n$valStr',
-                  TextStyle(color: data.series[sIdx].color, fontSize: 12, fontWeight: FontWeight.w600),
+                  const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
                 );
               }).toList(),
             ),
@@ -636,13 +703,14 @@ class NexonChartWidget extends StatelessWidget {
             enabled: true,
             touchTooltipData: LineTouchTooltipData(
               tooltipBorder: BorderSide(color: _kBorderColor),
+              getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spots) => spots.map((spot) {
                 final sIdx = spot.barIndex;
                 final valStr = spot.y.toStringAsFixed(spot.y == spot.y.truncateToDouble() ? 0 : 1);
                 final label = spot.spotIndex < data.labels.length ? data.labels[spot.spotIndex] : '';
                 return LineTooltipItem(
                   '$label\n$valStr',
-                  TextStyle(color: data.series[sIdx].color, fontSize: 12, fontWeight: FontWeight.w600),
+                  const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
                 );
               }).toList(),
             ),
@@ -691,13 +759,15 @@ class NexonChartWidget extends StatelessWidget {
         startDegreeOffset: -90,
         pieTouchData: PieTouchData(enabled: true),
         sections: values.asMap().entries.map((e) {
-          final label = e.key < data.labels.length ? data.labels[e.key] : '';
-          final pct = total > 0 ? (e.value / total * 100).toStringAsFixed(1) : '0';
+          final pctVal = total > 0 ? (e.value / total * 100) : 0.0;
+          final pctStr = pctVal.toStringAsFixed(1);
           final c = _paletteColor(e.key);
+          final showTxt = pctVal > 4.0;
           return PieChartSectionData(
             color: c,
             value: e.value,
-            title: '$label\n$pct%',
+            title: showTxt ? '$pctStr%' : '',
+            showTitle: showTxt,
             radius: donut ? 40 : 80,
             titleStyle: const TextStyle(
               fontSize: 11,
@@ -735,6 +805,7 @@ class NexonChartWidget extends StatelessWidget {
           scatterTouchData: ScatterTouchData(
             enabled: true,
             touchTooltipData: ScatterTouchTooltipData(
+              getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spot) {
                 return ScatterTooltipItem(
                   '(${spot.x.toStringAsFixed(1)}, ${spot.y.toStringAsFixed(1)})',
@@ -829,6 +900,7 @@ class NexonChartWidget extends StatelessWidget {
             enabled: true,
             touchTooltipData: BarTouchTooltipData(
               tooltipBorder: BorderSide(color: _kBorderColor),
+              getTooltipColor: (group) => _kTooltipBg,
               getTooltipItem: (group, groupIndex, rod, rodIndex) {
                 final label = groupIndex < data.labels.length ? data.labels[groupIndex] : '${groupIndex}';
                 return BarTooltipItem(
@@ -984,6 +1056,7 @@ class NexonChartWidget extends StatelessWidget {
           scatterTouchData: ScatterTouchData(
             enabled: true,
             touchTooltipData: ScatterTouchTooltipData(
+              getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spot) {
                 return ScatterTooltipItem(
                   '${spot.y.toStringAsFixed(1)}',
@@ -1131,6 +1204,34 @@ class NexonChartWidget extends StatelessWidget {
     );
   }
 
+  // ── Cartesian Plane ─────────────────────────────────────────────────────
+
+  static Widget _buildCartesianChart(_ChartData data) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: ClipRect(
+        child: CustomPaint(
+          painter: _CartesianPainter(data: data),
+          size: const Size(double.infinity, double.infinity),
+        ),
+      ),
+    );
+  }
+
+  // ── Mind Map ─────────────────────────────────────────────────────────────
+
+  static Widget _buildMindMapChart(_ChartData data) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: ClipRect(
+        child: CustomPaint(
+          painter: _MindMapPainter(data),
+          size: const Size(double.infinity, double.infinity),
+        ),
+      ),
+    );
+  }
+
   // ── Shared Helpers ──────────────────────────────────────────────────────
 
   static FlTitlesData _buildTitlesData(_ChartData data, double maxY, double minY) {
@@ -1237,6 +1338,242 @@ class _GaugePainter extends CustomPainter {
   bool shouldRepaint(_GaugePainter old) => old.value != value || old.color != color;
 }
 
+// ── Cartesian / Geometry Painter ────────────────────────────────────────────
+
+class _CartesianPainter extends CustomPainter {
+  final _ChartData data;
+
+  _CartesianPainter({required this.data});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    double minX = data.rangeMin ?? -10.0;
+    double maxX = data.rangeMax ?? 10.0;
+    double minY = data.rangeMin ?? -10.0;
+    double maxY = data.rangeMax ?? 10.0;
+
+    for (var s in data.series) {
+      for (int i = 0; i < s.values.length - 1; i += 2) {
+        if (s.values[i] < minX) minX = s.values[i];
+        if (s.values[i] > maxX) maxX = s.values[i];
+        if (s.values[i+1] < minY) minY = s.values[i+1];
+        if (s.values[i+1] > maxY) maxY = s.values[i+1];
+      }
+    }
+    
+    minX -= 1; maxX += 1;
+    minY -= 1; maxY += 1;
+
+    final rangeX = maxX - minX;
+    final rangeY = maxY - minY;
+
+    Offset toOffset(double x, double y) {
+      return Offset(
+        (x - minX) / rangeX * size.width,
+        size.height - ((y - minY) / rangeY * size.height),
+      );
+    }
+
+    final gridPaint = Paint()..color = _kGridColor.withOpacity(0.5)..strokeWidth = 1;
+    final axisPaint = Paint()..color = _kAxisLabelColor..strokeWidth = 2;
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    
+    // Draw grid and axis
+    for (int i = minX.floor(); i <= maxX.ceil(); i++) {
+      final px = toOffset(i.toDouble(), 0).dx;
+      canvas.drawLine(Offset(px, 0), Offset(px, size.height), i == 0 ? axisPaint : gridPaint);
+      if (i != 0 && i % 2 == 0) {
+        textPainter.text = TextSpan(text: '$i', style: TextStyle(color: _kAxisLabelColor.withOpacity(0.6), fontSize: 9));
+        textPainter.layout();
+        textPainter.paint(canvas, Offset(px + 2, toOffset(0, 0).dy + 2));
+      }
+    }
+    for (int i = minY.floor(); i <= maxY.ceil(); i++) {
+      final py = toOffset(0, i.toDouble()).dy;
+      canvas.drawLine(Offset(0, py), Offset(size.width, py), i == 0 ? axisPaint : gridPaint);
+      if (i != 0 && i % 2 == 0) {
+        textPainter.text = TextSpan(text: '$i', style: TextStyle(color: _kAxisLabelColor.withOpacity(0.6), fontSize: 9));
+        textPainter.layout();
+        textPainter.paint(canvas, Offset(toOffset(0, 0).dx + 2, py - 12));
+      }
+    }
+
+    for (var s in data.series) {
+      if (s.values.isEmpty) continue;
+      
+      final shapePaint = Paint()
+        ..color = s.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeJoin = StrokeJoin.round;
+        
+      final fillPaint = Paint()
+        ..color = s.color.withOpacity(0.2)
+        ..style = PaintingStyle.fill;
+        
+      final path = Path();
+      final List<Offset> points = [];
+      
+      for (int i = 0; i < s.values.length - 1; i += 2) {
+        points.add(toOffset(s.values[i], s.values[i+1]));
+      }
+
+      if (points.isEmpty) continue;
+
+      if (points.length == 1) {
+        canvas.drawCircle(points.first, 4, shapePaint..style=PaintingStyle.fill);
+      } else {
+        path.moveTo(points.first.dx, points.first.dy);
+        for (int i = 1; i < points.length; i++) {
+          path.lineTo(points[i].dx, points[i].dy);
+        }
+        canvas.drawPath(path, shapePaint);
+        
+        if (points.length > 2 && (points.first - points.last).distance < 0.1) {
+          canvas.drawPath(path, fillPaint);
+        }
+        
+        for (var p in points) {
+          canvas.drawCircle(p, 3, Paint()..color=s.color);
+        }
+      }
+      
+      if (s.name.isNotEmpty && s.name != 'Data') {
+        textPainter.text = TextSpan(
+          text: s.name,
+          style: TextStyle(color: s.color, fontSize: 12, fontWeight: FontWeight.w600, backgroundColor: _kCardBg.withOpacity(0.8)),
+        );
+        textPainter.layout();
+        textPainter.paint(canvas, points.first + const Offset(5, -15));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CartesianPainter old) => true;
+}
+
+// ── Mind Map Painter ────────────────────────────────────────────────────────
+
+class _MindMapPainter extends CustomPainter {
+  final _ChartData data;
+  _MindMapPainter(this.data);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.nodes.isEmpty) return;
+
+    final inDegree = <String, int>{};
+    final outEdges = <String, List<String>>{};
+    for (var n in data.nodes) {
+      inDegree[n.id] = 0;
+      outEdges[n.id] = [];
+    }
+    for (var e in data.edges) {
+      if (outEdges.containsKey(e.from)) {
+        outEdges[e.from]!.add(e.to);
+        inDegree[e.to] = (inDegree[e.to] ?? 0) + 1;
+      }
+    }
+
+    final levels = <String, int>{};
+    int maxLevel = 0;
+    var queue = <String>[];
+    for (var n in data.nodes) {
+      if (inDegree[n.id] == 0) {
+        levels[n.id] = 0;
+        queue.add(n.id);
+      }
+    }
+    if (queue.isEmpty) {
+      levels[data.nodes.first.id] = 0;
+      queue.add(data.nodes.first.id);
+    }
+
+    while (queue.isNotEmpty) {
+      final curr = queue.removeAt(0);
+      final currLvl = levels[curr]!;
+      if (currLvl > maxLevel) maxLevel = currLvl;
+
+      for (var child in (outEdges[curr] ?? [])) {
+        if (!levels.containsKey(child)) {
+          levels[child] = currLvl + 1;
+          queue.add(child);
+        }
+      }
+    }
+    
+    for (var n in data.nodes) {
+      if (!levels.containsKey(n.id)) {
+        levels[n.id] = 0;
+      }
+    }
+
+    final levelGroups = <int, List<_Node>>{};
+    for (var n in data.nodes) {
+      final l = levels[n.id]!;
+      levelGroups.putIfAbsent(l, () => []).add(n);
+    }
+
+    final positions = <String, Offset>{};
+    final nodeHeight = 36.0;
+    final nodeWidth = 90.0;
+    final yStep = size.height / (maxLevel + 1);
+    
+    levelGroups.forEach((lvl, nodes) {
+      final xStep = size.width / (nodes.length + 1);
+      for (int i = 0; i < nodes.length; i++) {
+        final x = xStep * (i + 1);
+        final y = (yStep * lvl) + (yStep / 2);
+        positions[nodes[i].id] = Offset(x, y);
+      }
+    });
+
+    final edgePaint = Paint()
+      ..color = _kAxisLabelColor.withOpacity(0.5)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+
+    for (var e in data.edges) {
+      final p1 = positions[e.from];
+      final p2 = positions[e.to];
+      if (p1 != null && p2 != null) {
+        final path = Path();
+        path.moveTo(p1.dx, p1.dy + nodeHeight / 2);
+        path.cubicTo(
+          p1.dx, p1.dy + nodeHeight / 2 + 30,
+          p2.dx, p2.dy - nodeHeight / 2 - 30,
+          p2.dx, p2.dy - nodeHeight / 2,
+        );
+        canvas.drawPath(path, edgePaint);
+      }
+    }
+
+    final textPainter = TextPainter(textDirection: TextDirection.ltr, textAlign: TextAlign.center);
+    int cIdx = 0;
+    for (var n in data.nodes) {
+      final p = positions[n.id]!;
+      final bgPaint = Paint()..color = _paletteColor(cIdx++)..style = PaintingStyle.fill;
+      
+      final rect = Rect.fromCenter(center: p, width: nodeWidth, height: nodeHeight);
+      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(8)), bgPaint);
+      
+      textPainter.text = TextSpan(
+        text: n.label,
+        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+      );
+      textPainter.layout(maxWidth: nodeWidth - 8);
+      textPainter.paint(
+        canvas,
+        Offset(p.dx - textPainter.width / 2, p.dy - textPainter.height / 2),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MindMapPainter old) => true;
+}
+
 // ── Full Screen Chart Viewer ────────────────────────────────────────────────
 
 class _FullScreenChartViewer extends StatelessWidget {
@@ -1271,15 +1608,15 @@ class _FullScreenChartViewer extends StatelessWidget {
         scaleEnabled: true,
         minScale: 0.5,
         maxScale: 5.0,
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: SizedBox(
-              width: double.infinity,
-              height: MediaQuery.of(context).size.height * 0.7,
-              child: NexonChartWidget._buildChart(data),
-            ),
+        constrained: false,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          width: math.max(
+            MediaQuery.of(context).size.width,
+            math.max(data.labels.length, data.series.isNotEmpty ? data.series.first.values.length : 0) * 60.0
           ),
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: NexonChartWidget._buildChart(data),
         ),
       ),
     );

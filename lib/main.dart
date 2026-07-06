@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_markdown_latex/flutter_markdown_latex.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:nexon/widgets/scrollable_table_builder.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -99,6 +100,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
+  int? _editingMessageIndex;
 
   List<ChatMessage> get _messages {
     if (_sessions.isEmpty) {
@@ -165,6 +167,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   void _switchSession(String sessionId) {
     setState(() {
       _activeSessionId = sessionId;
+      _editingMessageIndex = null;
       final session = _sessions.firstWhere((s) => s.id == sessionId);
       _selectedProviderId = session.providerId;
       final settings = _settings[_selectedProviderId] ??
@@ -198,6 +201,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       if (_activeSessionId == sessionId) {
         _activeSessionId = _sessions.first.id;
       }
+      _editingMessageIndex = null;
     });
     _saveSessions();
 
@@ -642,6 +646,9 @@ jobs:
       return;
     }
 
+    final isEditing = _editingMessageIndex != null;
+    final editIndex = _editingMessageIndex;
+
     if (targetSessionId == _activeSessionId) {
       _messageController.clear();
     }
@@ -660,11 +667,34 @@ jobs:
 
     setState(() {
       _sendingSessionIds.add(targetSessionId);
-      final updatedMessages = List<ChatMessage>.from(session.messages)..add(userMessage);
+      List<ChatMessage> baseMessages = List<ChatMessage>.from(session.messages);
+
+      List<List<ChatMessage>> updatedBranches = session.branches != null
+          ? List<List<ChatMessage>>.from(session.branches!)
+          : [List<ChatMessage>.from(session.messages)];
+
+      int newActiveBranchIndex = session.activeBranchIndex ?? 0;
+
+      if (isEditing && editIndex != null && editIndex >= 0 && editIndex < baseMessages.length) {
+        final prefix = baseMessages.sublist(0, editIndex);
+        final newBranchMessages = [...prefix, userMessage];
+        updatedBranches.add(newBranchMessages);
+        newActiveBranchIndex = updatedBranches.length - 1;
+        baseMessages = newBranchMessages;
+      } else {
+        baseMessages.add(userMessage);
+        if (newActiveBranchIndex >= 0 && newActiveBranchIndex < updatedBranches.length) {
+          updatedBranches[newActiveBranchIndex] = baseMessages;
+        }
+      }
+
+      _editingMessageIndex = null;
       final curIdx = _sessions.indexWhere((s) => s.id == targetSessionId);
       if (curIdx != -1) {
         _sessions[curIdx] = session.copyWith(
-          messages: updatedMessages,
+          messages: baseMessages,
+          branches: updatedBranches,
+          activeBranchIndex: newActiveBranchIndex,
           title: updatedTitle,
           attachedImagesBase64: const [],
           attachedFiles: const [],
@@ -708,12 +738,11 @@ jobs:
             "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
             "Render via markdown code blocks:\n"
             "- LaTeX: \\[ ... \\] or \\( ... \\)\n"
-            "- SVG (ONLY for non-graph diagrams like flowcharts, mind maps, architecture, illustrations): ```svg\n"
+            "- SVG (ONLY for non-graph diagrams like flowcharts, architecture, illustrations): ```svg\n"
             "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
             "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
-            "  SVG MIND MAP REQUIREMENT: Mind maps MUST be drawn strictly as vertical tree structures.\n"
-            "  NEVER use SVG for charts/graphs. Use ```chart instead.\n\n"
-            "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked): ```chart\n"
+            "  NEVER use SVG for charts, graphs, or mind maps. Use ```chart instead.\n\n"
+            "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, cartesian, mindmap): ```chart\n"
             "  Simple line-based format. LLM passes only values. Examples:\n\n"
             "  BAR/GROUPED BAR:\n"
             "  type: bar\n"
@@ -786,6 +815,20 @@ jobs:
             "  value: 73\n"
             "  max: 100\n"
             "  label: percent\n\n"
+            "  CARTESIAN/GEOMETRY (for drawing shapes, polygons, points on a coordinate plane):\n"
+            "  type: cartesian\n"
+            "  title: Triangle ABC\n"
+            "  range: -10-10\n"
+            "  series: Triangle = 2,3, 6,7, 4,1, 2,3\n"
+            "  series: Point A = 2,3\n\n"
+            "  MINDMAP/TREE:\n"
+            "  type: mindmap\n"
+            "  title: Project Plan\n"
+            "  node: 1 = Root\n"
+            "  node: 2 = Branch A\n"
+            "  node: 3 = Branch B\n"
+            "  edge: 1 -> 2\n"
+            "  edge: 1 -> 3\n\n"
             "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n"
             "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
             "- Microsoft Word Document: ```docx\n"
@@ -805,31 +848,217 @@ jobs:
         if (_agenticEnabled) {
           systemPromptText += r"""
 AGENTIC IDE — You are the AI engine of a real, production-grade mobile IDE powered by Termux on Android.
-You have full shell access with the user's permission. Use Termux at its MAXIMUM capability.
+You have full shell access AND a suite of structured file tools via the Python bridge.
 
 ━━ CORE RULE ━━
-Emit ONE <command> block per turn, then STOP. Wait for output. Then decide the next step.
-FORMAT: <command>any shell command here</command>
+Emit ONE tool call per turn, then STOP. Wait for result. Then decide the next step.
+NEVER chain multiple tool calls in one response.
 
-━━ SHELL TOOLKIT ━━
-- File ops      : cat, sed, awk, grep, find, diff, cp, mv, rm, mkdir, touch, wc, stat
-- Write/edit    : heredoc (cat > file << 'EOF'), sed -i, python3 inline replace
-- Code tools    : dart, flutter, git, npm, pip, firebase, build_runner, dart fix
-- Shell power   : pipes, &&, ||, xargs, loops, env vars, process substitution, tee
-Think like a senior engineer. Choose the best tool for the situation.
+━━ STRUCTURED FILE TOOLS (ALWAYS PREFER OVER SHELL FOR FILE OPS) ━━
+Use XML format: <tool_request><method>NAME</method><param>value</param>...</tool_request>
+
+── READ FILE (with line numbers, metadata, navigation hints) ──
+<tool_request>
+  <method>read_file_rich</method>
+  <path>/absolute/path/to/file.dart</path>
+  <start_line>1</start_line>
+  <end_line>120</end_line>
+</tool_request>
+Returns: numbered lines ("  42 │ code here"), total line count, size, language, nav hints.
+Max 600 lines per call. Use start_line/end_line to navigate large files.
+
+── MULTI-READ (read multiple files or ranges in ONE call) ──
+<tool_request>
+  <method>multi_read_rich</method>
+  <reads>[{"path":"/lib/main.dart","start_line":45,"end_line":80},{"path":"/lib/widget.dart","start_line":1,"end_line":50}]</reads>
+</tool_request>
+Use when you need to read non-adjacent sections or multiple files at once.
+
+── PATCH FILE (multi search-replace, atomic, with diff output) ──
+<tool_request>
+  <method>patch_file</method>
+  <path>/absolute/path/to/file.dart</path>
+  <patches>[{"search":"exact old code here","replace":"new code here","label":"fix pie chart"}]</patches>
+</tool_request>
+Returns: unified diff of all changes. Fails safely if search text not found.
+For multiple non-adjacent edits: add multiple objects to the patches array.
+CRITICAL: search text must EXACTLY match including whitespace and indentation.
+
+── REPLACE LINES (replace a specific line range) ──
+<tool_request>
+  <method>replace_lines</method>
+  <path>/absolute/path/to/file.dart</path>
+  <start_line>45</start_line>
+  <end_line>52</end_line>
+  <new_content>  Widget build(BuildContext context) {
+    return Scaffold();
+  }</new_content>
+</tool_request>
+Use when you know exact line numbers (after reading the file first).
+
+── INSERT LINES (insert after a line) ──
+<tool_request>
+  <method>insert_lines</method>
+  <path>/absolute/path/to/file.dart</path>
+  <after_line>120</after_line>
+  <content>  // New code here</content>
+</tool_request>
+
+── DELETE LINES ──
+<tool_request>
+  <method>delete_lines</method>
+  <path>/absolute/path/to/file.dart</path>
+  <start_line>45</start_line>
+  <end_line>52</end_line>
+</tool_request>
+
+── WRITE FILE (create or overwrite entire file, atomic) ──
+<tool_request>
+  <method>write_file_rich</method>
+  <path>/absolute/path/to/newfile.dart</path>
+  <content>full file content here</content>
+  <create_dirs>true</create_dirs>
+</tool_request>
+
+── SEARCH FILES (grep across codebase) ──
+<tool_request>
+  <method>search_rich</method>
+  <path>/lib</path>
+  <query>_buildPieChart</query>
+  <include>*.dart</include>
+  <case_insensitive>false</case_insensitive>
+</tool_request>
+Returns: file:line:content for each match. Max 50 results.
+
+── FILE OUTLINE (class/function structure of a file) ──
+<tool_request>
+  <method>file_outline</method>
+  <path>/lib/main.dart</path>
+</tool_request>
+Returns: all class/function/widget definitions with line numbers.
+
+── DIRECTORY TREE ──
+<tool_request>
+  <method>tree</method>
+  <path>/projects/myapp</path>
+  <max_depth>3</max_depth>
+</tool_request>
+
+── DIFF TWO FILES ──
+<tool_request>
+  <method>diff_files</method>
+  <path_a>/lib/main.dart</path_a>
+  <path_b>/lib/old_main.dart</path_b>
+</tool_request>
+
+── SHELL COMMAND (for build tools, git, installs — NOT for file reading/editing) ──
+<tool_request>
+  <method>run_command</method>
+  <command>dart analyze lib/</command>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+Also supported: <command>shell command here</command> shorthand.
+
+── APPEND FILE (append to file, creates if missing) ──
+<tool_request>
+  <method>append_file</method>
+  <path>/absolute/path/to/file.log</path>
+  <content>New line to append here</content>
+</tool_request>
+Use for log files, cumulative writes, config additions.
+
+── DELETE PATH (file or directory with safety guards) ──
+<tool_request>
+  <method>delete_path</method>
+  <path>/absolute/path/to/old_file.dart</path>
+  <recursive>false</recursive>
+</tool_request>
+Set recursive=true to delete non-empty directories. Protected system dirs are hard-blocked.
+
+── MOVE / RENAME ──
+<tool_request>
+  <method>move_path</method>
+  <src>/old/path/file.dart</src>
+  <dest>/new/path/file.dart</dest>
+  <overwrite>false</overwrite>
+</tool_request>
+Cross-filesystem safe. Set overwrite=true to replace existing destination.
+
+── COPY (file or directory, recursive for dirs) ──
+<tool_request>
+  <method>copy_path</method>
+  <src>/path/to/source</src>
+  <dest>/path/to/destination</dest>
+  <overwrite>false</overwrite>
+</tool_request>
+
+── MKDIR (create directory, parents by default) ──
+<tool_request>
+  <method>mkdir_path</method>
+  <path>/projects/myapp/lib/models</path>
+  <parents>true</parents>
+</tool_request>
+
+── STAT (detailed file/dir metadata) ──
+<tool_request>
+  <method>stat_path</method>
+  <path>/lib/main.dart</path>
+</tool_request>
+Returns: size, permissions, timestamps, type, language, symlink info.
+
+── CHMOD (change permissions) ──
+<tool_request>
+  <method>chmod_path</method>
+  <path>/scripts/deploy.sh</path>
+  <mode>755</mode>
+  <recursive>false</recursive>
+</tool_request>
+Use octal mode strings (e.g., 755, 644). Set recursive=true for directories.
+
+── BACKGROUND SERVICES (for web servers, dev servers, long-running processes) ──
+<tool_request>
+  <method>run_background</method>
+  <command>npm run dev</command>
+  <name>web-frontend</name>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+Starts process detached. Returns: PID, URL(s), startup log, management commands.
+Other tools: list_services, service_status (pass <id>), service_logs (pass <id>), stop_service (pass <id>).
+
+━━ DECISION GUIDE: WHEN TO USE WHICH ━━
+| Task                    | Use                    | NOT                    |
+|-------------------------|------------------------|------------------------|
+| Read file / check code  | read_file_rich         | cat, head, tail        |
+| Edit 1-3 code sections  | patch_file             | sed -i, heredoc        |
+| Edit by line number     | replace_lines          | sed -i                 |
+| Create new file         | write_file_rich        | cat > file << 'EOF'    |
+| Append to file / log    | append_file            | echo >>                |
+| Search codebase         | search_rich            | grep -rn               |
+| List project structure  | tree                   | ls -la                 |
+| Delete file / dir       | delete_path            | rm -rf                 |
+| Move / rename           | move_path              | mv                     |
+| Copy file / dir         | copy_path              | cp -r                  |
+| Create directory        | mkdir_path             | mkdir -p               |
+| File metadata           | stat_path              | stat, ls -la           |
+| Change permissions      | chmod_path             | chmod                  |
+| Build / analyze / git   | run_command            | N/A                    |
+| Long-running server     | run_background         | run_command            |
+
+━━ WORKFLOW FOR EDITING CODE ━━
+1. read_file_rich (confirm exact content and line numbers)
+2. patch_file or replace_lines (precise edit)
+3. run_command: dart analyze (verify no errors)
+4. Report result to user
 
 ━━ QUALITY STANDARDS ━━
-- Always READ before editing (cat -n to see exact line numbers)
-- Always VERIFY after editing (flutter analyze / dart format / dart fix --apply)
-- Write clean, production-grade code — no placeholders, no TODOs left behind
+- ALWAYS read_file_rich before editing — never edit from memory
+- search text in patch_file must match EXACTLY (copy from read output)
+- Always verify edits with: dart analyze or flutter analyze
+- Write clean, production-grade code — no placeholders, no TODOs
 - Handle errors explicitly; never silently ignore failures
 
 ━━ PROJECT DOCUMENTATION ━━
-For every project, maintain a README.md at the project root:
-- Lines 1–30: Table of Contents with line ranges so any section can be jumped to directly
-  Example:  "## Auth Feature .............. L45–L120"
-- Document project status, architecture decisions, and feature progress
-- Update README whenever you add or change a significant feature
+For every project, maintain a README.md at the project root.
 """;
 
         }
@@ -1062,18 +1291,29 @@ For every project, maintain a README.md at the project root:
             if (mounted) setState(() => _toolStatus = '🌐 Fetching: $shortUrl');
             String urlResult = '';
             try {
+              var targetUrl = url;
+              if (!targetUrl.startsWith('http')) targetUrl = 'https://$targetUrl';
               final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-              final request = await client.getUrl(Uri.parse('https://r.jina.ai/$url'));
-              final jinaKey = _searchSettings.apiKey;
-              if (jinaKey.isNotEmpty) {
-                request.headers.set('Authorization', 'Bearer $jinaKey');
-              }
+              final request = await client.getUrl(Uri.parse(targetUrl));
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
-              if (response.statusCode == 429 || response.statusCode == 402) {
-                throw HttpException('HTTP ${response.statusCode}: $body');
+              
+              var htmlBody = body;
+              final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
+              if (bodyMatch != null) {
+                htmlBody = bodyMatch.group(1) ?? htmlBody;
               }
-              urlResult = body;
+              
+              htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: false, dotAll: true), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: false, dotAll: true), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: false), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: false, dotAll: true), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+              
+              String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
+              text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+              
+              urlResult = text;
               if (urlResult.length > 8000) {
                 urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated due to length]';
               }
@@ -1140,8 +1380,8 @@ For every project, maintain a README.md at the project root:
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
               mcpResult = body;
-              if (mcpResult.length > 6000) {
-                mcpResult = mcpResult.substring(0, 6000) + '\n\n...[truncated due to length]';
+              if (mcpResult.length > 32000) {
+                mcpResult = mcpResult.substring(0, 16000) + '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' + mcpResult.substring(mcpResult.length - 6000);
               }
             } catch (e) {
               mcpResult = '{"error": "$e"}';
@@ -1533,6 +1773,7 @@ For every project, maintain a README.md at the project root:
       return parts.length > 2 ? '…/${parts.last}' : path;
     }
     switch (method) {
+      case 'read_file_rich':
       case 'file_read':
         final path = shortPath(p('path'));
         final start = p('start_line');
@@ -1541,38 +1782,53 @@ For every project, maintain a README.md at the project root:
           return '📖 Reading $path lines $start–$end';
         }
         return '📖 Reading $path';
+      case 'multi_read_rich':
+      case 'multi_read':
+        return '📖 Batch reading files…';
+      case 'patch_file':
+        return '✏️  Patching ${shortPath(p('path'))}';
+      case 'replace_lines':
+        return '✏️  Replacing lines ${p('start_line')}–${p('end_line')} in ${shortPath(p('path'))}';
+      case 'insert_lines':
+        return '✏️  Inserting after line ${p('after_line')} in ${shortPath(p('path'))}';
+      case 'delete_lines':
+        return '🗑️  Deleting lines ${p('start_line')}–${p('end_line')} in ${shortPath(p('path'))}';
+      case 'write_file_rich':
       case 'file_write':
         return '✏️  Writing ${shortPath(p('path'))}';
+      case 'search_rich':
+      case 'file_search':
+      case 'code_search':
+        return '🔎 Searching: "${p('query')}${p('pattern')}" in ${shortPath(p('path'))}';
+      case 'file_outline':
+        return '🗂️  Outline: ${shortPath(p('path'))}';
+      case 'tree':
+        return '📂 Tree: ${shortPath(p('path'))}';
+      case 'diff_files':
+        return '🔍 Diffing files…';
       case 'file_edit':
-        final path = shortPath(p('path'));
-        final start = p('start_line');
-        final end = p('end_line');
-        if (start.isNotEmpty && end.isNotEmpty) {
-          return '✏️  Editing $path lines $start–$end';
+        final path2 = shortPath(p('path'));
+        final start2 = p('start_line');
+        final end2 = p('end_line');
+        if (start2.isNotEmpty && end2.isNotEmpty) {
+          return '✏️  Editing $path2 lines $start2–$end2';
         }
-        return '✏️  Editing $path';
+        return '✏️  Editing $path2';
       case 'file_delete':
         return '🗑️  Deleting ${shortPath(p('path'))}';
       case 'dir_list':
         return '📂 Listing ${shortPath(p('path'))}';
       case 'dir_create':
         return '📁 Creating dir ${shortPath(p('path'))}';
-      case 'file_search':
-        return '🔎 Searching files: ${p('pattern')}';
       case 'find_paths':
         return '🔎 Finding paths matching: ${p('pattern')}';
-      case 'code_search':
-        return '🔎 Code search: ${p('query')} in ${shortPath(p('path'))}';
       case 'symbol_search':
         return '🔎 Symbol search: ${p('symbol')}';
       case 'file_info':
         return '📋 File info: ${shortPath(p('path'))}';
-      case 'multi_read':
-        return '📖 Batch reading files…';
       case 'run_command':
         final cmd = p('command');
         final short = cmd.length > 45 ? '${cmd.substring(0, 42)}…' : cmd;
-        // Detect common high-level operations
         if (cmd.contains('firebase deploy')) return '🚀 Deploying to Firebase…';
         if (cmd.contains('gh workflow run')) return '⚙️  Triggering GitHub Actions…';
         if (cmd.contains('gh run watch')) return '⏳ Watching GitHub Actions build…';
@@ -1590,6 +1846,30 @@ For every project, maintain a README.md at the project root:
         return '📊 Checking git status…';
       case 'git_diff':
         return '🔍 Checking git diff…';
+      case 'append_file':
+        return '📝 Appending to ${shortPath(p('path'))}';
+      case 'delete_path':
+        return '🗑️  Deleting ${shortPath(p('path'))}${p('recursive') == 'true' ? ' (recursive)' : ''}';
+      case 'move_path':
+        return '📦 Moving ${shortPath(p('src'))} → ${shortPath(p('dest'))}';
+      case 'copy_path':
+        return '📋 Copying ${shortPath(p('src'))} → ${shortPath(p('dest'))}';
+      case 'mkdir_path':
+        return '📁 Creating dir ${shortPath(p('path'))}';
+      case 'stat_path':
+        return '📊 Getting info: ${shortPath(p('path'))}';
+      case 'chmod_path':
+        return '🔒 Chmod ${p('mode')} on ${shortPath(p('path'))}';
+      case 'run_background':
+        return '🚀 Starting background service: ${shortPath(p('command'))}';
+      case 'list_services':
+        return '📋 Listing background services…';
+      case 'service_status':
+        return 'ℹ️ Checking service status: ${p('id')}';
+      case 'service_logs':
+        return '📄 Fetching service logs: ${p('id')}';
+      case 'stop_service':
+        return '⏹️ Stopping service: ${p('id')}';
       default:
         return '⚙️  Tool: $method';
     }
@@ -1770,18 +2050,29 @@ For every project, maintain a README.md at the project root:
             }
             String urlResult = '';
             try {
+              var targetUrl = url;
+              if (!targetUrl.startsWith('http')) targetUrl = 'https://$targetUrl';
               final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-              final request = await client.getUrl(Uri.parse('https://r.jina.ai/$url'));
-              final jinaKey = _searchSettings.apiKey;
-              if (jinaKey.isNotEmpty) {
-                request.headers.set('Authorization', 'Bearer $jinaKey');
-              }
+              final request = await client.getUrl(Uri.parse(targetUrl));
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
-              if (response.statusCode == 429 || response.statusCode == 402) {
-                throw HttpException('HTTP ${response.statusCode}: $body');
+              
+              var htmlBody = body;
+              final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
+              if (bodyMatch != null) {
+                htmlBody = bodyMatch.group(1) ?? htmlBody;
               }
-              urlResult = body;
+              
+              htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: false, dotAll: true), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: false, dotAll: true), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: false), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: false, dotAll: true), '');
+              htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+              
+              String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
+              text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+              
+              urlResult = text;
               if (urlResult.length > 8000) {
                 urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated]';
               }
@@ -1994,6 +2285,7 @@ For every project, maintain a README.md at the project root:
     setState(() {
       _sessions.insert(0, newSession);
       _activeSessionId = newId;
+      _editingMessageIndex = null;
     });
     _saveSessions();
   }
@@ -2174,9 +2466,30 @@ For every project, maintain a README.md at the project root:
         if (index >= 0 && index < messages.length) {
           final targetMessage = messages[index];
           _messageController.text = targetMessage.text;
-          // Clear target message and all subsequent messages
-          messages.removeRange(index, messages.length);
-          _sessions[sessionIndex] = session.copyWith(messages: messages);
+          _editingMessageIndex = index;
+        }
+      }
+    });
+  }
+
+  void _cancelEditMessage() {
+    setState(() {
+      _editingMessageIndex = null;
+      _messageController.clear();
+    });
+  }
+
+  void _switchBranch(int branchIndex) {
+    setState(() {
+      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      if (sessionIndex != -1) {
+        final session = _sessions[sessionIndex];
+        final branches = session.branches ?? [session.messages];
+        if (branchIndex >= 0 && branchIndex < branches.length) {
+          _sessions[sessionIndex] = session.copyWith(
+            messages: branches[branchIndex],
+            activeBranchIndex: branchIndex,
+          );
         }
       }
     });
@@ -2256,6 +2569,11 @@ For every project, maintain a README.md at the project root:
                 attachedFiles: activeSession.attachedFiles,
                 onRemoveFile: _removeFile,
                 onEditUserMessage: _editUserMessage,
+                isEditing: _editingMessageIndex != null,
+                onCancelEdit: _cancelEditMessage,
+                branches: activeSession.branches,
+                activeBranchIndex: activeSession.activeBranchIndex,
+                onBranchChanged: _switchBranch,
                 agenticWorkspace: _agenticWorkspace,
                 deepResearchEnabled: _deepResearchEnabled,
                 onStartResearch: _startResearchLoop,
@@ -2497,10 +2815,15 @@ class ChatSurface extends StatelessWidget {
     required this.attachedFiles,
     required this.onRemoveFile,
     required this.onEditUserMessage,
+    required this.isEditing,
+    required this.onCancelEdit,
     required this.agenticWorkspace,
     required this.deepResearchEnabled,
     required this.onStartResearch,
     required this.fileName,
+    this.branches,
+    this.activeBranchIndex,
+    this.onBranchChanged,
     this.onStop,
     super.key,
   });
@@ -2523,10 +2846,15 @@ class ChatSurface extends StatelessWidget {
   final List<AttachedFile> attachedFiles;
   final ValueChanged<int> onRemoveFile;
   final ValueChanged<int> onEditUserMessage;
+  final bool isEditing;
+  final VoidCallback onCancelEdit;
   final String agenticWorkspace;
   final bool deepResearchEnabled;
   final ValueChanged<int> onStartResearch;
   final VoidCallback? onStop;
+  final List<List<ChatMessage>>? branches;
+  final int? activeBranchIndex;
+  final ValueChanged<int>? onBranchChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -2570,6 +2898,41 @@ class ChatSurface extends StatelessWidget {
                     state = AvatarAnimationState.typing;
                   }
                 }
+                final isUser = messages[index].role == MessageRole.user;
+                List<int> branchIndicesForVersions = [];
+                int currentVersionIndex = 0;
+                
+                if (isUser && branches != null && branches!.isNotEmpty) {
+                  final activeMsgs = messages;
+                  final prefix = activeMsgs.sublist(0, index);
+                  final seenTexts = <String>{};
+                  
+                  for (int b = 0; b < branches!.length; b++) {
+                    final branchMsgs = branches![b];
+                    if (branchMsgs.length > index) {
+                      bool matches = true;
+                      for (int j = 0; j < index; j++) {
+                        if (branchMsgs[j].text != prefix[j].text || branchMsgs[j].role != prefix[j].role) {
+                          matches = false;
+                          break;
+                        }
+                      }
+                      if (matches) {
+                        final msgText = branchMsgs[index].text;
+                        if (!seenTexts.contains(msgText)) {
+                          seenTexts.add(msgText);
+                          branchIndicesForVersions.add(b);
+                        }
+                      }
+                    }
+                  }
+                  
+                  currentVersionIndex = branchIndicesForVersions.indexWhere(
+                    (bIdx) => branches![bIdx][index].text == messages[index].text
+                  );
+                  if (currentVersionIndex == -1) currentVersionIndex = 0;
+                }
+
                 return MessageBubble(
                   message: messages[index],
                   index: index,
@@ -2581,6 +2944,13 @@ class ChatSurface extends StatelessWidget {
                   fileName: fileName,
                   onEditUserMessage: () => onEditUserMessage(index),
                   onStartResearch: () => onStartResearch(index),
+                  versionsCount: branchIndicesForVersions.length,
+                  currentVersionIndex: currentVersionIndex,
+                  onVersionChanged: branchIndicesForVersions.isEmpty
+                      ? null
+                      : (vIdx) {
+                          onBranchChanged?.call(branchIndicesForVersions[vIdx]);
+                        },
                 );
               },
             ),
@@ -2638,6 +3008,8 @@ class ChatSurface extends StatelessWidget {
             attachedFiles: attachedFiles,
             onRemoveFile: onRemoveFile,
             deepResearchEnabled: deepResearchEnabled,
+            isEditing: isEditing,
+            onCancelEdit: onCancelEdit,
           ),
         ],
       ),
@@ -2858,39 +3230,59 @@ class _McpToolBlockState extends State<McpToolBlock> {
       return parts.length > 2 ? '…/${parts.last}' : path;
     }
     switch (method) {
-      case 'file_read':
+      case 'read_file_rich':
+      case 'file_read': {
         final path = shortPath(p('path'));
         final start = p('start_line');
         final end = p('end_line');
         final sub = (start.isNotEmpty && end.isNotEmpty) ? 'lines $start–$end' : null;
         return (Icons.menu_book_outlined, const Color(0xFF0369A1), 'Read  $path', sub);
+      }
+      case 'multi_read_rich':
+      case 'multi_read':
+        return (Icons.library_books_outlined, const Color(0xFF0369A1), 'Batch read files', null);
+      case 'patch_file':
+        return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Patch  ${shortPath(p('path'))}', 'search-replace');
+      case 'replace_lines':
+        return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Replace lines  ${p('start_line')}–${p('end_line')}', shortPath(p('path')));
+      case 'insert_lines':
+        return (Icons.playlist_add, const Color(0xFF059669), 'Insert after line ${p('after_line')}', shortPath(p('path')));
+      case 'delete_lines':
+        return (Icons.delete_sweep_outlined, const Color(0xFFDC2626), 'Delete lines ${p('start_line')}–${p('end_line')}', shortPath(p('path')));
+      case 'write_file_rich':
       case 'file_write':
         return (Icons.edit_document, const Color(0xFF059669), 'Write  ${shortPath(p('path'))}', null);
-      case 'file_edit':
+      case 'search_rich':
+      case 'file_search':
+        return (Icons.search, const Color(0xFF0369A1), 'Search files', p('query').isNotEmpty ? '"${p('query')}"' : p('pattern').isNotEmpty ? '"${p('pattern')}"' : null);
+      case 'file_outline':
+        return (Icons.account_tree_outlined, const Color(0xFF0369A1), 'Outline  ${shortPath(p('path'))}', null);
+      case 'tree':
+        return (Icons.folder_open_outlined, const Color(0xFFD97706), 'Tree  ${shortPath(p('path'))}', null);
+      case 'diff_files':
+        return (Icons.difference_outlined, const Color(0xFF475569), 'Diff files', null);
+      case 'file_edit': {
         final path = shortPath(p('path'));
         final start = p('start_line');
         final end = p('end_line');
         final sub = (start.isNotEmpty && end.isNotEmpty) ? 'lines $start–$end' : null;
         return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Edit  $path', sub);
+      }
       case 'file_delete':
         return (Icons.delete_outline, const Color(0xFFDC2626), 'Delete  ${shortPath(p('path'))}', null);
       case 'dir_list':
         return (Icons.folder_open_outlined, const Color(0xFFD97706), 'List  ${shortPath(p('path'))}', null);
       case 'dir_create':
         return (Icons.create_new_folder_outlined, const Color(0xFFD97706), 'Create dir  ${shortPath(p('path'))}', null);
-      case 'file_search':
-        return (Icons.search, const Color(0xFF0369A1), 'Search files', p('pattern').isNotEmpty ? '\"${p('pattern')}\"' : null);
       case 'find_paths':
-        return (Icons.find_in_page_outlined, const Color(0xFF0369A1), 'Find paths', p('pattern').isNotEmpty ? '\"${p('pattern')}\"' : null);
+        return (Icons.find_in_page_outlined, const Color(0xFF0369A1), 'Find paths', p('pattern').isNotEmpty ? '"${p('pattern')}"' : null);
       case 'code_search':
-        return (Icons.manage_search, const Color(0xFF0369A1), 'Code search', '\"${p('query')}\" in ${shortPath(p('path'))}');
+        return (Icons.manage_search, const Color(0xFF0369A1), 'Code search', '"${p('query')}" in ${shortPath(p('path'))}');
       case 'symbol_search':
         return (Icons.functions, const Color(0xFF7C3AED), 'Symbol search', p('symbol'));
       case 'file_info':
         return (Icons.info_outline, const Color(0xFF475569), 'File info', shortPath(p('path')));
-      case 'multi_read':
-        return (Icons.library_books_outlined, const Color(0xFF0369A1), 'Batch read files', null);
-      case 'run_command':
+      case 'run_command': {
         final cmd = p('command');
         final short = cmd.length > 55 ? '${cmd.substring(0, 52)}…' : cmd;
         if (cmd.contains('firebase deploy')) return (Icons.cloud_upload_outlined, const Color(0xFFEA4335), '🚀 Deploy to Firebase', null);
@@ -2906,6 +3298,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
         if (cmd.contains('dart analyze')) return (Icons.analytics_outlined, const Color(0xFF0175C2), '🧹 Dart analyze', null);
         if (cmd.contains('pkg install')) return (Icons.install_desktop_outlined, const Color(0xFF475569), '📦 Install package', null);
         return (Icons.terminal, const Color(0xFF1E293B), short, p('cwd').isNotEmpty ? 'cwd: ${shortPath(p('cwd'))}' : null);
+      }
       case 'git_status':
         return (Icons.info_outline, const Color(0xFFF05032), 'Git status', null);
       case 'git_diff':
@@ -3351,6 +3744,9 @@ class MessageBubble extends StatelessWidget {
     required this.fileName,
     this.animationState = AvatarAnimationState.idle,
     this.onStartResearch,
+    this.versionsCount = 0,
+    this.currentVersionIndex = 0,
+    this.onVersionChanged,
     super.key,
   });
 
@@ -3364,9 +3760,20 @@ class MessageBubble extends StatelessWidget {
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
   final VoidCallback? onStartResearch;
+  final int versionsCount;
+  final int currentVersionIndex;
+  final ValueChanged<int>? onVersionChanged;
 
   @override
   Widget build(BuildContext context) {
+    final text = message.text;
+    final isToolOutput = message.role == MessageRole.system ||
+        text.startsWith('Tool Result [') ||
+        text.startsWith('Search results:\n') ||
+        text.startsWith('URL Content:\n') ||
+        text.startsWith('MCP Result:\n') ||
+        text.startsWith('Web Search results') ||
+        text.startsWith('Content of URL');
     final isUser = message.role == MessageRole.user;
 
     return TweenAnimationBuilder<double>(
@@ -3388,51 +3795,104 @@ class MessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                if (isUser) ...[
-                  const Icon(Icons.person_outline, size: 16, color: Color(0xFF7B4E2E)),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'You',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      color: Color(0xFF7B4E2E),
+            if (!isToolOutput) ...[
+              Row(
+                children: [
+                  if (isUser) ...[
+                    const Icon(Icons.person_outline, size: 16, color: Color(0xFF7B4E2E)),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'You',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: Color(0xFF7B4E2E),
+                      ),
                     ),
-                  ),
-                ] else ...[
-                  ProviderAvatar(label: providerShortName, small: true, animationState: animationState),
-                  const SizedBox(width: 8),
-                  Text(
-                    providerName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      color: Color(0xFF2D241C),
+                    if (versionsCount > 1) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF5EFE4),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFDCCBB8), width: 0.5),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            GestureDetector(
+                              onTap: currentVersionIndex > 0
+                                  ? () => onVersionChanged?.call(currentVersionIndex - 1)
+                                  : null,
+                              child: Icon(
+                                Icons.chevron_left,
+                                size: 14,
+                                color: currentVersionIndex > 0
+                                    ? const Color(0xFF7B4E2E)
+                                    : const Color(0xFFCBBBA4),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Text(
+                                '${currentVersionIndex + 1}/$versionsCount',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF7B4E2E),
+                                ),
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: currentVersionIndex < versionsCount - 1
+                                  ? () => onVersionChanged?.call(currentVersionIndex + 1)
+                                  : null,
+                              child: Icon(
+                                Icons.chevron_right,
+                                size: 14,
+                                color: currentVersionIndex < versionsCount - 1
+                                    ? const Color(0xFF7B4E2E)
+                                    : const Color(0xFFCBBBA4),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ] else ...[
+                    ProviderAvatar(label: providerShortName, small: true, animationState: animationState),
+                    const SizedBox(width: 8),
+                    Text(
+                      providerName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: Color(0xFF2D241C),
+                      ),
                     ),
-                  ),
-                ],
-                const Spacer(),
-                IconButton(
-                  tooltip: 'Copy text',
-                  icon: const Icon(Icons.content_copy_rounded, size: 14, color: Color(0xFF6C5946)),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: message.text));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Message copied to clipboard')),
-                    );
-                  },
-                ),
-                if (isUser)
+                  ],
+                  const Spacer(),
                   IconButton(
-                    tooltip: 'Edit message',
-                    icon: const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF6C5946)),
-                    onPressed: onEditUserMessage,
+                    tooltip: 'Copy text',
+                    icon: const Icon(Icons.content_copy_rounded, size: 14, color: Color(0xFF6C5946)),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: message.text));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Message copied to clipboard')),
+                      );
+                    },
                   ),
-              ],
-            ),
-            const SizedBox(height: 8),
+                  if (isUser)
+                    IconButton(
+                      tooltip: 'Edit message',
+                      icon: const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF6C5946)),
+                      onPressed: onEditUserMessage,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
             if (message.images.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8.0),
@@ -3455,7 +3915,7 @@ class MessageBubble extends StatelessWidget {
                   }).toList(),
                 ),
               ),
-            if (message.role == MessageRole.system)
+            if (isToolOutput)
               Builder(builder: (context) {
                 // Parse a smart header for tool results
                 final text = message.text;
@@ -3473,8 +3933,9 @@ class MessageBubble extends StatelessWidget {
 
                 // Extract tool name from "Tool Result [method]:" or "Web Search results" etc.
                 final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]').firstMatch(text);
-                final webSearchMatch = text.startsWith('Web Search results');
-                final urlMatch = text.startsWith("Content of URL");
+                final webSearchMatch = text.startsWith('Web Search results') || text.startsWith('Search results:\n');
+                final urlMatch = text.startsWith("Content of URL") || text.startsWith("URL Content:\n");
+                final mcpMatch = text.startsWith("MCP Result:\n");
                 if (toolResultMatch != null) {
                   final method = toolResultMatch.group(1) ?? 'tool';
                   final sizeKb = (text.length / 1024).toStringAsFixed(1);
@@ -3490,6 +3951,10 @@ class MessageBubble extends StatelessWidget {
                   header = '🌐 URL Content Fetched';
                   headerIcon = Icons.language;
                   headerColor = const Color(0xFF0369A1);
+                } else if (mcpMatch) {
+                  header = '⚙️ MCP Tool Result';
+                  headerIcon = Icons.settings;
+                  headerColor = const Color(0xFF059669);
                 } else {
                   header = text.split('\n').first;
                 }
@@ -3821,6 +4286,7 @@ class MessageBubble extends StatelessWidget {
                 textStyle: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 15.5, fontWeight: FontWeight.w400),
                 textScaleFactor: 1.15,
               ),
+              'table': ScrollableTableBuilder(),
             },
             extensionSet: md.ExtensionSet(
               [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
@@ -3935,6 +4401,8 @@ class Composer extends StatelessWidget {
     required this.attachedFiles,
     required this.onRemoveFile,
     required this.deepResearchEnabled,
+    required this.isEditing,
+    required this.onCancelEdit,
     this.onStop,
     super.key,
   });
@@ -3949,6 +4417,8 @@ class Composer extends StatelessWidget {
   final List<AttachedFile> attachedFiles;
   final ValueChanged<int> onRemoveFile;
   final bool deepResearchEnabled;
+  final bool isEditing;
+  final VoidCallback onCancelEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -3957,6 +4427,39 @@ class Composer extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (isEditing)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 920),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9F6EE),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE7D8C4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF7B4E2E)),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Editing message',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF7B4E2E),
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: onCancelEdit,
+                      child: const Icon(Icons.close, size: 16, color: Color(0xFF7B4E2E)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (attachedFiles.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
@@ -6423,6 +6926,8 @@ class ChatSession {
   final List<String> attachedImagesBase64;
   final List<AttachedFile> attachedFiles;
   final bool isPinned;
+  final List<List<ChatMessage>>? branches;
+  final int? activeBranchIndex;
 
   ChatSession({
     required this.id,
@@ -6434,6 +6939,8 @@ class ChatSession {
     this.attachedImagesBase64 = const [],
     this.attachedFiles = const [],
     this.isPinned = false,
+    this.branches,
+    this.activeBranchIndex,
   });
 
   ChatSession copyWith({
@@ -6446,7 +6953,25 @@ class ChatSession {
     List<String>? attachedImagesBase64,
     List<AttachedFile>? attachedFiles,
     bool? isPinned,
+    List<List<ChatMessage>>? branches,
+    int? activeBranchIndex,
   }) {
+    List<List<ChatMessage>>? updatedBranches = branches ?? this.branches;
+    int? updatedActiveIndex = activeBranchIndex ?? this.activeBranchIndex;
+
+    if (messages != null) {
+      final activeIdx = updatedActiveIndex ?? 0;
+      final currentBranches = updatedBranches ?? [this.messages];
+      final newBranches = List<List<ChatMessage>>.from(currentBranches);
+      if (activeIdx >= 0 && activeIdx < newBranches.length) {
+        newBranches[activeIdx] = messages;
+      } else {
+        newBranches.add(messages);
+      }
+      updatedBranches = newBranches;
+      updatedActiveIndex = activeIdx;
+    }
+
     return ChatSession(
       id: id ?? this.id,
       title: title ?? this.title,
@@ -6457,6 +6982,8 @@ class ChatSession {
       attachedImagesBase64: attachedImagesBase64 ?? this.attachedImagesBase64,
       attachedFiles: attachedFiles ?? this.attachedFiles,
       isPinned: isPinned ?? this.isPinned,
+      branches: updatedBranches,
+      activeBranchIndex: updatedActiveIndex,
     );
   }
 
@@ -6477,6 +7004,15 @@ class ChatSession {
         'attachedImagesBase64': attachedImagesBase64,
         'attachedFiles': attachedFiles.map((f) => f.toJson()).toList(),
         'isPinned': isPinned,
+        'branches': branches?.map((branch) => branch.map((m) => {
+          'role': m.role.apiName,
+          'text': m.text,
+          'isError': m.isError,
+          'reasoning': m.reasoning,
+          'images': m.images,
+          'files': m.files.map((f) => f.toJson()).toList(),
+        }).toList()).toList(),
+        'activeBranchIndex': activeBranchIndex,
       };
 
   factory ChatSession.fromJson(Map<String, dynamic> json) {
@@ -6494,6 +7030,21 @@ class ChatSession {
                 ))
             .toList() ??
         [];
+    final branchesList = (json['branches'] as List?)
+            ?.map((branch) => (branch as List)
+                .map((m) => ChatMessage(
+                      role: MessageRole.values.firstWhere(
+                        (v) => v.apiName == m['role'],
+                        orElse: () => MessageRole.user,
+                      ),
+                      text: m['text']?.toString() ?? '',
+                      isError: m['isError'] as bool? ?? false,
+                      reasoning: m['reasoning']?.toString() ?? '',
+                      images: (m['images'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+                      files: (m['files'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
+                    ))
+                .toList())
+            .toList();
     return ChatSession(
       id: json['id']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
@@ -6504,6 +7055,8 @@ class ChatSession {
       attachedImagesBase64: (json['attachedImagesBase64'] as List?)?.map((e) => e.toString()).toList() ?? const [],
       attachedFiles: (json['attachedFiles'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
       isPinned: json['isPinned'] as bool? ?? false,
+      branches: branchesList,
+      activeBranchIndex: json['activeBranchIndex'] as int?,
     );
   }
 }

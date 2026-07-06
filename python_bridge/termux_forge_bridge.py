@@ -23,6 +23,7 @@ Usage::
 
 import argparse
 import asyncio
+from aiohttp import web
 import json
 import logging
 import os
@@ -71,6 +72,13 @@ from hybrid_tools import (
     tree_rich,
     diff_files_rich,
     OutputRenderer,
+    append_file_rich,
+    delete_path_rich,
+    move_path_rich,
+    copy_path_rich,
+    mkdir_path_rich,
+    stat_path_rich,
+    chmod_path_rich,
 )
 from background_service_manager import (
     BackgroundServiceManager,
@@ -171,6 +179,7 @@ class TermuxForgeBridge:
         # ── Command execution ─────────────────────────────────────────
         r.register("execute_command", self._execute_command)
         r.register("execute_shell", self._execute_command)
+        r.register("run_command", self._execute_command)
         r.register("kill_command", self._kill_command)
 
         # ── File operations ───────────────────────────────────────────
@@ -249,6 +258,13 @@ class TermuxForgeBridge:
         r.register("diff_files",         self._hybrid_diff_files)
         r.register("tool_help",          self._hybrid_tool_help)
         r.register("shell_rich",         self._hybrid_shell_rich)
+        r.register("append_file",        self._hybrid_append_file)
+        r.register("delete_path",        self._hybrid_delete_path)
+        r.register("move_path",          self._hybrid_move_path)
+        r.register("copy_path",          self._hybrid_copy_path)
+        r.register("mkdir_path",         self._hybrid_mkdir_path)
+        r.register("stat_path",          self._hybrid_stat_path)
+        r.register("chmod_path",         self._hybrid_chmod_path)
 
         # ── Background Service Manager ────────────────────────────────
         r.register("run_background",  self._run_background)
@@ -1219,6 +1235,103 @@ class TermuxForgeBridge:
 
         return result.to_dict()
 
+    # ── File System Tool Handlers ─────────────────────────────────────
+
+    async def _hybrid_append_file(
+        self,
+        path: str,
+        content: str,
+        encoding: str = "utf-8",
+        create_if_missing: bool = True,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Append content to a file (creates if missing)."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        return append_file_rich(
+            path=path, content=content, encoding=encoding,
+            create_if_missing=create_if_missing,
+        )
+
+    async def _hybrid_delete_path(
+        self,
+        path: str,
+        recursive: bool = False,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Delete a file or directory with safety guards."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        return delete_path_rich(path=path, recursive=recursive)
+
+    async def _hybrid_move_path(
+        self,
+        src: str,
+        dest: str,
+        overwrite: bool = False,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Move/rename a file or directory."""
+        if not self.security.validate_path(src):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Source path not allowed: {src}")
+        if not self.security.validate_path(dest):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Dest path not allowed: {dest}")
+        return move_path_rich(src=src, dest=dest, overwrite=overwrite)
+
+    async def _hybrid_copy_path(
+        self,
+        src: str,
+        dest: str,
+        overwrite: bool = False,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Copy a file or directory."""
+        if not self.security.validate_path(src):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Source path not allowed: {src}")
+        if not self.security.validate_path(dest):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Dest path not allowed: {dest}")
+        return copy_path_rich(src=src, dest=dest, overwrite=overwrite)
+
+    async def _hybrid_mkdir_path(
+        self,
+        path: str,
+        parents: bool = True,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Create a directory."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        return mkdir_path_rich(path=path, parents=parents)
+
+    async def _hybrid_stat_path(
+        self,
+        path: str,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Return detailed file/directory metadata."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        return stat_path_rich(path=path)
+
+    async def _hybrid_chmod_path(
+        self,
+        path: str,
+        mode: str,
+        recursive: bool = False,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Change file/directory permissions."""
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        return chmod_path_rich(path=path, mode=mode, recursive=recursive)
+
     # ══════════════════════════════════════════════════════════════════
     #  BACKGROUND SERVICE HANDLERS
     # ══════════════════════════════════════════════════════════════════
@@ -1289,24 +1402,46 @@ class TermuxForgeBridge:
         """List all tracked background services with live status."""
         return self.services.list_services()
 
-    async def _service_status(self, pid: int) -> dict:
+    def _resolve_pid(self, target: int | str) -> int:
+        if isinstance(target, int):
+            return target
+        try:
+            return int(target)
+        except ValueError:
+            # Try to resolve by name or command substring
+            for pid, rec in self.services._registry.items():
+                if target == rec.name or target in rec.command:
+                    return pid
+            raise JsonRpcError(ErrorCode.INVALID_PARAMS, f"Could not find service matching '{target}'")
+
+    async def _service_status(self, pid: int = None, id: int = None) -> dict:
         """Get detailed status for a specific background service PID."""
-        return self.services.service_status(pid)
+        target = pid if pid is not None else id
+        if target is None:
+            return {"error": "Must provide 'pid' or 'id'"}
+        return self.services.service_status(self._resolve_pid(target))
 
-    async def _service_logs(self, pid: int, lines: int = 60) -> dict:
+    async def _service_logs(self, pid: int = None, id: int = None, lines: int = 60) -> dict:
         """Tail the log output of a background service."""
-        return self.services.service_logs(pid, lines)
+        target = pid if pid is not None else id
+        if target is None:
+            return {"error": "Must provide 'pid' or 'id'"}
+        return self.services.service_logs(self._resolve_pid(target), lines)
 
-    async def _stop_service(self, pid: int, force: bool = False) -> dict:
+    async def _stop_service(self, pid: int = None, id: int = None, force: bool = False) -> dict:
         """Stop a background service by PID. Uses SIGTERM then SIGKILL."""
+        target = pid if pid is not None else id
+        if target is None:
+            return {"error": "Must provide 'pid' or 'id'"}
+        target = self._resolve_pid(target)
         # Security: only allow stopping processes we started
-        rec = self.services._registry.get(pid)
+        rec = self.services._registry.get(target)
         if not rec:
             return {
                 "stdout": f"PID {pid} is not a tracked service. Use list_services to see managed processes.",
                 "exitCode": 1,
             }
-        return await self.services.stop_service(pid, force)
+        return await self.services.stop_service(target, force)
 
 
 
@@ -1370,6 +1505,62 @@ class TermuxForgeBridge:
             return [self.resolve_params_paths(item) for item in params]
         return params
 
+    async def _handle_http_post(self, request: web.Request) -> web.Response:
+        """Handle HTTP POST requests to /mcp from the legacy Dart client."""
+        if request.path != '/mcp':
+            return web.json_response({"error": "Endpoint not found. Use /mcp"}, status=404)
+            
+        try:
+            body = await request.text()
+            # 1. Try parsing <command> XML fallback
+            import re
+            cmd_match = re.search(r'<command>(.*?)</command>', body, re.DOTALL)
+            if cmd_match:
+                command = cmd_match.group(1).strip()
+                ws_match = re.search(r'<workspace_dir>(.*?)</workspace_dir>', body, re.DOTALL)
+                cwd_match = re.search(r'<cwd>(.*?)</cwd>', body, re.DOTALL)
+                
+                workspace_dir_val = ws_match.group(1).strip() if ws_match else ""
+                cwd_val = cwd_match.group(1).strip() if cwd_match else ""
+                
+                params = {"command": command}
+                if workspace_dir_val:
+                    params["workspace_dir"] = workspace_dir_val
+                if cwd_val:
+                    params["cwd"] = cwd_val
+                elif workspace_dir_val:
+                    params["cwd"] = workspace_dir_val
+                    
+                method = "run_command"
+            else:
+                # 2. JSON Payload
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError:
+                    return web.json_response({"error": "Invalid request format"}, status=400)
+                    
+                method = data.get("method")
+                params = data.get("params", {})
+                
+            if not method:
+                return web.json_response({"error": "Method is required"}, status=400)
+                
+            # Make paths absolute
+            params = self.resolve_params_paths(params)
+            
+            # Dispatch as internal JSON-RPC
+            rpc_req = JsonRpcRequest(method=method, params=params, id="http-req", jsonrpc="2.0")
+            rpc_resp = await self.router.dispatch(rpc_req)
+            
+            if rpc_resp.error:
+                return web.json_response({"error": rpc_resp.error.message}, status=500)
+                
+            # Keep legacy response format {"result": ...}
+            return web.json_response({"result": rpc_resp.result})
+            
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     async def _process_message(self, raw: str) -> str | None:
         """Parse and dispatch a JSON-RPC message."""
         try:
@@ -1400,16 +1591,18 @@ class TermuxForgeBridge:
     # ── Server lifecycle ──────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Start the WebSocket bridge server."""
+        """Start the WebSocket and HTTP bridge servers."""
         logger.info("=" * 60)
         logger.info("TermuxForge Bridge v%s starting…", VERSION)
         logger.info("Listening on ws://%s:%d", self.host, self.port)
+        logger.info("Listening for HTTP on http://%s:%d", self.host, 8390)
         logger.info("Log file: %s", log_file)
         logger.info("=" * 60)
 
         # Load saved command history
         self._load_history()
 
+        # Start WebSocket server
         self._server = await websockets.serve(
             self._handle_client,
             self.host,
@@ -1418,28 +1611,53 @@ class TermuxForgeBridge:
             ping_timeout=10,
             max_size=10 * 1024 * 1024,  # 10 MB max message
         )
+        
+        # Start HTTP server
+        self._http_app = web.Application()
+        self._http_app.router.add_post('/mcp', self._handle_http_post)
+        
+        # Also support OPTIONS for CORS if needed
+        async def handle_options(request):
+            return web.Response(
+                status=200,
+                headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type',
+                }
+            )
+        self._http_app.router.add_options('/mcp', handle_options)
+        
+        self._http_runner = web.AppRunner(self._http_app)
+        await self._http_runner.setup()
+        self._http_site = web.TCPSite(self._http_runner, self.host, 8390)
+        await self._http_site.start()
 
-        logger.info("Bridge server running.")
+        logger.info("Bridge servers running.")
 
         # Wait for shutdown signal
         await self._shutdown_event.wait()
 
     async def shutdown(self) -> None:
-        """Gracefully shut down the server."""
-        logger.info("Shutting down bridge server…")
+        """Gracefully shut down the servers."""
+        logger.info("Shutting down bridge servers…")
 
         # Save history
         self._save_history()
 
         # Shutdown MCP servers
         await self.mcp.shutdown()
+        
+        # Stop HTTP server
+        if hasattr(self, '_http_runner'):
+            await self._http_runner.cleanup()
 
         # Close WebSocket server
         if self._server:
             self._server.close()
             await self._server.wait_closed()
 
-        logger.info("Bridge server stopped.")
+        logger.info("Bridge servers stopped.")
 
     def request_shutdown(self) -> None:
         """Signal the server to shut down."""

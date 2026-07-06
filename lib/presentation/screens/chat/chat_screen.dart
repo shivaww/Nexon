@@ -16,6 +16,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:nexon/widgets/scrollable_table_builder.dart';
 
 import 'package:nexon/core/theme/app_colors.dart';
 import 'package:nexon/presentation/widgets/forge_app_bar.dart';
@@ -1066,6 +1067,9 @@ class _MessageBubble extends StatelessWidget {
     return MarkdownBody(
       data: message.content,
       selectable: true,
+      builders: {
+        'table': ScrollableTableBuilder(),
+      },
       styleSheet: MarkdownStyleSheet.fromTheme(
         Theme.of(context),
       ).copyWith(

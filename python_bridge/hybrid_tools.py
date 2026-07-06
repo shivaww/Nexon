@@ -1519,6 +1519,531 @@ def tree_rich(
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  FILE SYSTEM TOOLS — append, delete, move, copy, mkdir, stat, chmod
+# ══════════════════════════════════════════════════════════════════════
+
+
+def append_file_rich(
+    path: str,
+    content: str,
+    encoding: str = "utf-8",
+    create_if_missing: bool = True,
+) -> dict[str, Any]:
+    """
+    Append content to a file, optionally creating it if missing.
+
+    Parameters
+    ----------
+    path : str
+        Target file path.
+    content : str
+        Content to append.
+    encoding : str
+        File encoding (default utf-8).
+    create_if_missing : bool
+        If True and the file doesn't exist, create it (and parent dirs).
+    """
+    p = Path(path).expanduser()
+    existed = p.exists()
+
+    if not existed:
+        if not create_if_missing:
+            return {
+                "stdout": f"ERROR: File does not exist: {path}",
+                "exitCode": 1,
+                "success": False,
+                "error": f"File not found: {path}",
+            }
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+    lines_before = 0
+    if existed and p.is_file():
+        lines_before = len(_read_lines_safe(p, encoding))
+
+    with open(str(p), "a", encoding=encoding) as f:
+        f.write(content)
+
+    new_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    total_lines = lines_before + new_lines
+    size_after = p.stat().st_size
+
+    action = "APPENDED" if existed else "CREATED+APPENDED"
+    header = OutputRenderer.tool_header(
+        f"APPEND: {_rel_path(str(p))}",
+        f"{action}  │  +{new_lines} lines  │  {_human_size(size_after)} total",
+    )
+    body = f"  Lines before: {lines_before}\n  Lines appended: {new_lines}\n  Total lines: {total_lines}\n  Size: {_human_size(size_after)}"
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "path": str(p),
+        "linesBefore": lines_before,
+        "linesAppended": new_lines,
+        "totalLines": total_lines,
+        "sizeBytes": size_after,
+        "created": not existed,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def delete_path_rich(
+    path: str,
+    recursive: bool = False,
+) -> dict[str, Any]:
+    """
+    Delete a file or directory with safety guards.
+
+    Parameters
+    ----------
+    path : str
+        Target path to delete.
+    recursive : bool
+        If True, allow deleting non-empty directories.
+        If False and path is a non-empty directory, fail safely.
+    """
+    p = Path(path).expanduser().resolve()
+
+    # Hard-block: never delete system-critical paths
+    PROTECTED_ROOTS = frozenset({
+        "/", "/bin", "/sbin", "/usr", "/etc", "/var", "/dev", "/proc", "/sys",
+        "/data", "/data/data", "/data/data/com.termux",
+        "/data/data/com.termux/files", "/data/data/com.termux/files/usr",
+        os.path.expanduser("~"),
+    })
+    if str(p) in PROTECTED_ROOTS:
+        return {
+            "stdout": f"ERROR: BLOCKED — Refusing to delete protected path: {p}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Protected path: {p}",
+        }
+
+    if not p.exists():
+        return {
+            "stdout": f"ERROR: Path does not exist: {path}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Path not found: {path}",
+        }
+
+    was_dir = p.is_dir()
+    deleted_count = 0
+
+    if p.is_file() or p.is_symlink():
+        size = p.stat().st_size if p.is_file() else 0
+        p.unlink()
+        deleted_count = 1
+        detail = f"  Deleted file: {_rel_path(str(p))}  ({_human_size(size)})"
+    elif p.is_dir():
+        if not recursive:
+            # Check if empty
+            children = list(p.iterdir())
+            if children:
+                return {
+                    "stdout": f"ERROR: Directory is not empty ({len(children)} items). Use recursive=true to force.\n  Path: {path}",
+                    "exitCode": 1,
+                    "success": False,
+                    "error": f"Non-empty directory ({len(children)} items). Set recursive=true.",
+                }
+            p.rmdir()
+            deleted_count = 1
+            detail = f"  Deleted empty directory: {_rel_path(str(p))}"
+        else:
+            # Count items before deletion
+            for root, dirs, files in os.walk(str(p)):
+                deleted_count += len(files)
+                deleted_count += len(dirs)
+            deleted_count += 1  # the root dir itself
+            shutil.rmtree(str(p))
+            detail = f"  Recursively deleted: {_rel_path(str(p))}\n  Items removed: {deleted_count}"
+    else:
+        return {
+            "stdout": f"ERROR: Cannot delete special file type: {path}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Unsupported file type: {path}",
+        }
+
+    kind = "directory" if was_dir else "file"
+    header = OutputRenderer.tool_header(
+        f"DELETE: {_rel_path(str(p))}",
+        f"{kind}  │  {deleted_count} item(s) removed",
+    )
+    block = f"{header}\n{OutputRenderer._divider()}\n{detail}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "path": str(p),
+        "wasDir": was_dir,
+        "deletedCount": deleted_count,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def move_path_rich(
+    src: str,
+    dest: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """
+    Move (rename) a file or directory.
+
+    Parameters
+    ----------
+    src : str
+        Source path.
+    dest : str
+        Destination path.
+    overwrite : bool
+        If True, overwrite the destination if it exists.
+    """
+    ps = Path(src).expanduser().resolve()
+    pd = Path(dest).expanduser()
+
+    if not ps.exists():
+        return {
+            "stdout": f"ERROR: Source does not exist: {src}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Source not found: {src}",
+        }
+
+    if pd.exists() and not overwrite:
+        return {
+            "stdout": f"ERROR: Destination already exists: {dest}\n  Set overwrite=true to replace.",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Destination exists: {dest}. Set overwrite=true.",
+        }
+
+    pd.parent.mkdir(parents=True, exist_ok=True)
+
+    if pd.exists() and overwrite:
+        if pd.is_dir():
+            shutil.rmtree(str(pd))
+        else:
+            pd.unlink()
+
+    # shutil.move handles cross-filesystem moves
+    shutil.move(str(ps), str(pd))
+    resolved_dest = Path(dest).expanduser().resolve()
+
+    kind = "directory" if resolved_dest.is_dir() else "file"
+    header = OutputRenderer.tool_header(
+        f"MOVE",
+        f"{_rel_path(str(ps))}  →  {_rel_path(str(resolved_dest))}  │  {kind}",
+    )
+    body = f"  From: {ps}\n  To:   {resolved_dest}"
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "src": str(ps),
+        "dest": str(resolved_dest),
+        "kind": kind,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def copy_path_rich(
+    src: str,
+    dest: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """
+    Copy a file or directory (recursively for directories).
+
+    Parameters
+    ----------
+    src : str
+        Source path.
+    dest : str
+        Destination path.
+    overwrite : bool
+        If True, overwrite the destination if it exists.
+    """
+    ps = Path(src).expanduser().resolve()
+    pd = Path(dest).expanduser()
+
+    if not ps.exists():
+        return {
+            "stdout": f"ERROR: Source does not exist: {src}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Source not found: {src}",
+        }
+
+    if pd.exists() and not overwrite:
+        return {
+            "stdout": f"ERROR: Destination already exists: {dest}\n  Set overwrite=true to replace.",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Destination exists: {dest}. Set overwrite=true.",
+        }
+
+    pd.parent.mkdir(parents=True, exist_ok=True)
+
+    if ps.is_dir():
+        if pd.exists() and overwrite:
+            shutil.rmtree(str(pd))
+        shutil.copytree(str(ps), str(pd))
+        kind = "directory"
+    else:
+        shutil.copy2(str(ps), str(pd))
+        kind = "file"
+
+    resolved_dest = Path(dest).expanduser().resolve()
+    size = resolved_dest.stat().st_size if resolved_dest.is_file() else 0
+
+    header = OutputRenderer.tool_header(
+        f"COPY",
+        f"{_rel_path(str(ps))}  →  {_rel_path(str(resolved_dest))}  │  {kind}  │  {_human_size(size) if size else 'dir'}",
+    )
+    body = f"  From: {ps}\n  To:   {resolved_dest}"
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "src": str(ps),
+        "dest": str(resolved_dest),
+        "kind": kind,
+        "sizeBytes": size,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def mkdir_path_rich(
+    path: str,
+    parents: bool = True,
+) -> dict[str, Any]:
+    """
+    Create a directory (and parents if requested).
+
+    Parameters
+    ----------
+    path : str
+        Directory path to create.
+    parents : bool
+        If True, create parent directories as needed (like mkdir -p).
+    """
+    p = Path(path).expanduser()
+
+    if p.exists():
+        if p.is_dir():
+            return {
+                "stdout": f"  Directory already exists: {_rel_path(str(p))}",
+                "exitCode": 0,
+                "success": True,
+                "alreadyExisted": True,
+                "path": str(p.resolve()),
+            }
+        else:
+            return {
+                "stdout": f"ERROR: Path exists and is not a directory: {path}",
+                "exitCode": 1,
+                "success": False,
+                "error": f"Path exists as file: {path}",
+            }
+
+    try:
+        p.mkdir(parents=parents, exist_ok=True)
+    except FileNotFoundError:
+        return {
+            "stdout": f"ERROR: Parent directory does not exist and parents=false: {path}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Parent missing and parents=false: {path}",
+        }
+
+    resolved = p.resolve()
+    header = OutputRenderer.tool_header(
+        f"MKDIR: {_rel_path(str(resolved))}",
+        f"parents={'yes' if parents else 'no'}",
+    )
+    block = f"{header}\n{OutputRenderer._divider()}\n  Created: {resolved}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "path": str(resolved),
+        "alreadyExisted": False,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def stat_path_rich(path: str) -> dict[str, Any]:
+    """
+    Return detailed metadata for a file or directory.
+
+    Parameters
+    ----------
+    path : str
+        Target path.
+    """
+    import datetime
+    p = Path(path).expanduser().resolve()
+
+    if not p.exists():
+        return {
+            "stdout": f"ERROR: Path does not exist: {path}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Path not found: {path}",
+        }
+
+    try:
+        s = p.stat()
+    except OSError as e:
+        return {
+            "stdout": f"ERROR: Cannot stat: {e}",
+            "exitCode": 1,
+            "success": False,
+            "error": str(e),
+        }
+
+    is_symlink = p.is_symlink()
+    link_target = str(os.readlink(str(p))) if is_symlink else None
+    kind = "symlink" if is_symlink else ("directory" if p.is_dir() else "file")
+    permissions = stat.filemode(s.st_mode)
+    lang = LANG_MAP.get(p.suffix.lower(), "") if p.is_file() else ""
+
+    mtime_str = datetime.datetime.fromtimestamp(s.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    atime_str = datetime.datetime.fromtimestamp(s.st_atime).strftime("%Y-%m-%d %H:%M:%S")
+    ctime_str = datetime.datetime.fromtimestamp(s.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+
+    header = OutputRenderer.tool_header(
+        f"STAT: {_rel_path(str(p))}",
+        f"{kind}  │  {permissions}  │  {_human_size(s.st_size)}",
+    )
+    lines = [
+        f"  Path:        {p}",
+        f"  Type:        {kind}",
+        f"  Size:        {_human_size(s.st_size)} ({s.st_size:,} bytes)",
+        f"  Permissions: {permissions} ({oct(s.st_mode)[-4:]})",
+        f"  Owner UID:   {s.st_uid}",
+        f"  Group GID:   {s.st_gid}",
+        f"  Modified:    {mtime_str} ({_age_str(s.st_mtime)})",
+        f"  Accessed:    {atime_str}",
+        f"  Changed:     {ctime_str}",
+        f"  Inode:       {s.st_ino}",
+        f"  Hard links:  {s.st_nlink}",
+    ]
+    if lang:
+        lines.append(f"  Language:    {lang}")
+    if is_symlink:
+        lines.append(f"  Link target: {link_target}")
+
+    body = "\n".join(lines)
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "path": str(p),
+        "kind": kind,
+        "sizeBytes": s.st_size,
+        "permissions": permissions,
+        "permissionsOctal": oct(s.st_mode)[-4:],
+        "uid": s.st_uid,
+        "gid": s.st_gid,
+        "mtime": s.st_mtime,
+        "atime": s.st_atime,
+        "isSymlink": is_symlink,
+        "linkTarget": link_target,
+        "language": lang,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def chmod_path_rich(
+    path: str,
+    mode: str,
+    recursive: bool = False,
+) -> dict[str, Any]:
+    """
+    Change file/directory permissions.
+
+    Parameters
+    ----------
+    path : str
+        Target path.
+    mode : str
+        Octal mode string (e.g., '755', '644').
+    recursive : bool
+        If True and path is a directory, apply chmod recursively.
+    """
+    p = Path(path).expanduser().resolve()
+
+    if not p.exists():
+        return {
+            "stdout": f"ERROR: Path does not exist: {path}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Path not found: {path}",
+        }
+
+    # Parse octal mode
+    try:
+        octal_mode = int(mode, 8)
+    except ValueError:
+        return {
+            "stdout": f"ERROR: Invalid octal mode: '{mode}'. Use e.g. '755', '644'.",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Invalid octal mode: {mode}",
+        }
+
+    # Safety: block chmod 777 on home dir
+    home = os.path.expanduser("~")
+    if str(p) == home and octal_mode == 0o777:
+        return {
+            "stdout": f"ERROR: BLOCKED — Refusing to chmod 777 on home directory.",
+            "exitCode": 1,
+            "success": False,
+            "error": "Blocked: chmod 777 on home",
+        }
+
+    changed_count = 0
+    old_mode = stat.filemode(p.stat().st_mode)
+
+    if recursive and p.is_dir():
+        for root, dirs, files in os.walk(str(p)):
+            os.chmod(root, octal_mode)
+            changed_count += 1
+            for f in files:
+                os.chmod(os.path.join(root, f), octal_mode)
+                changed_count += 1
+    else:
+        os.chmod(str(p), octal_mode)
+        changed_count = 1
+
+    new_mode = stat.filemode(p.stat().st_mode)
+    header = OutputRenderer.tool_header(
+        f"CHMOD: {_rel_path(str(p))}",
+        f"{old_mode} → {new_mode}  │  {changed_count} item(s)",
+    )
+    body = f"  Path: {p}\n  Old: {old_mode}\n  New: {new_mode} ({mode})\n  Items changed: {changed_count}"
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+
+    return {
+        "stdout": block,
+        "path": str(p),
+        "oldMode": old_mode,
+        "newMode": new_mode,
+        "modeOctal": mode,
+        "changedCount": changed_count,
+        "recursive": recursive,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  HYBRID TOOL REGISTRY
 # ══════════════════════════════════════════════════════════════════════
 
@@ -1713,6 +2238,82 @@ def build_registry(executor, security) -> HybridToolRegistry:
         lambda **kw: {"stdout": reg.tool_help_block(), "exitCode": 0, "success": True},
         "List all hybrid tools with descriptions and parameter schemas",
         {},
+    )
+
+    # ── File System Tools (append, delete, move, copy, mkdir, stat, chmod) ──
+
+    reg.register(
+        "append_file",
+        lambda **kw: append_file_rich(**kw),
+        "Append content to a file (creates if missing)",
+        {
+            "path": "str — target file path",
+            "content": "str — content to append",
+            "encoding": "str (opt, default utf-8)",
+            "create_if_missing": "bool (opt, default true) — create file if it doesn't exist",
+        },
+    )
+
+    reg.register(
+        "delete_path",
+        lambda **kw: delete_path_rich(**kw),
+        "Delete a file or directory with safety guards (protects system dirs)",
+        {
+            "path": "str — path to delete",
+            "recursive": "bool (opt, default false) — required for non-empty directories",
+        },
+    )
+
+    reg.register(
+        "move_path",
+        lambda **kw: move_path_rich(**kw),
+        "Move/rename a file or directory (cross-filesystem safe)",
+        {
+            "src": "str — source path",
+            "dest": "str — destination path",
+            "overwrite": "bool (opt, default false) — overwrite destination if exists",
+        },
+    )
+
+    reg.register(
+        "copy_path",
+        lambda **kw: copy_path_rich(**kw),
+        "Copy a file or directory (recursive for dirs, preserves metadata)",
+        {
+            "src": "str — source path",
+            "dest": "str — destination path",
+            "overwrite": "bool (opt, default false) — overwrite destination if exists",
+        },
+    )
+
+    reg.register(
+        "mkdir_path",
+        lambda **kw: mkdir_path_rich(**kw),
+        "Create a directory (mkdir -p by default)",
+        {
+            "path": "str — directory path to create",
+            "parents": "bool (opt, default true) — create parent directories",
+        },
+    )
+
+    reg.register(
+        "stat_path",
+        lambda **kw: stat_path_rich(**kw),
+        "Return detailed file/dir metadata (size, permissions, timestamps, type)",
+        {
+            "path": "str — path to inspect",
+        },
+    )
+
+    reg.register(
+        "chmod_path",
+        lambda **kw: chmod_path_rich(**kw),
+        "Change file/directory permissions (with recursive option)",
+        {
+            "path": "str — target path",
+            "mode": "str — octal mode (e.g. '755', '644')",
+            "recursive": "bool (opt, default false) — apply recursively to directory contents",
+        },
     )
 
     return reg
