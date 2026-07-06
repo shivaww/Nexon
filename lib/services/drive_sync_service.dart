@@ -41,7 +41,7 @@ class DriveSyncService {
       final authenticateClient = GoogleAuthClient(providerToken);
       final driveApi = drive.DriveApi(authenticateClient);
 
-      // We will store all chats, keys, and memory in a single JSON backup for simplicity
+      // We will store all chats, keys, memory, and artifacts in a single JSON backup for simplicity
       final backupData = {
         'chat_sessions': prefs.getString('chat_sessions_v1') ?? '[]',
         'provider_settings': prefs.getString('provider_settings_v1') ?? '{}',
@@ -53,6 +53,32 @@ class DriveSyncService {
       if (await memoryFile.exists()) {
         backupData['ai_memory'] = await memoryFile.readAsString();
       }
+
+      // Grab all artifacts, SVGs, and graphs from the brain directory
+      final Map<String, String> artifactsMap = {};
+      final brainDir = Directory('${docDir.path}/brain');
+      if (await brainDir.exists()) {
+        final entities = await brainDir.list(recursive: true).toList();
+        for (final entity in entities) {
+          if (entity is File) {
+            final fileName = entity.path.split('/').last;
+            // Only back up files under 2MB to prevent OOM
+            if (await entity.length() < 2 * 1024 * 1024) {
+              try {
+                // If it's a text file (md, svg, json), read it as string. Otherwise base64 encode it.
+                if (fileName.endsWith('.md') || fileName.endsWith('.svg') || fileName.endsWith('.json') || fileName.endsWith('.txt')) {
+                  artifactsMap[fileName] = await entity.readAsString();
+                } else {
+                  artifactsMap[fileName] = base64Encode(await entity.readAsBytes());
+                }
+              } catch (e) {
+                print('Could not read artifact $fileName: $e');
+              }
+            }
+          }
+        }
+      }
+      backupData['artifacts'] = jsonEncode(artifactsMap);
 
       final jsonBackup = jsonEncode(backupData);
       final bytes = utf8.encode(jsonBackup);

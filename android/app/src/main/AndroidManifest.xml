@@ -28,9 +28,13 @@
     <!-- ── Post notifications (Android 13+) ───────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ── Query Termux ───────────────────────────────────────────── -->
+    <!-- ── Query Termux & Browsers ────────────────────────────────── -->
     <queries>
         <package android:name="com.termux" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application
