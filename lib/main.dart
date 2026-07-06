@@ -4765,17 +4765,34 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
       if (source == null) return;
 
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(source: source);
-      
-      if (pickedFile != null) {
-        final bytes = await pickedFile.readAsBytes();
-        final base64String = base64Encode(bytes);
-        widget.onImageAttached(base64String);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Image attached successfully')),
-          );
+      if (source == ImageSource.gallery) {
+        final result = await FilePicker.platform.pickFiles(
+          type: FileType.image,
+          allowMultiple: false,
+        );
+        if (result != null && result.files.single.path != null) {
+          final file = File(result.files.single.path!);
+          final bytes = await file.readAsBytes();
+          final base64String = base64Encode(bytes);
+          widget.onImageAttached(base64String);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Image attached successfully')),
+            );
+          }
+        }
+      } else {
+        final picker = ImagePicker();
+        final pickedFile = await picker.pickImage(source: source);
+        if (pickedFile != null) {
+          final bytes = await pickedFile.readAsBytes();
+          final base64String = base64Encode(bytes);
+          widget.onImageAttached(base64String);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Image attached successfully')),
+            );
+          }
         }
       }
     } catch (e) {
