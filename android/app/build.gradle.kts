@@ -42,8 +42,14 @@ android {
         multiDexEnabled = true
     }
 
-    // Release signing configuration
+    // Release and Debug signing configuration
     signingConfigs {
+        create("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             // Use environment variables for CI/CD signing
             val keystorePath = System.getenv("KEYSTORE_PATH")
