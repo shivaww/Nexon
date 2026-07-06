@@ -18,7 +18,8 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:image_picker/image_picker.dart';
+
 import 'package:nexon/widgets/nexon_chart.dart';
 
 
@@ -257,41 +258,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
     return _provider.models.first;
   }
 
-  Future<void> _requestStoragePermissions() async {
-    if (Platform.isAndroid) {
-      try {
-        final storageStatus = await Permission.storage.status;
-        if (!storageStatus.isGranted) {
-          await Permission.storage.request();
-        }
-        final manageStatus = await Permission.manageExternalStorage.status;
-        if (!manageStatus.isGranted) {
-          await Permission.manageExternalStorage.request();
-        }
-      } catch (e) {
-        debugPrint('Error requesting permissions: $e');
-      }
-    }
-  }
-
-  Future<void> _checkAndRequestPermissionsOnStartup() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hasAsked = prefs.getBool('has_asked_startup_storage_permission_v1') ?? false;
-    if (!hasAsked) {
-      await prefs.setBool('has_asked_startup_storage_permission_v1', true);
-      if (mounted) {
-        ensureStoragePermission(context, _requestStoragePermissions);
-      }
-    }
-  }
-
   @override
   void initState() {
     super.initState();
     _loadSettings();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndRequestPermissionsOnStartup();
-    });
   }
 
 
@@ -4768,20 +4738,37 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   Future<void> _pickImage() async {
     try {
-      final granted = await ensureStoragePermission(context, () async {
-        if (Platform.isAndroid) {
-          await Permission.storage.request();
-          await Permission.manageExternalStorage.request();
-        }
-      });
-      if (!granted) return;
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        allowMultiple: false,
+      final source = await showDialog<ImageSource>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFFFFFBF2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Attach Image', style: TextStyle(color: Color(0xFF7B4E2E), fontWeight: FontWeight.bold, fontFamily: 'serif')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Color(0xFF2D241C)),
+                title: const Text('Take a Photo', style: TextStyle(color: Color(0xFF2D241C))),
+                onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Color(0xFF2D241C)),
+                title: const Text('Choose from Gallery', style: TextStyle(color: Color(0xFF2D241C))),
+                onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
       );
-      if (result != null && result.files.single.path != null) {
-        final file = File(result.files.single.path!);
-        final bytes = await file.readAsBytes();
+
+      if (source == null) return;
+
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(source: source);
+      
+      if (pickedFile != null) {
+        final bytes = await pickedFile.readAsBytes();
         final base64String = base64Encode(bytes);
         widget.onImageAttached(base64String);
         if (mounted) {
@@ -4801,13 +4788,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   Future<void> _pickFile() async {
     try {
-      final granted = await ensureStoragePermission(context, () async {
-        if (Platform.isAndroid) {
-          await Permission.storage.request();
-          await Permission.manageExternalStorage.request();
-        }
-      });
-      if (!granted) return;
+
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'txt', 'md', 'json', 'py', 'dart', 'js', 'html', 'css', 'yaml', 'yml'],
@@ -7385,13 +7366,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   }
 
   Future<void> _downloadFile() async {
-    final granted = await ensureStoragePermission(context, () async {
-      if (Platform.isAndroid) {
-        await Permission.storage.request();
-        await Permission.manageExternalStorage.request();
-      }
-    });
-    if (!granted) return;
+
 
     String contentToSave = widget.stateMap['final_report'] as String? ?? '';
     if (contentToSave.isEmpty) {
@@ -7735,13 +7710,7 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
   }
 
   Future<void> _downloadFile() async {
-    final granted = await ensureStoragePermission(context, () async {
-      if (Platform.isAndroid) {
-        await Permission.storage.request();
-        await Permission.manageExternalStorage.request();
-      }
-    });
-    if (!granted) return;
+
 
     try {
       
@@ -8075,58 +8044,7 @@ String getMdTitle(String content) {
   return 'Markdown Document';
 }
 
-Future<bool> ensureStoragePermission(BuildContext context, VoidCallback onRequest) async {
-  if (!Platform.isAndroid) return true;
-  final storageGranted = await Permission.storage.isGranted;
-  final manageGranted = await Permission.manageExternalStorage.isGranted;
-  if (storageGranted && manageGranted) {
-    return true;
-  }
-  
-  if (context.mounted) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFFFFFBF2),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text(
-            'File Access Required',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF7B4E2E),
-              fontFamily: 'serif',
-            ),
-          ),
-          content: const Text(
-            'Nexon needs file access permissions to select and attach files/images to your chats, and to compile/export Word and Markdown documents to your storage.',
-            style: TextStyle(color: Color(0xFF2D241C), height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Deny', style: TextStyle(color: Color(0xFF7B4E2E))),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                onRequest();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF7B4E2E),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: const Text('Allow'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-  return false;
-}
+
 
 // ── Docx Artifact Widget ──
 
@@ -8219,13 +8137,7 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
   bool _exporting = false;
 
   Future<void> _exportDocx() async {
-    final granted = await ensureStoragePermission(context, () async {
-      if (Platform.isAndroid) {
-        await Permission.storage.request();
-        await Permission.manageExternalStorage.request();
-      }
-    });
-    if (!granted) return;
+
 
     setState(() => _exporting = true);
     
@@ -8526,13 +8438,7 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
   bool _saving = false;
 
   Future<void> _saveMdFile() async {
-    final granted = await ensureStoragePermission(context, () async {
-      if (Platform.isAndroid) {
-        await Permission.storage.request();
-        await Permission.manageExternalStorage.request();
-      }
-    });
-    if (!granted) return;
+
 
     setState(() => _saving = true);
     
