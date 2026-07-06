@@ -20,6 +20,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:nexon/widgets/nexon_chart.dart';
 
@@ -1044,6 +1045,9 @@ For every project, maintain a README.md at the project root.
               "\nWeb: <search_request>query</search_request> to search, <read_url>URL</read_url> to fetch page. Output one line then stop.\n";
         }
 
+        systemPromptText +=
+            "\nMemory Tool: Use <memory action=\"read\"></memory>, <memory action=\"append\">text</memory>, or <memory action=\"replace\">text</memory> to save/read personal details across sessions. Limit 10KB. Use only when essential.\n";
+
         if (systemPromptText.isNotEmpty) {
           historyForApi.add(ChatMessage(role: MessageRole.system, text: systemPromptText));
         }
@@ -1168,10 +1172,12 @@ For every project, maintain a README.md at the project root.
         final searchRegex = RegExp(r'<search_request>\s*([\s\S]*?)\s*</search_request>', caseSensitive: false, dotAll: true);
         final readUrlRegex = RegExp(r'<read_url>\s*([\s\S]*?)\s*</read_url>', caseSensitive: false, dotAll: true);
         final mcpRegex = RegExp(r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>', caseSensitive: false);
+        final memoryRegex = RegExp(r'<memory\s+action="([^"]+)">\s*([\s\S]*?)\s*</memory>', caseSensitive: false, dotAll: true);
         
         final searchMatch = searchRegex.firstMatch(fullText);
         final readUrlMatch = readUrlRegex.firstMatch(fullText);
         final mcpMatch = _findMcpMatch(fullText);
+        final memoryMatch = memoryRegex.firstMatch(fullText);
 
         if (fullText.contains('<research_plan>')) {
           final planStart = fullText.indexOf('<research_plan>');
@@ -1293,6 +1299,20 @@ For every project, maintain a README.md at the project root.
             }
             if (mounted) setState(() => _toolStatus = '');
             toolOutputs.add("Content of URL '$url':\n\n$urlResult");
+          }
+        }
+        if (memoryMatch != null) {
+          final memoryMatches = memoryRegex.allMatches(fullText);
+          for (final match in memoryMatches) {
+            executedTools = true;
+            final action = match.group(1)?.toLowerCase().trim() ?? '';
+            final content = match.group(2)?.trim() ?? '';
+            if (mounted) setState(() => _toolStatus = '🧠 Memory Tool: $action');
+            
+            final result = await _handleMemoryTool(action, content);
+            
+            if (mounted) setState(() => _toolStatus = '');
+            toolOutputs.add("Memory Tool [$action] Result:\n$result");
           }
         }
 
@@ -8615,5 +8635,41 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
               ),
             ),
     );
+  }
+}
+
+Future<String> _handleMemoryTool(String action, String content) async {
+  try {
+    final docDir = await getApplicationDocumentsDirectory();
+    final memoryFile = File('${docDir.path}/nexon_memory.json');
+    
+    String currentMemory = '';
+    if (await memoryFile.exists()) {
+      currentMemory = await memoryFile.readAsString();
+    }
+
+    if (action == 'read') {
+      return currentMemory.isEmpty ? 'Memory is empty.' : currentMemory;
+    } else if (action == 'append') {
+      final newMemory = currentMemory.isEmpty ? content.trim() : '$currentMemory\n${content.trim()}';
+      if (utf8.encode(newMemory).length > 10240) {
+        return 'Error: Appending this would exceed the 10KB memory limit. Use replace action instead.';
+      }
+      await memoryFile.writeAsString(newMemory);
+      return 'Appended successfully. Current memory size: ${utf8.encode(newMemory).length} bytes.';
+    } else if (action == 'replace') {
+      if (utf8.encode(content).length > 10240) {
+        return 'Error: New memory exceeds the 10KB memory limit.';
+      }
+      await memoryFile.writeAsString(content.trim());
+      return 'Replaced successfully. Current memory size: ${utf8.encode(content).length} bytes.';
+    } else if (action == 'clear') {
+      await memoryFile.writeAsString('');
+      return 'Memory cleared.';
+    } else {
+      return 'Error: Unknown action "$action". Valid actions are read, append, replace, clear.';
+    }
+  } catch (e) {
+    return 'Error interacting with memory: $e';
   }
 }
