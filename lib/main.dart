@@ -23,10 +23,22 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:nexon/widgets/nexon_chart.dart';
+import 'package:nexon/services/drive_sync_service.dart';
 
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:nexon/screens/onboarding_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  await Supabase.initialize(
+    url: 'https://tvrqxugomnjthqrcdaih.supabase.co',
+    anonKey: 'sb_publishable_AmHw2HDm_ZpxRt4jOlb-EA_vaVRTSG_',
+  );
+  
+  final prefs = await SharedPreferences.getInstance();
+  final hasCompletedOnboarding = prefs.getBool('has_completed_onboarding_v2') ?? false;
+
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
@@ -39,12 +51,31 @@ Future<void> main() async {
       systemNavigationBarIconBrightness: Brightness.dark,
     ),
   );
-  runApp(const ForgeChatApp());
+  runApp(ForgeChatApp(hasCompletedOnboarding: hasCompletedOnboarding));
 }
 
-class ForgeChatApp extends StatelessWidget {
-  const ForgeChatApp({super.key});
+class ForgeChatApp extends StatefulWidget {
+  final bool hasCompletedOnboarding;
+  const ForgeChatApp({super.key, required this.hasCompletedOnboarding});
 
+  @override
+  State<ForgeChatApp> createState() => _ForgeChatAppState();
+}
+
+class _ForgeChatAppState extends State<ForgeChatApp> {
+  late bool _showOnboarding;
+
+  @override
+  void initState() {
+    super.initState();
+    _showOnboarding = !widget.hasCompletedOnboarding;
+  }
+
+  void _completeOnboarding() {
+    setState(() {
+      _showOnboarding = false;
+    });
+  }
   @override
   Widget build(BuildContext context) {
     final baseText = GoogleFonts.manropeTextTheme();
@@ -61,7 +92,9 @@ class ForgeChatApp extends StatelessWidget {
         scaffoldBackgroundColor: const Color(0xFFF7F2E8),
         textTheme: baseText,
       ),
-      home: const ChatHomePage(),
+      home: _showOnboarding 
+          ? OnboardingScreen(onComplete: _completeOnboarding)
+          : const ChatHomePage(),
     );
   }
 }
@@ -165,6 +198,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     if (_activeSessionId != null) {
       await prefs.setString('active_session_id_v1', _activeSessionId!);
     }
+    
+    // Fire and forget auto-sync to Google Drive
+    DriveSyncService.syncToDrive();
   }
 
   void _switchSession(String sessionId) {

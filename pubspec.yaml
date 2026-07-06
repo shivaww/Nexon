@@ -31,6 +31,12 @@ dependencies:
   shared_preferences: ^2.5.3
   path_provider: ^2.1.5
   
+  # Auth & Cloud Sync
+  supabase_flutter: ^2.6.0
+  google_sign_in: ^6.2.1
+  googleapis: ^13.1.0
+  googleapis_auth: ^1.6.0
+  
   # Networking
   dio: ^5.8.0+1
   web_socket_channel: ^3.0.2
