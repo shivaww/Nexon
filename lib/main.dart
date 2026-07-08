@@ -4737,6 +4737,8 @@ class MediaAndModelSheet extends StatefulWidget {
 
 class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   int _activeTab = 0;
+  bool _isFetchingModels = false;
+  bool _managedSubscriptionEnabled = false;
   late int _maxTokens;
   var _fetching = false;
   late String _selectedProviderId;
@@ -5845,19 +5847,28 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               _buildPlanStat('Monthly Credits', monthlyCredits),
               _buildPlanStat('Daily Cap', dailyCap),
               ElevatedButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Subscription backend coming soon!')),
-                  );
+                onPressed: () async {
+                  final prefs = await SharedPreferences.getInstance();
+                  final newState = !_managedSubscriptionEnabled;
+                  await prefs.setBool('nexon_managed_subscription_enabled', newState);
+                  if (newState) {
+                    await prefs.setString('nexon_managed_backend_url', 'https://nexon-jyp1.onrender.com');
+                  }
+                  setState(() => _managedSubscriptionEnabled = newState);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(newState ? 'Activated Managed Subscription on Render!' : 'Reverted to Bring-Your-Own-Key')),
+                    );
+                  }
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2D241C),
+                  backgroundColor: _managedSubscriptionEnabled ? Colors.green : const Color(0xFF2D241C),
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
                   minimumSize: const Size(0, 36),
                 ),
-                child: const Text('Subscribe', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                child: Text(_managedSubscriptionEnabled ? 'Active' : 'Subscribe', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
               ),
             ],
           ),
@@ -6751,9 +6762,14 @@ class ChatClient {
     required String model,
     required List<ChatMessage> messages,
   }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final managedEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
+    final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
+    final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final allKeys = [settings.apiKey, ...settings.fallbackApiKeys]
+      final allKeys = managedEnabled ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
           .map((k) => k.trim())
           .where((k) => k.isNotEmpty)
           .toList();
@@ -6768,9 +6784,10 @@ class ChatClient {
 
         for (int retry = 0; retry < 3; retry++) {
           try {
-            final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
+            final baseUrl = managedEnabled ? managedUrl : _baseUrl(provider, settings);
+            final uri = Uri.parse('$baseUrl/v1/chat/completions');
             final request = await client.postUrl(uri);
-            _setHeaders(request, provider, settings, currentKey, stream: false);
+            _setHeaders(request, provider, settings, currentKey, stream: false, isManaged: managedEnabled);
             request.headers.contentType = ContentType.json;
 
             final payload = <String, dynamic>{
@@ -6859,9 +6876,14 @@ class ChatClient {
     required String model,
     required List<ChatMessage> messages,
   }) async* {
+    final prefs = await SharedPreferences.getInstance();
+    final managedEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
+    final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
+    final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final allKeys = [settings.apiKey, ...settings.fallbackApiKeys]
+      final allKeys = managedEnabled ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
           .map((k) => k.trim())
           .where((k) => k.isNotEmpty)
           .toList();
@@ -6876,9 +6898,10 @@ class ChatClient {
 
         for (int retry = 0; retry < 3; retry++) {
           try {
-            final uri = Uri.parse('${_baseUrl(provider, settings)}/chat/completions');
+            final baseUrl = managedEnabled ? managedUrl : _baseUrl(provider, settings);
+            final uri = Uri.parse('$baseUrl/v1/chat/completions');
             final request = await client.postUrl(uri);
-            _setHeaders(request, provider, settings, currentKey, stream: true);
+            _setHeaders(request, provider, settings, currentKey, stream: true, isManaged: managedEnabled);
             request.headers.contentType = ContentType.json;
 
             final payload = <String, dynamic>{
@@ -7114,6 +7137,7 @@ class ChatClient {
     ProviderSettings settings,
     String activeApiKey, {
     required bool stream,
+    bool isManaged = false,
   }) {
     request.headers.set('Accept', stream ? 'text/event-stream' : 'application/json');
     if (stream) {
@@ -7123,8 +7147,10 @@ class ChatClient {
     if (activeApiKey.isNotEmpty) {
       request.headers.set('Authorization', 'Bearer $activeApiKey');
     }
-    for (final entry in provider.extraHeaders.entries) {
-      request.headers.set(entry.key, entry.value);
+    if (!isManaged) {
+      for (final entry in provider.extraHeaders.entries) {
+        request.headers.set(entry.key, entry.value);
+      }
     }
   }
 
