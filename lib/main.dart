@@ -37,7 +37,12 @@ Future<void> main() async {
   );
   
   final prefs = await SharedPreferences.getInstance();
-  final hasCompletedOnboarding = prefs.getBool('has_completed_onboarding_v2') ?? false;
+  bool hasCompletedOnboarding = prefs.getBool('has_completed_onboarding_v2') ?? false;
+
+  final session = Supabase.instance.client.auth.currentSession;
+  if (hasCompletedOnboarding && session == null) {
+    hasCompletedOnboarding = false;
+  }
 
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -5556,31 +5561,71 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             border: Border.all(color: const Color(0xFFE5DDD3)),
             borderRadius: BorderRadius.circular(18),
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          child: Column(
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    'Google Drive Backup',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Google Drive Backup',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Auto-sync chats & artifacts to Drive',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                      ),
+                    ],
                   ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Auto-sync chats & artifacts to Drive',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                  Switch(
+                    value: _driveBackupEnabled,
+                    activeColor: const Color(0xFF7B4E2E),
+                    onChanged: (val) async {
+                      setState(() => _driveBackupEnabled = val);
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('google_drive_backup_enabled', val);
+                    },
                   ),
                 ],
               ),
-              Switch(
-                value: _driveBackupEnabled,
-                activeColor: const Color(0xFF7B4E2E),
-                onChanged: (val) async {
-                  setState(() => _driveBackupEnabled = val);
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool('google_drive_backup_enabled', val);
-                },
+              const Divider(height: 32, color: Color(0xFFE5DDD3)),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Account',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF6C5946)),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        Supabase.instance.client.auth.currentSession?.user.email ?? 'Not logged in',
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF2D241C), fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                  TextButton.icon(
+                    onPressed: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('has_completed_onboarding_v2', false);
+                      await Supabase.instance.client.auth.signOut();
+                      if (mounted) {
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(builder: (_) => const ForgeChatApp(hasCompletedOnboarding: false)),
+                          (route) => false,
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.logout, size: 16, color: Colors.red),
+                    label: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                  ),
+                ],
               ),
             ],
           ),
