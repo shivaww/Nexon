@@ -101,6 +101,14 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
     # 4. Acquire Semaphore & Proxy Request to Upstream
     async with semaphore:
         target_url = os.getenv("KAGGLE_URL", "https://api.together.xyz/v1/chat/completions")
+        
+        # Auto-fix URL if user forgot to add /chat/completions
+        if not target_url.endswith("/chat/completions"):
+            if target_url.endswith("/"):
+                target_url += "v1/chat/completions" if "v1" not in target_url else "chat/completions"
+            else:
+                target_url += "/v1/chat/completions" if "v1" not in target_url else "/chat/completions"
+                
         headers = {
             "Authorization": f"Bearer {os.getenv('MASTER_API_KEY', 'dummy_key')}",
             "Content-Type": "application/json"
