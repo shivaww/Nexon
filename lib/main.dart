@@ -5779,6 +5779,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     required Color borderColor,
     bool isPremium = false,
   }) {
+    final bool isThisPlanActive = _managedSubscriptionEnabled && _activePlanTier == title.toLowerCase();
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -5849,26 +5851,31 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               ElevatedButton(
                 onPressed: () async {
                   final prefs = await SharedPreferences.getInstance();
-                  final newState = !_managedSubscriptionEnabled;
+                  final newState = !isThisPlanActive;
+                  final newTier = newState ? title.toLowerCase() : '';
                   await prefs.setBool('nexon_managed_subscription_enabled', newState);
+                  await prefs.setString('nexon_managed_plan_tier', newTier);
                   if (newState) {
                     await prefs.setString('nexon_managed_backend_url', 'https://nexon-jyp1.onrender.com');
                   }
-                  setState(() => _managedSubscriptionEnabled = newState);
+                  setState(() {
+                    _managedSubscriptionEnabled = newState;
+                    _activePlanTier = newTier;
+                  });
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(newState ? 'Activated Managed Subscription on Render!' : 'Reverted to Bring-Your-Own-Key')),
+                      SnackBar(content: Text(newState ? 'Activated Nexon $title Plan!' : 'Reverted to Bring-Your-Own-Key')),
                     );
                   }
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _managedSubscriptionEnabled ? Colors.green : const Color(0xFF2D241C),
+                  backgroundColor: isThisPlanActive ? Colors.green : const Color(0xFF2D241C),
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
                   minimumSize: const Size(0, 36),
                 ),
-                child: Text(_managedSubscriptionEnabled ? 'Active' : 'Subscribe', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                child: Text(isThisPlanActive ? 'Active' : 'Subscribe', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
               ),
             ],
           ),
@@ -6764,12 +6771,13 @@ class ChatClient {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final managedEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
+    final isManagedMode = managedEnabled || provider.id == 'nexon';
     final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
     final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final allKeys = managedEnabled ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
+      final allKeys = isManagedMode ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
           .map((k) => k.trim())
           .where((k) => k.isNotEmpty)
           .toList();
@@ -6784,10 +6792,10 @@ class ChatClient {
 
         for (int retry = 0; retry < 3; retry++) {
           try {
-            final baseUrl = managedEnabled ? managedUrl : _baseUrl(provider, settings);
+            final baseUrl = isManagedMode ? managedUrl : _baseUrl(provider, settings);
             final uri = Uri.parse('$baseUrl/v1/chat/completions');
             final request = await client.postUrl(uri);
-            _setHeaders(request, provider, settings, currentKey, stream: false, isManaged: managedEnabled);
+            _setHeaders(request, provider, settings, currentKey, stream: false, isManaged: isManagedMode);
             request.headers.contentType = ContentType.json;
 
             final payload = <String, dynamic>{
@@ -6878,12 +6886,13 @@ class ChatClient {
   }) async* {
     final prefs = await SharedPreferences.getInstance();
     final managedEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
+    final isManagedMode = managedEnabled || provider.id == 'nexon';
     final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
     final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final allKeys = managedEnabled ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
+      final allKeys = isManagedMode ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
           .map((k) => k.trim())
           .where((k) => k.isNotEmpty)
           .toList();
@@ -6898,10 +6907,10 @@ class ChatClient {
 
         for (int retry = 0; retry < 3; retry++) {
           try {
-            final baseUrl = managedEnabled ? managedUrl : _baseUrl(provider, settings);
+            final baseUrl = isManagedMode ? managedUrl : _baseUrl(provider, settings);
             final uri = Uri.parse('$baseUrl/v1/chat/completions');
             final request = await client.postUrl(uri);
-            _setHeaders(request, provider, settings, currentKey, stream: true, isManaged: managedEnabled);
+            _setHeaders(request, provider, settings, currentKey, stream: true, isManaged: isManagedMode);
             request.headers.contentType = ContentType.json;
 
             final payload = <String, dynamic>{
@@ -7526,6 +7535,19 @@ class ChatSession {
 }
 
 const providerCatalog = <ProviderDefinition>[
+  ProviderDefinition(
+    id: 'nexon',
+    name: 'Nexon Pro Subscription',
+    shortName: 'NX',
+    keyLabel: 'NEXON_MANAGED_KEY',
+    baseUrl: 'https://nexon-jyp1.onrender.com',
+    models: [
+      'deepseek-v4-flash',
+      'llama-4-maverick',
+      'glm-5.2',
+    ],
+    defaultMaxTokens: 8192,
+  ),
   ProviderDefinition(
     id: 'nvidia',
     name: 'NVIDIA NIM',
