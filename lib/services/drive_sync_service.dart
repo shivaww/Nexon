@@ -118,4 +118,97 @@ class DriveSyncService {
       }
     }
   }
+
+  static Future<bool> restoreFromDrive() async {
+    final prefs = await SharedPreferences.getInstance();
+    final session = Supabase.instance.client.auth.currentSession;
+    final providerToken = session?.providerToken;
+
+    if (providerToken == null) {
+      print('No Google Provider Token available. Cannot restore from Drive.');
+      return false;
+    }
+
+    try {
+      final authenticateClient = GoogleAuthClient(providerToken);
+      final driveApi = drive.DriveApi(authenticateClient);
+
+      final fileList = await driveApi.files.list(
+        spaces: 'appDataFolder',
+        q: "name = 'nexon_backup.json'",
+      );
+
+      if (fileList.files != null && fileList.files!.isNotEmpty) {
+        final fileId = fileList.files!.first.id!;
+        final response = await driveApi.files.get(
+          fileId,
+          downloadOptions: drive.DownloadOptions.fullMedia,
+        ) as drive.Media;
+        
+        final List<int> dataStore = [];
+        await for (var data in response.stream) {
+          dataStore.addAll(data);
+        }
+        final jsonBackup = utf8.decode(dataStore);
+        final backupData = jsonDecode(jsonBackup) as Map<String, dynamic>;
+
+        if (backupData.containsKey('chat_sessions')) {
+           final chatData = backupData['chat_sessions'];
+           if (chatData is String) {
+              await prefs.setString('chat_sessions_v1', chatData);
+           } else {
+              await prefs.setString('chat_sessions_v1', jsonEncode(chatData));
+           }
+        }
+        if (backupData.containsKey('provider_settings')) {
+           final provData = backupData['provider_settings'];
+           if (provData is String) {
+              await prefs.setString('provider_settings_v1', provData);
+           } else {
+              await prefs.setString('provider_settings_v1', jsonEncode(provData));
+           }
+        }
+        
+        // Restore AI Memory
+        final docDir = await getApplicationDocumentsDirectory();
+        if (backupData.containsKey('ai_memory')) {
+           final memoryFile = File('${docDir.path}/nexon_memory.json');
+           await memoryFile.writeAsString(backupData['ai_memory'].toString());
+        }
+
+        // Restore artifacts
+        if (backupData.containsKey('artifacts')) {
+           final artifactsData = backupData['artifacts'];
+           Map<String, dynamic> artifactsMap = {};
+           if (artifactsData is String) {
+              artifactsMap = jsonDecode(artifactsData);
+           } else if (artifactsData is Map) {
+              artifactsMap = Map<String, dynamic>.from(artifactsData);
+           }
+           final brainDir = Directory('${docDir.path}/brain');
+           if (!await brainDir.exists()) {
+             await brainDir.create(recursive: true);
+           }
+           for (final entry in artifactsMap.entries) {
+              final fileName = entry.key;
+              final content = entry.value.toString();
+              final file = File('${brainDir.path}/$fileName');
+              if (fileName.endsWith('.md') || fileName.endsWith('.svg') || fileName.endsWith('.json') || fileName.endsWith('.txt')) {
+                await file.writeAsString(content);
+              } else {
+                await file.writeAsBytes(base64Decode(content));
+              }
+           }
+        }
+
+        print('Successfully restored backup from Google Drive.');
+        return true;
+      } else {
+        print('No backup found on Google Drive.');
+      }
+    } catch (e) {
+      print('Drive restore failed: $e');
+    }
+    return false;
+  }
 }

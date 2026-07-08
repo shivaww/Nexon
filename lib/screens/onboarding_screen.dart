@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
+import '../services/drive_sync_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -42,9 +43,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void initState() {
     super.initState();
-    _authStateSubscription = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+    _authStateSubscription = Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
       final session = data.session;
       if (session != null && _isSigningIn) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Checking for existing backup on Google Drive...')),
+          );
+        }
+        await DriveSyncService.restoreFromDrive();
         if (mounted) {
           setState(() => _isSigningIn = false);
           _nextPage();
@@ -62,6 +69,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Future<void> _signInWithGoogle() async {
     setState(() => _isSigningIn = true);
+
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session != null && session.providerToken != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Checking for existing backup on Google Drive...')),
+        );
+      }
+      await DriveSyncService.restoreFromDrive();
+      if (mounted) {
+        setState(() => _isSigningIn = false);
+        _nextPage();
+      }
+      return;
+    }
+
     try {
       await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
