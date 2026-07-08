@@ -5074,6 +5074,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               borderRadius: BorderRadius.circular(14),
             ),
             child: Row(
+              children: [
                 _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
                 _buildTabButton(1, Icons.explore_outlined, 'Capabilities'),
                 _buildTabButton(2, Icons.account_circle_outlined, 'Account'),
@@ -5695,7 +5696,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 ),
               ),
             ],
-          ),
           ),
         ),
         const SizedBox(height: 24),
