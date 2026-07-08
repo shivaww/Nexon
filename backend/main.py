@@ -100,34 +100,42 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
 
     # 4. Acquire Semaphore & Proxy Request to Upstream
     async with semaphore:
+        target_url = os.getenv("KAGGLE_URL", "https://api.together.xyz/v1/chat/completions")
+        headers = {
+            "Authorization": f"Bearer {os.getenv('MASTER_API_KEY', 'dummy_key')}",
+            "Content-Type": "application/json"
+        }
+        
+        print(f"NEXON PROXY: Forwarding request to -> {target_url}", flush=True)
+        
+        client = httpx.AsyncClient(timeout=120.0)
+        req = client.build_request("POST", target_url, headers=headers, json=body)
+        
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                # Target URL points to kaggle if KAGGLE_URL env var is provided
-                target_url = os.getenv("KAGGLE_URL", "https://api.together.xyz/v1/chat/completions")
-                
-                headers = {
-                    "Authorization": f"Bearer {os.getenv('MASTER_API_KEY', 'dummy_key')}",
-                    "Content-Type": "application/json"
-                }
-                
-                print(f"NEXON PROXY: Forwarding request to -> {target_url}", flush=True)
-                # Stream the response back to the user
-                async with client.stream("POST", target_url, headers=headers, json=body) as upstream_response:
-                    if upstream_response.status_code != 200:
-                        error_body = await upstream_response.aread()
-                        error_text = error_body.decode('utf-8', errors='ignore')
-                        print(f"NEXON PROXY ERROR: {upstream_response.status_code} - {error_text}", flush=True)
-                        try:
-                            err_json = json.loads(error_text)
-                        except:
-                            err_json = {"detail": f"Upstream returned {upstream_response.status_code}: {error_text[:200]}"}
-                        return JSONResponse(status_code=upstream_response.status_code, content=err_json)
-
-                    async def stream_generator():
-                        async for chunk in upstream_response.aiter_bytes():
-                            yield chunk
-                            
-                    return StreamingResponse(stream_generator(), media_type="text/event-stream")
-
+            upstream_response = await client.send(req, stream=True)
         except httpx.RequestError:
+            await client.aclose()
             raise HTTPException(status_code=503, detail="Upstream AI provider unreachable.")
+
+        if upstream_response.status_code != 200:
+            error_body = await upstream_response.aread()
+            await upstream_response.aclose()
+            await client.aclose()
+            
+            error_text = error_body.decode('utf-8', errors='ignore')
+            print(f"NEXON PROXY ERROR: {upstream_response.status_code} - {error_text}", flush=True)
+            try:
+                err_json = json.loads(error_text)
+            except:
+                err_json = {"detail": f"Upstream returned {upstream_response.status_code}: {error_text[:200]}"}
+            return JSONResponse(status_code=upstream_response.status_code, content=err_json)
+
+        async def stream_generator():
+            try:
+                async for chunk in upstream_response.aiter_bytes():
+                    yield chunk
+            finally:
+                await upstream_response.aclose()
+                await client.aclose()
+                
+        return StreamingResponse(stream_generator(), media_type="text/event-stream")
