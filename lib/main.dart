@@ -5696,6 +5696,187 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               ),
             ],
           ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        _buildSubscriptionPlans(),
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  Widget _buildSubscriptionPlans() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Nexon Pro Subscriptions',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            color: Color(0xFF2D241C),
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Switch to a Managed API key and skip the hassle.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+        ),
+        const SizedBox(height: 16),
+        _buildPlanCard(
+          title: 'GO',
+          subtitle: 'The Student / Hobbyist Tier',
+          price: '₹249',
+          monthlyCredits: '16.5M',
+          dailyCap: '550K',
+          color: const Color(0xFFE8F3EB),
+          borderColor: const Color(0xFFC3DFCD),
+        ),
+        const SizedBox(height: 12),
+        _buildPlanCard(
+          title: 'PLUS',
+          subtitle: 'The Light Freelancer Tier',
+          price: '₹499',
+          monthlyCredits: '33.5M',
+          dailyCap: '1.1M',
+          color: const Color(0xFFEBF0F6),
+          borderColor: const Color(0xFFC7D9EA),
+        ),
+        const SizedBox(height: 12),
+        _buildPlanCard(
+          title: 'PRO',
+          subtitle: 'The Professional Tier',
+          price: '₹899',
+          monthlyCredits: '61.0M',
+          dailyCap: '2.0M',
+          color: const Color(0xFFF6EBF0),
+          borderColor: const Color(0xFFEAC7D9),
+        ),
+        const SizedBox(height: 12),
+        _buildPlanCard(
+          title: 'MAX',
+          subtitle: 'The Power User Tier',
+          price: '₹1,399',
+          monthlyCredits: '95.0M',
+          dailyCap: '3.1M',
+          color: const Color(0xFFFFF7E6),
+          borderColor: const Color(0xFFFFD580),
+          isPremium: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPlanCard({
+    required String title,
+    required String subtitle,
+    required String price,
+    required String monthlyCredits,
+    required String dailyCap,
+    required Color color,
+    required Color borderColor,
+    bool isPremium = false,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color,
+        border: Border.all(color: borderColor, width: isPremium ? 2 : 1),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF2D241C),
+                        ),
+                      ),
+                      if (isPremium) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2D241C),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            'BEST VALUE',
+                            style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946), fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              Text(
+                '$price/mo',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D241C),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: Colors.black12),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildPlanStat('Monthly Credits', monthlyCredits),
+              _buildPlanStat('Daily Cap', dailyCap),
+              ElevatedButton(
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Subscription backend coming soon!')),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D241C),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                  minimumSize: const Size(0, 36),
+                ),
+                child: const Text('Subscribe', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlanStat(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+        ),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
         ),
       ],
     );
