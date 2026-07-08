@@ -4753,6 +4753,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late final TextEditingController _agenticWorkspaceController;
   late final TextEditingController _customMcpUrlController;
   bool _driveBackupEnabled = false;
+  String _activePlanTier = '';
 
   @override
   void initState() {
@@ -4780,6 +4781,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       if (mounted) {
         setState(() {
           _driveBackupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
+          _managedSubscriptionEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
+          _activePlanTier = prefs.getString('nexon_managed_plan_tier') ?? '';
         });
       }
     });
