@@ -4292,7 +4292,11 @@ class MessageBubble extends StatelessWidget {
             block.language.toLowerCase() == 'json-chart') {
           return NexonChartWidget(chartBlock: block.content);
         }
-        if (block.language.toLowerCase() == 'html' || block.language.toLowerCase() == 'artifact' || block.language.toLowerCase() == 'react' || block.language.toLowerCase() == 'javascript') {
+        final lang = block.language.toLowerCase();
+        final contentLower = block.content.toLowerCase();
+        final isCompleteWebpage = contentLower.contains('<html') || contentLower.contains('<!doctype');
+        final isArtifact = lang == 'artifact' || ((lang == 'html' || lang == 'react' || lang == 'javascript') && isCompleteWebpage);
+        if (isArtifact) {
           return HtmlArtifactWidget(htmlContent: block.content);
         }
         if (block.language.toLowerCase() == 'docx') {
@@ -5070,10 +5074,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               borderRadius: BorderRadius.circular(14),
             ),
             child: Row(
-              children: [
                 _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
                 _buildTabButton(1, Icons.explore_outlined, 'Capabilities'),
-                _buildTabButton(2, Icons.attachment_outlined, 'Attach'),
+                _buildTabButton(2, Icons.account_circle_outlined, 'Account'),
+                _buildTabButton(3, Icons.attachment_outlined, 'Attach'),
               ],
             ),
           ),
@@ -5098,6 +5102,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       case 1:
         return _buildCapabilitiesTab();
       case 2:
+        return _buildAccountTab();
+      case 3:
         return _buildAttachTab(visionEnabled);
       default:
         return const SizedBox.shrink();
@@ -5551,8 +5557,14 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+      ],
+    );
+  }
 
+  Widget _buildAccountTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         // Cloud Sync & Backup Card
         Container(
           padding: const EdgeInsets.all(16),
@@ -5626,6 +5638,61 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     label: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
                   ),
                 ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Memory Settings Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AI Memory',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Clear personalized facts learned by AI',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                  ),
+                ],
+              ),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final docDir = await getApplicationDocumentsDirectory();
+                  final memoryFile = File('${docDir.path}/nexon_memory.json');
+                  if (await memoryFile.exists()) {
+                    await memoryFile.writeAsString('');
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('AI Memory cleared!')),
+                      );
+                    }
+                  } else {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('AI Memory is already empty.')),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
+                label: const Text('Clear', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.red),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
               ),
             ],
           ),
