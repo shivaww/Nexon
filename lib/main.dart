@@ -4754,6 +4754,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late final TextEditingController _customMcpUrlController;
   bool _driveBackupEnabled = false;
   String _activePlanTier = '';
+  int? _liveDailyPool;
+  int? _liveSubscriptionCredits;
 
   @override
   void initState() {
@@ -4786,6 +4788,27 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         });
       }
     });
+    _fetchLiveWallet();
+  }
+
+  Future<void> _fetchLiveWallet() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+    try {
+      final response = await Supabase.instance.client
+          .from('user_wallets')
+          .select('current_daily_pool, subscription_credits')
+          .eq('user_id', session.user.id)
+          .maybeSingle();
+      if (response != null && mounted) {
+        setState(() {
+          _liveDailyPool = response['current_daily_pool'] as int?;
+          _liveSubscriptionCredits = response['subscription_credits'] as int?;
+        });
+      }
+    } catch (e) {
+      // Ignored
+    }
   }
 
   @override
@@ -5849,8 +5872,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _buildPlanStat('Monthly Credits', monthlyCredits),
-              _buildPlanStat('Daily Cap', dailyCap),
+              _buildPlanStat('Monthly Credits', isThisPlanActive && _liveSubscriptionCredits != null ? '${(_liveSubscriptionCredits! / 1000000).toStringAsFixed(1)}M' : monthlyCredits),
+              _buildPlanStat('Daily Cap', isThisPlanActive && _liveDailyPool != null ? '${(_liveDailyPool! / 1000).toStringAsFixed(1)}K' : dailyCap),
               ElevatedButton(
                 onPressed: () async {
                   final prefs = await SharedPreferences.getInstance();
