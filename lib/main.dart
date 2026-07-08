@@ -200,7 +200,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
     
     // Fire and forget auto-sync to Google Drive
-    DriveSyncService.syncToDrive();
+    DriveSyncService.syncToDrive(_sessions);
   }
 
   void _switchSession(String sessionId) {
@@ -864,6 +864,7 @@ NEVER chain multiple tool calls in one response.
 
 ━━ STRUCTURED FILE TOOLS (ALWAYS PREFER OVER SHELL FOR FILE OPS) ━━
 Use XML format: <tool_request><method>NAME</method><param>value</param>...</tool_request>
+CRITICAL: Always use direct tag format like <path>/foo</path>. Do NOT use <PARAM name="path">/foo</PARAM> to maximize parser cleanliness.
 
 ── READ FILE (with line numbers, metadata, navigation hints) ──
 <tool_request>
@@ -1377,6 +1378,7 @@ For every project, maintain a README.md at the project root.
               if (!toolParams.containsKey('cwd') || (toolParams['cwd'] as String?)?.isEmpty == true) {
                 toolParams['cwd'] = _agenticWorkspace;
               }
+              _resolveToolPaths(toolParams, _agenticWorkspace);
               parsed['params'] = toolParams;
               jsonString = jsonEncode(parsed);
             } catch (_) {}
@@ -2134,6 +2136,7 @@ For every project, maintain a README.md at the project root.
               if (!params.containsKey('cwd') || (params['cwd'] as String?)?.isEmpty == true) {
                 params['cwd'] = _agenticWorkspace;
               }
+              _resolveToolPaths(params, _agenticWorkspace);
               parsed['params'] = params;
               jsonString = jsonEncode(parsed);
             } catch (_) {}
@@ -4738,6 +4741,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late final TextEditingController _searchCxController;
   late final TextEditingController _agenticWorkspaceController;
   late final TextEditingController _customMcpUrlController;
+  bool _driveBackupEnabled = false;
 
   @override
   void initState() {
@@ -4760,6 +4764,14 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _searchCxController = TextEditingController(text: widget.searchSettings.googleCx);
     _agenticWorkspaceController = TextEditingController(text: widget.agenticWorkspace);
     _customMcpUrlController = TextEditingController(text: widget.customMcpUrl);
+    
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) {
+        setState(() {
+          _driveBackupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
+        });
+      }
+    });
   }
 
   @override
@@ -5531,6 +5543,45 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                 ],
               ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Cloud Sync & Backup Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Google Drive Backup',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Auto-sync chats & artifacts to Drive',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _driveBackupEnabled,
+                activeColor: const Color(0xFF7B4E2E),
+                onChanged: (val) async {
+                  setState(() => _driveBackupEnabled = val);
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('google_drive_backup_enabled', val);
+                },
+              ),
             ],
           ),
         ),
@@ -6373,6 +6424,9 @@ class ChatClient {
                 final arch = item['architecture'];
                 if (arch is Map) {
                   final modality = arch['modality']?.toString().toLowerCase() ?? '';
+                  if (modality.isNotEmpty && !modality.endsWith('text')) {
+                    return ''; // Filter out non-text generation models
+                  }
                   if (modality.contains('image') || modality.contains('vision')) {
                     ChatClient.modelsWithVision.add(id);
                   }
@@ -6462,6 +6516,7 @@ class ChatClient {
               'temperature': 1.0,
               'top_p': 0.95,
               'stream': false,
+              if (provider.id == 'openrouter') 'include_reasoning': settings.reasoningEnabled,
             };
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
@@ -6569,6 +6624,7 @@ class ChatClient {
               'temperature': 1.0,
               'top_p': 0.95,
               'stream': true,
+              if (provider.id == 'openrouter') 'include_reasoning': settings.reasoningEnabled,
             };
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
@@ -8673,6 +8729,22 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
     );
   }
 }
+
+
+  String _resolvePath(String p, String workspace) {
+    if (p.startsWith('/') || p.startsWith('~') || p.startsWith('http')) return p;
+    final ws = workspace.endsWith('/') ? workspace : '$workspace/';
+    return '$ws$p';
+  }
+
+  void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
+    final keys = ['path', 'file', 'directory', 'src', 'dest', 'path_a', 'path_b', 'target'];
+    for (final key in keys) {
+      if (params.containsKey(key) && params[key] is String) {
+        params[key] = _resolvePath(params[key] as String, workspace);
+      }
+    }
+  }
 
 Future<String> _handleMemoryTool(String action, String content) async {
   try {

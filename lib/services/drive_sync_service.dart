@@ -20,7 +20,7 @@ class GoogleAuthClient extends http.BaseClient {
 }
 
 class DriveSyncService {
-  static Future<void> syncToDrive() async {
+  static Future<void> syncToDrive(List<dynamic> sessions) async {
     final prefs = await SharedPreferences.getInstance();
     final backupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
     
@@ -43,7 +43,7 @@ class DriveSyncService {
 
       // We will store all chats, keys, memory, and artifacts in a single JSON backup for simplicity
       final backupData = {
-        'chat_sessions': prefs.getString('chat_sessions_v1') ?? '[]',
+        'chat_sessions': jsonEncode(sessions),
         'provider_settings': prefs.getString('provider_settings_v1') ?? '{}',
       };
 
@@ -111,7 +111,11 @@ class DriveSyncService {
         print('Successfully created nexon_backup.json in Google Drive appDataFolder.');
       }
     } catch (e) {
-      print('Drive sync failed: $e');
+      if (e.toString().contains('401') || e.toString().contains('Unauthorized')) {
+        print('Google Drive backup failed: Token expired (401). Please re-login to Supabase to refresh the token.');
+      } else {
+        print('Drive sync failed: $e');
+      }
     }
   }
 }
