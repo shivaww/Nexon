@@ -110,12 +110,18 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                     "Content-Type": "application/json"
                 }
                 
+                print(f"NEXON PROXY: Forwarding request to -> {target_url}", flush=True)
                 # Stream the response back to the user
                 async with client.stream("POST", target_url, headers=headers, json=body) as upstream_response:
                     if upstream_response.status_code != 200:
                         error_body = await upstream_response.aread()
-                        # Ideally refund credits here on error
-                        return JSONResponse(status_code=upstream_response.status_code, content=json.loads(error_body))
+                        error_text = error_body.decode('utf-8', errors='ignore')
+                        print(f"NEXON PROXY ERROR: {upstream_response.status_code} - {error_text}", flush=True)
+                        try:
+                            err_json = json.loads(error_text)
+                        except:
+                            err_json = {"detail": f"Upstream returned {upstream_response.status_code}: {error_text[:200]}"}
+                        return JSONResponse(status_code=upstream_response.status_code, content=err_json)
 
                     async def stream_generator():
                         async for chunk in upstream_response.aiter_bytes():
