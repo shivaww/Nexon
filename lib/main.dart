@@ -4856,6 +4856,32 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _walletSyncTimer = Timer.periodic(const Duration(minutes: 1), (_) => _fetchLiveWallet());
   }
 
+  @override
+  void didUpdateWidget(covariant MediaAndModelSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settings.model != widget.settings.model ||
+        oldWidget.provider.id != widget.provider.id ||
+        oldWidget.settings.maxTokens != widget.settings.maxTokens ||
+        oldWidget.settings.reasoningEnabled != widget.settings.reasoningEnabled ||
+        oldWidget.searchSettings.enabled != widget.searchSettings.enabled ||
+        oldWidget.agenticEnabled != widget.agenticEnabled ||
+        oldWidget.deepResearchEnabled != widget.deepResearchEnabled ||
+        oldWidget.searchSettings.provider != widget.searchSettings.provider) {
+      setState(() {
+        _selectedProviderId = widget.provider.id;
+        _selectedModel = widget.settings.model.isNotEmpty
+            ? widget.settings.model
+            : widget.provider.models.first;
+        _maxTokens = widget.settings.maxTokens;
+        _reasoningEnabled = widget.settings.reasoningEnabled;
+        _searchEnabled = widget.searchSettings.enabled;
+        _agenticEnabled = widget.agenticEnabled;
+        _deepResearchEnabled = widget.deepResearchEnabled;
+        _searchProvider = widget.searchSettings.provider;
+      });
+    }
+  }
+
   int _getTotalDailyCap(String planTier) {
     switch (planTier.toUpperCase()) {
       case 'GO': return 550000;
@@ -5782,7 +5808,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                               const SnackBar(content: Text('Starting Google Drive backup...')),
                             );
                             try {
-                              final success = await DriveSyncService.syncToDrive(widget.sessions);
+                              final success = await DriveSyncService.syncToDrive(widget.sessions, force: true);
                               if (success && mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('✅ Backup Successful!'), backgroundColor: Colors.green),

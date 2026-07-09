@@ -20,11 +20,11 @@ class GoogleAuthClient extends http.BaseClient {
 }
 
 class DriveSyncService {
-  static Future<bool> syncToDrive(List<dynamic> sessions) async {
+  static Future<bool> syncToDrive(List<dynamic> sessions, {bool force = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final backupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
     
-    if (!backupEnabled) {
+    if (!backupEnabled && !force) {
       print('Drive backup is disabled by user.');
       return false;
     }
