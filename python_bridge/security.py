@@ -237,7 +237,8 @@ class SecurityManager:
         bool
             True if the path is within an approved directory.
         """
-        resolved = os.path.realpath(path)
+        expanded = os.path.expanduser(path)
+        resolved = os.path.realpath(expanded)
         for approved in self.approved_paths:
             if resolved.startswith(os.path.realpath(approved)):
                 return True

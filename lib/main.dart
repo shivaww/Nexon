@@ -1503,6 +1503,7 @@ For every project, maintain a README.md at the project root.
         if (targetSessionId == _activeSessionId) {
           _scrollToBottom();
         }
+        _fetchLiveWallet();
       }
     }
   }
@@ -4817,6 +4818,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   String _activePlanTier = '';
   int? _liveDailyPool;
   int? _liveSubscriptionCredits;
+  int? _liveTopupCredits;
   Timer? _walletSyncTimer;
 
   @override
@@ -4889,13 +4891,14 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     try {
       final response = await Supabase.instance.client
           .from('user_wallets')
-          .select('current_daily_pool, subscription_credits')
+          .select('current_daily_pool, subscription_credits, topup_credits')
           .eq('user_id', session.user.id)
           .maybeSingle();
       if (response != null && mounted) {
         setState(() {
           _liveDailyPool = response['current_daily_pool'] as int?;
           _liveSubscriptionCredits = response['subscription_credits'] as int?;
+          _liveTopupCredits = response['topup_credits'] as int?;
         });
       }
     } catch (e) {
@@ -5844,6 +5847,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           const SizedBox(height: 2),
                           Text(
                             'Monthly Pool: ${_liveSubscriptionCredits != null ? "${_formatNumber(_liveSubscriptionCredits!)} / ${_formatNumber(_getTotalMonthlyCap(_activePlanTier))}" : "Loading..."}',
+                            style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                          ),
+                        ],
+                        if (_liveTopupCredits != null && _liveTopupCredits! > 0) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Top-up Credits: ${_formatNumber(_liveTopupCredits!)}',
                             style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
                           ),
                         ]

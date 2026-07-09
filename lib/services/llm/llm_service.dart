@@ -150,7 +150,8 @@ class LLMService {
     }
 
     try {
-      final uri = Uri.parse('${provider.baseUrl}/models');
+      final cleanBaseUrl = provider.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+      final uri = Uri.parse('$cleanBaseUrl/models');
       final request = await _httpClient.getUrl(uri);
       _setProviderHeaders(request, provider);
 

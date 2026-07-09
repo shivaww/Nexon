@@ -47,8 +47,17 @@ class DriveSyncService {
       final driveApi = drive.DriveApi(authenticateClient);
 
       // We will store all chats, keys, memory, and artifacts in a single JSON backup for simplicity
+      final serializedSessions = sessions.map((s) {
+        if (s is Map) return s;
+        try {
+          return (s as dynamic).toJson();
+        } catch (_) {
+          return s;
+        }
+      }).toList();
+
       final backupData = {
-        'chat_sessions': jsonEncode(sessions),
+        'chat_sessions': jsonEncode(serializedSessions),
         'provider_settings': prefs.getString('provider_settings_v1') ?? '{}',
       };
 

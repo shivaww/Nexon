@@ -10,6 +10,7 @@ See: https://www.jsonrpc.org/specification
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Callable, Coroutine, Optional
@@ -298,7 +299,15 @@ class MethodRouter:
 
         try:
             if isinstance(request.params, dict):
-                result = await handler(**request.params)
+                # Pre-process parameters to expand tilde paths ('~') for path-related arguments
+                path_keys = {'path', 'cwd', 'directory', 'dir', 'dir_path', 'dest', 'src', 'path_a', 'path_b', 'output_dir'}
+                processed_params = {}
+                for k, v in request.params.items():
+                    if k in path_keys and isinstance(v, str):
+                        processed_params[k] = os.path.expanduser(v)
+                    else:
+                        processed_params[k] = v
+                result = await handler(**processed_params)
             elif isinstance(request.params, list):
                 result = await handler(*request.params)
             else:
