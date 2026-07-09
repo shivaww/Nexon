@@ -1092,7 +1092,7 @@ For every project, maintain a README.md at the project root.
 
         if (_searchSettings.enabled) {
           systemPromptText +=
-              "\nWeb: <search_request>query</search_request> to search, <read_url>URL</read_url> to fetch page. Output one line then stop.\n";
+              "\n━━ WEB SEARCH PROTOCOL ━━\nIf a user asks about recent events, unknown facts, or requires live data out of your knowledge cutoff, you MUST use the web.\n1. First, output <search_request>query</search_request> to get search results.\n2. After viewing the search results, you MUST use <read_url>URL</read_url> to fetch the full content of the most relevant page to ensure maximum accuracy.\nCRITICAL: Only output ONE tool tag per turn, then stop and wait for the result.\n";
         }
 
         systemPromptText +=
