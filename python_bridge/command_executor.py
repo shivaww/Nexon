@@ -147,7 +147,7 @@ class CommandExecutor:
         ValueError
             If the command is blocked by security policy.
         """
-        cwd = cwd or self.default_cwd
+        cwd = os.path.expanduser(cwd or self.default_cwd)
         timeout = min(timeout or self.default_timeout, MAX_TIMEOUT)
 
         # Security check
@@ -274,7 +274,7 @@ class CommandExecutor:
         CommandResult
             Final result after command completes.
         """
-        cwd = cwd or self.default_cwd
+        cwd = os.path.expanduser(cwd or self.default_cwd)
         timeout = min(timeout or self.default_timeout, MAX_TIMEOUT)
 
         safety = self.security.evaluate(command, cwd)
