@@ -4811,6 +4811,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   String _activePlanTier = '';
   int? _liveDailyPool;
   int? _liveSubscriptionCredits;
+  Timer? _walletSyncTimer;
 
   @override
   void initState() {
@@ -4844,6 +4845,36 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       }
     });
     _fetchLiveWallet();
+    _walletSyncTimer = Timer.periodic(const Duration(minutes: 1), (_) => _fetchLiveWallet());
+  }
+
+  int _getTotalDailyCap(String planTier) {
+    switch (planTier.toUpperCase()) {
+      case 'GO': return 550000;
+      case 'PLUS': return 1100000;
+      case 'PRO': return 2000000;
+      case 'MAX': return 3100000;
+      default: return 100000; // Free tier
+    }
+  }
+
+  int _getTotalMonthlyCap(String planTier) {
+    switch (planTier.toUpperCase()) {
+      case 'GO': return 16500000;
+      case 'PLUS': return 33500000;
+      case 'PRO': return 61000000;
+      case 'MAX': return 95000000;
+      default: return 0;
+    }
+  }
+
+  String _formatNumber(int number) {
+    if (number >= 1000000) {
+      return '${(number / 1000000).toStringAsFixed(1)}M';
+    } else if (number >= 1000) {
+      return '${(number / 1000).toStringAsFixed(1)}K';
+    }
+    return number.toString();
   }
 
   Future<void> _fetchLiveWallet() async {
@@ -4868,6 +4899,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   @override
   void dispose() {
+    _walletSyncTimer?.cancel();
     _searchKeyController.dispose();
     _searchCxController.dispose();
     _agenticWorkspaceController.dispose();
@@ -5791,6 +5823,25 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         Supabase.instance.client.auth.currentSession?.user.email ?? 'Not logged in',
                         style: const TextStyle(fontSize: 14, color: Color(0xFF2D241C), fontWeight: FontWeight.w500),
                       ),
+                      if (Supabase.instance.client.auth.currentSession != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'Active Plan: ${_activePlanTier.isEmpty ? "FREE" : _activePlanTier.toUpperCase()}',
+                          style: const TextStyle(fontSize: 13, color: Color(0xFF7B4E2E), fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Daily Pool: ${_liveDailyPool != null ? "${_formatNumber(_liveDailyPool!)} / ${_formatNumber(_getTotalDailyCap(_activePlanTier))}" : "Loading..."}',
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                        ),
+                        if (_activePlanTier.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Monthly Pool: ${_liveSubscriptionCredits != null ? "${_formatNumber(_liveSubscriptionCredits!)} / ${_formatNumber(_getTotalMonthlyCap(_activePlanTier))}" : "Loading..."}',
+                            style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                          ),
+                        ]
+                      ]
                     ],
                   ),
                   TextButton.icon(
