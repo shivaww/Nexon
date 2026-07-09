@@ -6940,7 +6940,10 @@ class ChatClient {
         for (int retry = 0; retry < 3; retry++) {
           try {
             final baseUrl = isManagedMode ? managedUrl : _baseUrl(provider, settings);
-            final uri = Uri.parse('$baseUrl/v1/chat/completions');
+            final urlString = baseUrl.endsWith('/v1') 
+                ? '$baseUrl/chat/completions' 
+                : '$baseUrl/v1/chat/completions';
+            final uri = Uri.parse(urlString);
             final request = await client.postUrl(uri);
             _setHeaders(request, provider, settings, currentKey, stream: false, isManaged: isManagedMode);
             request.headers.contentType = ContentType.json;
@@ -7054,7 +7057,10 @@ class ChatClient {
         for (int retry = 0; retry < 3; retry++) {
           try {
             final baseUrl = isManagedMode ? managedUrl : _baseUrl(provider, settings);
-            final uri = Uri.parse('$baseUrl/v1/chat/completions');
+            final urlString = baseUrl.endsWith('/v1') 
+                ? '$baseUrl/chat/completions' 
+                : '$baseUrl/v1/chat/completions';
+            final uri = Uri.parse(urlString);
             final request = await client.postUrl(uri);
             _setHeaders(request, provider, settings, currentKey, stream: true, isManaged: isManagedMode);
             request.headers.contentType = ContentType.json;
