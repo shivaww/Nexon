@@ -24,9 +24,12 @@ Usage::
 import argparse
 import asyncio
 from aiohttp import web
+import hashlib
 import json
 import logging
 import os
+import re
+import shlex
 import signal
 import sys
 import time
@@ -183,14 +186,17 @@ class TermuxForgeBridge:
         r.register("kill_command", self._kill_command)
 
         # ── File operations ───────────────────────────────────────────
-        r.register("read_file", self._read_file)
-        r.register("write_file", self._write_file)
-        r.register("edit_file", self._edit_file)
-        r.register("list_files", self._list_files)
-        r.register("search_files", self._search_files)
-        r.register("file_info", self._file_info)
-        r.register("multi_read", self._multi_read)
-        r.register("symbol_search", self._symbol_search)
+        # Legacy names are kept for compatibility, but they route to the
+        # richer guarded implementations so older prompts do not bypass IDE
+        # output, binary guards, path normalization, or checkpoint support.
+        r.register("read_file", self._hybrid_read_file_rich)
+        r.register("write_file", self._hybrid_write_file_rich)
+        r.register("edit_file", self._legacy_edit_file_rich)
+        r.register("list_files", self._hybrid_tree)
+        r.register("search_files", self._hybrid_search_rich)
+        r.register("file_info", self._hybrid_stat_path)
+        r.register("multi_read", self._legacy_multi_read_rich)
+        r.register("symbol_search", self._symbol_references)
 
         # ── Git operations ────────────────────────────────────────────
         r.register("git_status", self._git_status)
@@ -203,7 +209,7 @@ class TermuxForgeBridge:
         r.register("flutter_run", self._flutter_run)
         r.register("flutter_test", self._flutter_test)
         r.register("flutter_build", self._flutter_build)
-        r.register("dart_analyze", self._dart_analyze)
+        r.register("dart_analyze", self._dart_diagnostics)
 
         # ── Package management ────────────────────────────────────────
         r.register("install_package", self._install_package)
@@ -273,6 +279,148 @@ class TermuxForgeBridge:
         r.register("service_logs",    self._service_logs)
         r.register("stop_service",    self._stop_service)
 
+        # ── IDE / Analyzer Tools ─────────────────────────────────────
+        r.register("dart_diagnostics", self._dart_diagnostics)
+        r.register("dart_format",      self._dart_format)
+        r.register("symbol_references", self._symbol_references)
+
+    # ── Workspace / path helpers ─────────────────────────────────────
+
+    def _effective_cwd(self, cwd: str = DEFAULT_CWD, workspace_dir: str = "") -> str:
+        """Choose the working directory for command-like tools."""
+        candidate = cwd
+        if workspace_dir and (not candidate or candidate == DEFAULT_CWD):
+            candidate = workspace_dir
+        candidate = self.translate_termux_path(candidate or DEFAULT_CWD)
+        return os.path.expanduser(str(candidate))
+
+    def _render_command_ai_block(self, result: Any) -> str:
+        """Render a CommandResult as a rich block without changing raw stdout."""
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        stdout_lines = stdout.splitlines()
+        stderr_lines = stderr.splitlines()
+        header = OutputRenderer.shell_header(
+            command=result.command,
+            exit_code=result.exit_code,
+            duration_ms=int(result.duration * 1000),
+            cwd=result.cwd,
+            timed_out=result.timed_out,
+            line_count=len(stdout_lines),
+        )
+        parts = [header]
+        if stdout_lines:
+            parts.append(stdout.rstrip())
+        if stderr_lines:
+            parts.append(f"\n{OutputRenderer._divider()}")
+            parts.append("STDERR:" if result.exit_code == 0 else "STDERR (command failed):")
+            parts.append(stderr.rstrip())
+        if result.timed_out:
+            parts.append(f"\n{OutputRenderer._divider()}")
+            parts.append(f"Timed out after {result.duration:.1f}s.")
+        parts.append(OutputRenderer._divider())
+        return "\n".join(parts)
+
+    def _file_sha256(self, path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _assert_expected_file_state(
+        self,
+        path: str,
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        expected_exists: bool | None = None,
+    ) -> None:
+        """Protect against overwriting files changed outside the agent flow."""
+        p = Path(path).expanduser()
+        exists = p.exists()
+        if expected_exists is not None and exists != expected_exists:
+            raise JsonRpcError(
+                ErrorCode.VALIDATION_ERROR,
+                f"File state changed for {path}: expected exists={expected_exists}, actual exists={exists}",
+            )
+        if expected_sha256:
+            if not p.is_file():
+                raise JsonRpcError(ErrorCode.VALIDATION_ERROR, f"Cannot verify SHA-256; not a file: {path}")
+            actual = self._file_sha256(str(p))
+            if actual.lower() != expected_sha256.lower():
+                raise JsonRpcError(
+                    ErrorCode.VALIDATION_ERROR,
+                    f"File changed before edit: SHA-256 mismatch for {path}",
+                    data={"expectedSha256": expected_sha256, "actualSha256": actual},
+                )
+        if expected_mtime is not None:
+            if not exists:
+                raise JsonRpcError(ErrorCode.VALIDATION_ERROR, f"Cannot verify mtime; path missing: {path}")
+            actual_mtime = p.stat().st_mtime
+            if abs(actual_mtime - float(expected_mtime)) > 0.001:
+                raise JsonRpcError(
+                    ErrorCode.VALIDATION_ERROR,
+                    f"File changed before edit: mtime mismatch for {path}",
+                    data={"expectedMtime": expected_mtime, "actualMtime": actual_mtime},
+                )
+
+    def _checkpoint_paths(self, paths: list[str], max_files: int = 500) -> list[str]:
+        """Expand directories into a bounded list of files for checkpoints."""
+        skip_dirs = {".git", ".dart_tool", "build", "node_modules", "__pycache__", ".gradle"}
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for raw in paths:
+            if not raw:
+                continue
+            p = Path(raw).expanduser()
+            if p.is_dir():
+                for root, dirs, files in os.walk(str(p)):
+                    dirs[:] = [d for d in dirs if d not in skip_dirs]
+                    for name in files:
+                        fp = os.path.join(root, name)
+                        if fp not in seen:
+                            expanded.append(fp)
+                            seen.add(fp)
+                        if len(expanded) >= max_files:
+                            return expanded
+            else:
+                fp = str(p)
+                if fp not in seen:
+                    expanded.append(fp)
+                    seen.add(fp)
+        return expanded
+
+    async def _auto_checkpoint(
+        self,
+        action: str,
+        paths: list[str],
+        workspace_dir: str = "",
+        include_git: bool = True,
+    ) -> dict | None:
+        """Create a bounded safety checkpoint before mutating files."""
+        checkpoint_paths = self._checkpoint_paths(paths)
+        if not checkpoint_paths:
+            return None
+        workspace = workspace_dir or str(Path(checkpoint_paths[0]).parent)
+        manager = CheckpointManager(workspace=workspace)
+        cp = await manager.create(
+            name=f"auto_{action}_{int(time.time())}",
+            paths=checkpoint_paths,
+            include_git=include_git,
+            description=f"Automatic checkpoint before {action}",
+        )
+        return cp.to_dict()
+
+    def _with_checkpoint(self, result: dict, checkpoint: dict | None) -> dict:
+        if checkpoint:
+            result["checkpoint"] = checkpoint
+            if isinstance(result.get("stdout"), str):
+                result["stdout"] += (
+                    f"\n{OutputRenderer._divider()}\n"
+                    f"  Safety checkpoint: {checkpoint.get('id')} ({checkpoint.get('fileCount')} file(s))"
+                )
+        return result
+
     # ══════════════════════════════════════════════════════════════════
     #  METHOD HANDLERS
     # ══════════════════════════════════════════════════════════════════
@@ -287,13 +435,19 @@ class TermuxForgeBridge:
         env: dict | None = None,
         stream: bool = False,
         process_id: str | None = None,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Execute a shell command with safety checks."""
+        cwd = self._effective_cwd(cwd, workspace_dir)
+
         # Auto-detect long-running background server commands
         is_server, _, _ = detect_server_command(command)
         if is_server:
             logger.info("Auto-intercepted long-running server command: %s", command)
-            return await self._run_background(command=command, cwd=cwd, env=env)
+            return await self._run_background(
+                command=command, cwd=cwd, env=env, workspace_dir=workspace_dir,
+            )
 
         try:
             if stream:
@@ -314,7 +468,11 @@ class TermuxForgeBridge:
                     command=command, cwd=cwd, timeout=timeout,
                     env=env, process_id=process_id,
                 )
-            return result.to_dict()
+            data = result.to_dict()
+            data["rawStdout"] = data.get("stdout", "")
+            data["rawStderr"] = data.get("stderr", "")
+            data["aiBlock"] = self._render_command_ai_block(result)
+            return data
         except ValueError as exc:
             raise JsonRpcError(ErrorCode.COMMAND_BLOCKED, str(exc))
 
@@ -991,6 +1149,8 @@ class TermuxForgeBridge:
         max_lines: int = 120,
         encoding: str = "utf-8",
         show_line_numbers: bool = True,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Read a file with numbered lines, language header, and navigation hints."""
         if not self.security.validate_path(path):
@@ -1010,12 +1170,61 @@ class TermuxForgeBridge:
         except Exception as exc:
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
+    async def _legacy_multi_read_rich(
+        self,
+        path: str,
+        ranges: list | str,
+        max_lines_per_file: int = 120,
+        workspace_dir: str = "",
+        **kw,
+    ) -> dict:
+        """Compatibility adapter for old multi_read(path, ranges) calls."""
+        parsed_reads: list[dict[str, Any]] = []
+        raw_ranges = ranges.split(",") if isinstance(ranges, str) else ranges
+        if not isinstance(raw_ranges, list):
+            raise JsonRpcError(ErrorCode.INVALID_PARAMS, "ranges must be a list or comma-separated string")
+
+        for item in raw_ranges:
+            start = end = None
+            if isinstance(item, str):
+                parts = item.strip().split("-", 1)
+                if len(parts) == 2:
+                    start, end = parts
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                start, end = item[0], item[1]
+            elif isinstance(item, dict):
+                start = item.get("start_line", item.get("start"))
+                end = item.get("end_line", item.get("end"))
+            if start is not None and end is not None:
+                parsed_reads.append({
+                    "path": path,
+                    "start_line": int(start),
+                    "end_line": int(end),
+                })
+
+        if not parsed_reads:
+            raise JsonRpcError(ErrorCode.INVALID_PARAMS, "No valid line ranges specified")
+
+        return await self._hybrid_multi_read_rich(
+            reads=parsed_reads,
+            max_lines_per_file=max_lines_per_file,
+            workspace_dir=workspace_dir,
+            **kw,
+        )
+
     async def _hybrid_multi_read_rich(
         self,
         reads: list,
         max_lines_per_file: int = 120,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Batch-read multiple files or ranges from one file in one call."""
+        base_dir = workspace_dir or str(kw.get("cwd") or "")
+        if base_dir:
+            for spec in reads:
+                if isinstance(spec, dict) and isinstance(spec.get("path"), str):
+                    spec["path"] = self._resolve_path_value(spec["path"], base_dir)
         # Validate paths before reading
         for spec in reads:
             p = spec.get("path", "")
@@ -1027,6 +1236,38 @@ class TermuxForgeBridge:
         except Exception as exc:
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
+    async def _legacy_edit_file_rich(
+        self,
+        path: str,
+        search: str,
+        replace: str,
+        count: int = 1,
+        encoding: str = "utf-8",
+        backup: bool = True,
+        workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
+        **kw,
+    ) -> dict:
+        """Compatibility adapter for old edit_file(path, search, replace) calls."""
+        return await self._hybrid_patch_file(
+            path=path,
+            patches=[{
+                "search": search,
+                "replace": replace,
+                "count": count,
+                "label": "legacy edit_file",
+            }],
+            encoding=encoding,
+            backup=backup,
+            workspace_dir=workspace_dir,
+            expected_sha256=expected_sha256,
+            expected_mtime=expected_mtime,
+            auto_checkpoint=auto_checkpoint,
+            **kw,
+        )
+
     async def _hybrid_write_file_rich(
         self,
         path: str,
@@ -1034,14 +1275,24 @@ class TermuxForgeBridge:
         encoding: str = "utf-8",
         create_dirs: bool = True,
         backup: bool = True,
+        workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        expected_exists: bool | None = None,
+        auto_checkpoint: bool = True,
+        **kw,
     ) -> dict:
         """Atomically write a file with auto-backup and write verification block."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
+            self._assert_expected_file_state(path, expected_sha256, expected_mtime, expected_exists)
+            checkpoint = await self._auto_checkpoint("write_file", [path], workspace_dir) if auto_checkpoint else None
             result = write_file_rich(path, content, encoding, create_dirs, backup)
-            return result.to_dict()
+            return self._with_checkpoint(result.to_dict(), checkpoint)
         except Exception as exc:
+            if isinstance(exc, JsonRpcError):
+                raise
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     async def _hybrid_patch_file(
@@ -1050,16 +1301,25 @@ class TermuxForgeBridge:
         patches: list,
         encoding: str = "utf-8",
         backup: bool = True,
+        workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
+        **kw,
     ) -> dict:
         """Apply multiple search-replace patches atomically with unified diff output."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
+            self._assert_expected_file_state(path, expected_sha256, expected_mtime)
+            checkpoint = await self._auto_checkpoint("patch_file", [path], workspace_dir) if auto_checkpoint else None
             result = patch_file_rich(path, patches, encoding, backup)
-            return result.to_dict()
+            return self._with_checkpoint(result.to_dict(), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
+            if isinstance(exc, JsonRpcError):
+                raise
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     async def _hybrid_replace_lines(
@@ -1070,16 +1330,25 @@ class TermuxForgeBridge:
         new_content: str,
         encoding: str = "utf-8",
         backup: bool = True,
+        workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
+        **kw,
     ) -> dict:
         """Replace a line range with new content, returning a diff."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
+            self._assert_expected_file_state(path, expected_sha256, expected_mtime)
+            checkpoint = await self._auto_checkpoint("replace_lines", [path], workspace_dir) if auto_checkpoint else None
             result = replace_lines_rich(path, start_line, end_line, new_content, encoding, backup)
-            return result.to_dict()
+            return self._with_checkpoint(result.to_dict(), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
+            if isinstance(exc, JsonRpcError):
+                raise
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     async def _hybrid_insert_lines(
@@ -1088,16 +1357,25 @@ class TermuxForgeBridge:
         after_line: int,
         content: str,
         encoding: str = "utf-8",
+        workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
+        **kw,
     ) -> dict:
         """Insert lines after a specific line number (0 = beginning of file)."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
+            self._assert_expected_file_state(path, expected_sha256, expected_mtime)
+            checkpoint = await self._auto_checkpoint("insert_lines", [path], workspace_dir) if auto_checkpoint else None
             result = insert_lines_rich(path, after_line, content, encoding)
-            return result.to_dict()
+            return self._with_checkpoint(result.to_dict(), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
+            if isinstance(exc, JsonRpcError):
+                raise
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     async def _hybrid_delete_lines(
@@ -1106,22 +1384,33 @@ class TermuxForgeBridge:
         start_line: int,
         end_line: int,
         encoding: str = "utf-8",
+        workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
+        **kw,
     ) -> dict:
         """Delete a specific line range from a file with backup."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
+            self._assert_expected_file_state(path, expected_sha256, expected_mtime)
+            checkpoint = await self._auto_checkpoint("delete_lines", [path], workspace_dir) if auto_checkpoint else None
             result = delete_lines_rich(path, start_line, end_line, encoding)
-            return result.to_dict()
+            return self._with_checkpoint(result.to_dict(), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
+            if isinstance(exc, JsonRpcError):
+                raise
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     async def _hybrid_file_outline(
         self,
         path: str,
         encoding: str = "utf-8",
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Extract classes, functions, and methods with line numbers from a source file."""
         if not self.security.validate_path(path):
@@ -1142,8 +1431,16 @@ class TermuxForgeBridge:
         case_sensitive: bool = False,
         max_matches: int = 80,
         context_lines: int = 2,
+        include: list | str | None = None,
+        case_insensitive: bool | None = None,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Search text/regex across files using ripgrep or grep with context lines."""
+        if include is not None and extensions is None:
+            extensions = include if isinstance(include, list) else [include]
+        if case_insensitive is not None:
+            case_sensitive = not case_insensitive
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
@@ -1165,8 +1462,13 @@ class TermuxForgeBridge:
         max_depth: int = 4,
         show_hidden: bool = False,
         extensions: list | None = None,
+        include: list | str | None = None,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Annotated directory tree with sizes, ages, and smart directory filtering."""
+        if include is not None and extensions is None:
+            extensions = include if isinstance(include, list) else [include]
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
@@ -1181,6 +1483,8 @@ class TermuxForgeBridge:
         path_a: str,
         path_b: str,
         context: int = 5,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """Compute a unified diff between two files."""
         for p in [path_a, path_b]:
@@ -1203,6 +1507,8 @@ class TermuxForgeBridge:
         timeout: int = 30,
         env: dict | None = None,
         max_stdout_lines: int = 120,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """
         Execute a shell command using the hybrid engine.
@@ -1211,6 +1517,8 @@ class TermuxForgeBridge:
         numbered stdout (optional), stderr on failure, and navigation hints.
         This is the premium alternative to execute_command for AI agents.
         """
+        cwd = self._effective_cwd(cwd, workspace_dir)
+
         # Security check
         safety = self.security.evaluate(command, cwd)
         if not safety.allowed:
@@ -1220,7 +1528,9 @@ class TermuxForgeBridge:
         is_server, _, _ = detect_server_command(command)
         if is_server:
             logger.info("Auto-intercepted long-running server command in shell_rich: %s", command)
-            return await self._run_background(command=command, cwd=cwd, env=env)
+            return await self._run_background(
+                command=command, cwd=cwd, env=env, workspace_dir=workspace_dir,
+            )
 
         result = await hybrid_shell_exec(command, cwd, timeout, env)
 
@@ -1244,27 +1554,39 @@ class TermuxForgeBridge:
         encoding: str = "utf-8",
         create_if_missing: bool = True,
         workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        expected_exists: bool | None = None,
+        auto_checkpoint: bool = True,
         **kw,
     ) -> dict:
         """Append content to a file (creates if missing)."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
-        return append_file_rich(
+        self._assert_expected_file_state(path, expected_sha256, expected_mtime, expected_exists)
+        checkpoint = await self._auto_checkpoint("append_file", [path], workspace_dir) if auto_checkpoint else None
+        result = append_file_rich(
             path=path, content=content, encoding=encoding,
             create_if_missing=create_if_missing,
         )
+        return self._with_checkpoint(result, checkpoint)
 
     async def _hybrid_delete_path(
         self,
         path: str,
         recursive: bool = False,
         workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
         **kw,
     ) -> dict:
         """Delete a file or directory with safety guards."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
-        return delete_path_rich(path=path, recursive=recursive)
+        self._assert_expected_file_state(path, expected_sha256, expected_mtime)
+        checkpoint = await self._auto_checkpoint("delete_path", [path], workspace_dir) if auto_checkpoint else None
+        return self._with_checkpoint(delete_path_rich(path=path, recursive=recursive), checkpoint)
 
     async def _hybrid_move_path(
         self,
@@ -1272,6 +1594,9 @@ class TermuxForgeBridge:
         dest: str,
         overwrite: bool = False,
         workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
         **kw,
     ) -> dict:
         """Move/rename a file or directory."""
@@ -1279,7 +1604,12 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Source path not allowed: {src}")
         if not self.security.validate_path(dest):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Dest path not allowed: {dest}")
-        return move_path_rich(src=src, dest=dest, overwrite=overwrite)
+        self._assert_expected_file_state(src, expected_sha256, expected_mtime)
+        checkpoint_paths = [src]
+        if Path(dest).exists():
+            checkpoint_paths.append(dest)
+        checkpoint = await self._auto_checkpoint("move_path", checkpoint_paths, workspace_dir) if auto_checkpoint else None
+        return self._with_checkpoint(move_path_rich(src=src, dest=dest, overwrite=overwrite), checkpoint)
 
     async def _hybrid_copy_path(
         self,
@@ -1287,6 +1617,9 @@ class TermuxForgeBridge:
         dest: str,
         overwrite: bool = False,
         workspace_dir: str = "",
+        expected_dest_sha256: str = "",
+        expected_dest_mtime: float | None = None,
+        auto_checkpoint: bool = True,
         **kw,
     ) -> dict:
         """Copy a file or directory."""
@@ -1294,7 +1627,12 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Source path not allowed: {src}")
         if not self.security.validate_path(dest):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Dest path not allowed: {dest}")
-        return copy_path_rich(src=src, dest=dest, overwrite=overwrite)
+        if Path(dest).exists():
+            self._assert_expected_file_state(dest, expected_dest_sha256, expected_dest_mtime)
+        checkpoint = None
+        if auto_checkpoint and overwrite and Path(dest).exists():
+            checkpoint = await self._auto_checkpoint("copy_overwrite", [dest], workspace_dir)
+        return self._with_checkpoint(copy_path_rich(src=src, dest=dest, overwrite=overwrite), checkpoint)
 
     async def _hybrid_mkdir_path(
         self,
@@ -1325,12 +1663,152 @@ class TermuxForgeBridge:
         mode: str,
         recursive: bool = False,
         workspace_dir: str = "",
+        expected_sha256: str = "",
+        expected_mtime: float | None = None,
+        auto_checkpoint: bool = True,
         **kw,
     ) -> dict:
         """Change file/directory permissions."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
-        return chmod_path_rich(path=path, mode=mode, recursive=recursive)
+        self._assert_expected_file_state(path, expected_sha256, expected_mtime)
+        checkpoint = await self._auto_checkpoint("chmod_path", [path], workspace_dir) if auto_checkpoint else None
+        result = chmod_path_rich(path=path, mode=mode, recursive=recursive)
+        if checkpoint and isinstance(result.get("stdout"), str):
+            result["stdout"] += "\n  Note: checkpoint restores file contents; permission rollback may require chmod."
+        return self._with_checkpoint(result, checkpoint)
+
+    # ══════════════════════════════════════════════════════════════════
+    #  IDE / ANALYZER HANDLERS
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _dart_diagnostics(
+        self,
+        path: str = "",
+        paths: list | None = None,
+        cwd: str = DEFAULT_CWD,
+        workspace_dir: str = "",
+        fatal_infos: bool = False,
+        fatal_warnings: bool = False,
+        **kw,
+    ) -> dict:
+        """Run Dart analyzer and return machine-readable diagnostics when possible."""
+        cwd = self._effective_cwd(cwd, workspace_dir)
+        targets = paths if paths else ([path] if path else [cwd])
+        target = " ".join(shlex.quote(str(p)) for p in targets)
+        if not self.security.validate_path(cwd):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"CWD not allowed: {cwd}")
+        for p in targets:
+            if p and not self.security.validate_path(str(p)):
+                raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {p}")
+
+        flags = []
+        if fatal_infos:
+            flags.append("--fatal-infos")
+        if fatal_warnings:
+            flags.append("--fatal-warnings")
+        command = f"dart analyze --format=json {' '.join(flags)} {target}".strip()
+        result = await self.executor.execute(command, cwd=cwd, timeout=120)
+
+        diagnostics: list[dict] = []
+        parsed_json: dict | None = None
+        if result.stdout.strip().startswith("{"):
+            try:
+                parsed_json = json.loads(result.stdout)
+                diagnostics = parsed_json.get("diagnostics", []) or []
+            except json.JSONDecodeError:
+                parsed_json = None
+
+        if parsed_json is None:
+            fallback = await self.executor.execute(
+                f"dart analyze {' '.join(flags)} {target}".strip(),
+                cwd=cwd,
+                timeout=120,
+            )
+            result = fallback
+            for line in result.stdout.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(("error", "warning", "info")):
+                    diagnostics.append({"raw": stripped})
+
+        stdout = result.stdout if result.stdout.strip() else "No analyzer output."
+        block = "\n".join([
+            OutputRenderer.tool_header(
+                "DART DIAGNOSTICS",
+                f"{len(diagnostics)} diagnostic(s)  │  exit={result.exit_code}  │  {cwd}",
+            ),
+            OutputRenderer._divider(),
+            stdout.rstrip(),
+            OutputRenderer._divider(),
+        ])
+        return {
+            "stdout": block,
+            "rawStdout": result.stdout,
+            "stderr": result.stderr,
+            "exitCode": result.exit_code,
+            "success": result.exit_code == 0,
+            "diagnostics": diagnostics,
+            "cwd": cwd,
+            "path": path or "",
+            "paths": targets,
+        }
+
+    async def _dart_format(
+        self,
+        path: str = "",
+        cwd: str = DEFAULT_CWD,
+        workspace_dir: str = "",
+        output: str = "write",
+        set_exit_if_changed: bool = False,
+        **kw,
+    ) -> dict:
+        """Run dart format on a file or directory."""
+        cwd = self._effective_cwd(cwd, workspace_dir)
+        target = path or cwd
+        if not self.security.validate_path(cwd):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"CWD not allowed: {cwd}")
+        if path and not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        parts = ["dart", "format"]
+        if output in {"none", "show", "json"}:
+            parts.extend(["--output", output])
+        if set_exit_if_changed:
+            parts.append("--set-exit-if-changed")
+        parts.append(shlex.quote(target))
+        result = await self.executor.execute(" ".join(parts), cwd=cwd, timeout=120)
+        data = result.to_dict()
+        data["aiBlock"] = self._render_command_ai_block(result)
+        return data
+
+    async def _symbol_references(
+        self,
+        symbol: str,
+        path: str = DEFAULT_CWD,
+        extensions: list | None = None,
+        workspace_dir: str = "",
+        max_matches: int = 120,
+        **kw,
+    ) -> dict:
+        """Find likely references to a symbol across source files."""
+        if not symbol.strip():
+            raise JsonRpcError(ErrorCode.INVALID_PARAMS, "symbol is required")
+        if not self.security.validate_path(path):
+            raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        query = rf"\b{re.escape(symbol)}\b"
+        try:
+            result = await search_files_rich(
+                query=query,
+                path=path,
+                extensions=extensions or ["dart", "py", "js", "ts", "kt", "java"],
+                case_sensitive=True,
+                max_matches=max_matches,
+                context_lines=1,
+            )
+            data = result.to_dict()
+            data["symbol"] = symbol
+            return data
+        except Exception as exc:
+            raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
 
     # ══════════════════════════════════════════════════════════════════
     #  BACKGROUND SERVICE HANDLERS
@@ -1343,6 +1821,8 @@ class TermuxForgeBridge:
         name: str = "",
         startup_wait: float = 4.0,
         env: dict | None = None,
+        workspace_dir: str = "",
+        **kw,
     ) -> dict:
         """
         Launch a long-running process (HTTP server, MCP server, dev server, etc.)
@@ -1369,6 +1849,8 @@ class TermuxForgeBridge:
         env : dict, optional
             Extra environment variables.
         """
+        cwd = self._effective_cwd(cwd, workspace_dir)
+
         # Security check
         safety = self.security.evaluate(command, cwd)
         if not safety.allowed:
@@ -1488,6 +1970,26 @@ class TermuxForgeBridge:
             
         return path_str
 
+    def _resolve_path_value(self, value: Any, workspace: str = "") -> Any:
+        """Translate Termux aliases and resolve relative paths inside workspace."""
+        if not isinstance(value, str):
+            return value
+
+        value = self.translate_termux_path(value.strip())
+        if not value:
+            return value
+        if value.startswith(("http://", "https://")):
+            return value
+        if value.startswith("~"):
+            return os.path.expanduser(value)
+        if os.path.isabs(value):
+            return value
+
+        if workspace:
+            resolved_workspace = self._resolve_path_value(workspace, "")
+            return os.path.abspath(os.path.join(str(resolved_workspace), value))
+        return os.path.abspath(os.path.expanduser(value))
+
     def translate_termux_path_in_str(self, val: Any) -> Any:
         if not isinstance(val, str):
             return val
@@ -1495,19 +1997,33 @@ class TermuxForgeBridge:
         actual_home = os.path.expanduser("~")
         return val.replace(termux_home, actual_home)
 
-    def resolve_params_paths(self, params: Any) -> Any:
+    def resolve_params_paths(self, params: Any, workspace: str = "") -> Any:
         if isinstance(params, dict):
+            local_workspace = (
+                params.get("workspace_dir")
+                or params.get("workspaceDir")
+                or workspace
+                or params.get("cwd")
+                or ""
+            )
+            if local_workspace:
+                local_workspace = self._resolve_path_value(local_workspace, "")
             new_params = {}
             for k, v in params.items():
-                if k in ("path", "cwd", "workspace_dir", "workspaceDir", "directory"):
-                    new_params[k] = self.translate_termux_path(v)
+                if k in (
+                    "path", "file", "cwd", "workspace_dir", "workspaceDir",
+                    "directory", "dir", "dir_path", "src", "dest",
+                    "path_a", "path_b", "output_dir", "target",
+                ):
+                    base = "" if k in ("workspace_dir", "workspaceDir", "cwd") else local_workspace
+                    new_params[k] = self._resolve_path_value(v, base)
                 elif k in ("command", "args"):
                     new_params[k] = self.translate_termux_path_in_str(v) if isinstance(v, str) else ([self.translate_termux_path_in_str(item) for item in v] if isinstance(v, list) else v)
                 else:
-                    new_params[k] = self.resolve_params_paths(v)
+                    new_params[k] = self.resolve_params_paths(v, local_workspace)
             return new_params
         elif isinstance(params, list):
-            return [self.resolve_params_paths(item) for item in params]
+            return [self.resolve_params_paths(item, workspace) for item in params]
         return params
 
     async def _handle_http_post(self, request: web.Request) -> web.Response:

@@ -42,12 +42,14 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import json
 import logging
 import math
 import mimetypes
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -73,6 +75,7 @@ MAX_LINES_HARD = 600
 
 # Max raw bytes in any single output to the AI
 MAX_OUTPUT_BYTES = 40_000
+MAX_TEXT_FILE_READ_BYTES = 2_000_000
 
 # Languages we know about (extension → name)
 LANG_MAP: dict[str, str] = {
@@ -283,6 +286,69 @@ def _read_lines_safe(path: Path, encoding: str = "utf-8") -> list[str]:
             return f.readlines()
 
 
+def _is_binary_file(path: Path, sample_size: int = 8192) -> bool:
+    """Detect binary files by sampling for NUL bytes and decode failures."""
+    try:
+        sample = path.read_bytes()[:sample_size]
+    except OSError:
+        return False
+    if b"\x00" in sample:
+        return True
+    try:
+        sample.decode("utf-8")
+        return False
+    except UnicodeDecodeError:
+        textish = sum(1 for b in sample if b in b"\n\r\t" or 32 <= b <= 126)
+        return bool(sample) and (textish / len(sample)) < 0.85
+
+
+def _sha256_file(path: Path) -> str:
+    """Compute a file SHA-256 hash without loading it into memory."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_line_window_safe(
+    path: Path,
+    start_line: int,
+    end_line: int,
+    encoding: str = "utf-8",
+) -> tuple[list[str], int, bool]:
+    """
+    Stream a bounded line window from a large file.
+
+    Returns selected lines, last line number visited, and whether the full file
+    line count is unknown because reading stopped at the requested window.
+    """
+    selected: list[str] = []
+    last_seen = 0
+    stopped_early = False
+    try:
+        with open(path, encoding=encoding, errors="replace") as f:
+            for line_no, line in enumerate(f, start=1):
+                last_seen = line_no
+                if line_no < start_line:
+                    continue
+                if line_no > end_line:
+                    stopped_early = True
+                    break
+                selected.append(line)
+    except UnicodeDecodeError:
+        with open(path, encoding="latin-1", errors="replace") as f:
+            for line_no, line in enumerate(f, start=1):
+                last_seen = line_no
+                if line_no < start_line:
+                    continue
+                if line_no > end_line:
+                    stopped_early = True
+                    break
+                selected.append(line)
+    return selected, last_seen, stopped_early
+
+
 def _number_lines(lines: list[str], start: int) -> str:
     """Format lines with gutter line numbers."""
     parts = []
@@ -389,7 +455,7 @@ class ShellResult:
                 parts.append(
                     f"\n{OutputRenderer._divider()}\n"
                     f"  ▶ {hidden:,} more lines not shown. "
-                    f"Pipe to head/tail or use search_files to filter.\n"
+                    f"Pipe to head/tail or use search_rich to filter.\n"
                 )
 
         # ── Stderr (always show on failure, or if non-empty) ──
@@ -642,26 +708,61 @@ def read_file_rich(
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if not p.is_file():
-        raise IsADirectoryError(f"Path is a directory (use list_files): {path}")
+        raise IsADirectoryError(f"Path is a directory (use tree): {path}")
 
     stat_result = p.stat()
     size_bytes = stat_result.st_size
     mtime = stat_result.st_mtime
     lang = LANG_MAP.get(p.suffix.lower(), "Text")
 
-    # Read all lines
-    all_lines = _read_lines_safe(p, encoding)
-    total_lines = len(all_lines)
+    if _is_binary_file(p):
+        mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+        block = "\n".join([
+            OutputRenderer.tool_header(
+                f"BINARY FILE: {_rel_path(str(p))}",
+                f"{mime}  │  {_human_size(size_bytes)}  │  sha256={_sha256_file(p)[:12]}...",
+            ),
+            OutputRenderer._divider(),
+            "  Binary content was not read into the chat context.",
+            "  Use stat_path for metadata, copy_path/move_path for file operations,",
+            "  or a media-specific tool for preview/inspection.",
+            OutputRenderer._divider(),
+        ])
+        return FileReadResult(
+            path=str(p),
+            content_block=block,
+            total_lines=0,
+            shown_lines=0,
+            start_line=0,
+            end_line=0,
+            size_bytes=size_bytes,
+            encoding="binary",
+            language="Binary",
+            was_truncated=True,
+        )
 
     # Clamp range
     start_line = max(1, start_line)
     if end_line is None:
-        end_line = min(start_line + max_lines - 1, total_lines)
-    end_line = min(end_line, total_lines)
+        end_line = start_line + max_lines - 1
     if end_line - start_line + 1 > MAX_LINES_HARD:
         end_line = start_line + MAX_LINES_HARD - 1
 
-    selected = all_lines[start_line - 1 : end_line]
+    large_window = size_bytes > MAX_TEXT_FILE_READ_BYTES
+    if large_window:
+        selected, last_seen, stopped_early = _read_line_window_safe(
+            p, start_line, end_line, encoding,
+        )
+        total_lines = last_seen
+        if stopped_early:
+            total_lines = max(total_lines, end_line)
+    else:
+        all_lines = _read_lines_safe(p, encoding)
+        total_lines = len(all_lines)
+        end_line = min(end_line, total_lines)
+        selected = all_lines[start_line - 1 : end_line]
+        stopped_early = False
+
     shown = len(selected)
 
     # Build content body
@@ -676,12 +777,20 @@ def read_file_rich(
     hints = []
     if start_line > 1:
         prev_start = max(1, start_line - max_lines)
-        hints.append(f"← Previous: multi_read path={path} ranges={prev_start}-{start_line - 1}")
+        hints.append(
+            f"Previous: multi_read_rich reads=[{{\"path\":\"{path}\",\"start_line\":{prev_start},\"end_line\":{start_line - 1}}}]"
+        )
     if end_line < total_lines:
         next_end = min(total_lines, end_line + max_lines)
-        hints.append(f"→ Next:     multi_read path={path} ranges={end_line + 1}-{next_end}")
+        hints.append(
+            f"Next: multi_read_rich reads=[{{\"path\":\"{path}\",\"start_line\":{end_line + 1},\"end_line\":{next_end}}}]"
+        )
     if total_lines > max_lines:
-        hints.append(f"↕ Jump:     read_file path={path} start_line=N")
+        hints.append(f"Jump: read_file_rich path={path} start_line=N")
+    if large_window:
+        hints.append(
+            "Large file mode: streamed only the requested window; total line count may be partial."
+        )
 
     # ── Assemble block ──
     header = OutputRenderer.file_header(
@@ -700,7 +809,7 @@ def read_file_rich(
     if hints:
         parts.append("  " + "\n  ".join(hints))
 
-    if was_truncated:
+    if was_truncated or large_window:
         parts.append("  ⚠ Content was truncated within this range. Use narrower ranges.")
 
     block = "\n".join(parts)
@@ -715,7 +824,7 @@ def read_file_rich(
         size_bytes=size_bytes,
         encoding=encoding,
         language=lang,
-        was_truncated=was_truncated,
+        was_truncated=was_truncated or large_window,
     )
 
 
@@ -889,7 +998,7 @@ def write_file_rich(
     parts = [header]
     if backup_path:
         parts.append(f"  Backup: {_rel_path(backup_path)}")
-    parts.append(f"  ✓ Write successful. Verify with: dart_analyze or read_file path={path}")
+    parts.append(f"  ✓ Write successful. Verify with: dart_diagnostics or read_file_rich path={path}")
     block = "\n".join(parts)
 
     return WriteResult(
@@ -1032,7 +1141,7 @@ def patch_file_rich(
         parts.append(diff_text)
 
     parts.append(f"\n{OutputRenderer._divider()}")
-    parts.append(f"  Next: verify with dart_analyze or read_file path={path}")
+    parts.append(f"  Next: verify with dart_diagnostics or read_file_rich path={path}")
 
     block = "\n".join(parts)
 
@@ -1244,7 +1353,7 @@ def file_outline_rich(path: str, encoding: str = "utf-8") -> FileOutlineResult:
                 parts.append(f"    {ln_str:>6}  {s['name']}")
 
     parts.append(f"\n{OutputRenderer._divider()}")
-    parts.append(f"  Tip: read_file path={path} start_line=N to jump to any symbol")
+    parts.append(f"  Tip: read_file_rich path={path} start_line=N to jump to any symbol")
     block = "\n".join(parts)
 
     return FileOutlineResult(
@@ -1323,17 +1432,17 @@ async def search_files_rich(
                 cmd_parts.extend(["--glob", f"*.{ext.lstrip('.')}"])
         cmd_parts.extend(["--max-count", "1"])  # 1 match per file for context
         cmd_parts.extend([f"--max-filesize=2M", query, path])
-        command = " ".join(f"'{p}'" if " " in p else p for p in cmd_parts)
+        command = " ".join(shlex.quote(str(p)) for p in cmd_parts)
     else:
         flags = "-rnI" if case_sensitive else "-rnIi"
         cmd_parts = ["grep", flags]
         if context_lines > 0:
             cmd_parts.extend([f"-{context_lines}"])
         if extensions:
-            includes = " ".join(f"--include='*.{e.lstrip('.')}'" for e in extensions)
-            cmd_parts.append(includes)
-        cmd_parts.extend([f"'{query}'", path])
-        command = " ".join(cmd_parts)
+            for ext in extensions:
+                cmd_parts.append(f"--include=*.{ext.lstrip('.')}")
+        cmd_parts.extend([query, path])
+        command = " ".join(shlex.quote(str(p)) for p in cmd_parts)
 
     result = await shell_exec(command, cwd=HOME, timeout=15)
 
@@ -1380,7 +1489,7 @@ async def search_files_rich(
         parts.append(f"\n  ⚠ Results capped at {max_matches}. Narrow the query or path.")
 
     parts.append(f"\n{OutputRenderer._divider()}")
-    parts.append(f"  Tip: read_file path=<file> start_line=<L> to jump to any match")
+    parts.append(f"  Tip: read_file_rich path=<file> start_line=<L> to jump to any match")
     block = "\n".join(parts)
 
     return SearchResult(query=query, path=path, matches=matches, backend=backend, block=block)

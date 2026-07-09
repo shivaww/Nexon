@@ -32,7 +32,8 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-
+      - name: Run analyzer
+        run: flutter analyze
 
   test:
     name: Unit & Widget Tests
@@ -91,7 +92,21 @@ jobs:
         run: dart run flutter_launcher_icons
 
       - name: Build release APK
-        run: flutter build apk --release || true
+        run: |
+          flutter build apk --release
+          if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            if [ -f android/app/build/outputs/flutter-apk/app-release.apk ]; then
+              mkdir -p build/app/outputs/flutter-apk
+              cp android/app/build/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-release.apk
+            elif [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+              mkdir -p build/app/outputs/flutter-apk
+              cp android/app/build/outputs/apk/release/app-release.apk build/app/outputs/flutter-apk/app-release.apk
+            fi
+          fi
+          if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            echo "Error: Release APK was not generated."
+            exit 1
+          fi
 
       - name: Find generated APKs
         run: |

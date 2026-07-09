@@ -11,9 +11,10 @@ See: https://www.jsonrpc.org/specification
 import json
 import logging
 import os
+import inspect
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, get_args, get_origin
 
 logger = logging.getLogger("termux_forge.protocol")
 
@@ -271,6 +272,138 @@ class MethodRouter:
         """Return all registered method names."""
         return sorted(self._methods.keys())
 
+    def _annotation_matches(self, annotation: Any, expected: type) -> bool:
+        """Return True when an annotation is or contains the expected type."""
+        if annotation is inspect._empty:
+            return False
+        if annotation is expected:
+            return True
+        origin = get_origin(annotation)
+        if origin is expected:
+            return True
+        return any(
+            arg is expected or get_origin(arg) is expected
+            for arg in get_args(annotation)
+        )
+
+    def _coerce_param(
+        self,
+        name: str,
+        value: Any,
+        parameter: inspect.Parameter | None,
+    ) -> Any:
+        """
+        Coerce XML-originated string parameters to handler-friendly types.
+
+        Flutter's XML tool format sends every value as a string. Without this,
+        values like ``recursive=false`` are truthy Python strings, which is both
+        incorrect and unsafe for file operations.
+        """
+        if isinstance(value, dict):
+            return {
+                k: self._coerce_param(k, v, None)
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            return [self._coerce_param(name, item, None) for item in value]
+        if not isinstance(value, str):
+            return value
+
+        text = value.strip()
+        lowered = text.lower()
+        annotation = parameter.annotation if parameter is not None else inspect._empty
+        default = parameter.default if parameter is not None else inspect._empty
+
+        expects_bool = (
+            self._annotation_matches(annotation, bool)
+            or isinstance(default, bool)
+            or name in {"recursive", "parents", "backup", "create_dirs",
+                        "create_if_missing", "overwrite", "stream",
+                        "show_hidden", "case_sensitive", "case_insensitive",
+                        "include_git", "release", "force",
+                        "auto_checkpoint", "expected_exists"}
+        )
+        if expects_bool:
+            if lowered in {"true", "1", "yes", "y", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "n", "off", ""}:
+                return False
+
+        expects_int = (
+            self._annotation_matches(annotation, int)
+            or (isinstance(default, int) and not isinstance(default, bool))
+            or name in {"timeout", "max_depth", "max_matches",
+                        "context_lines", "max_lines", "start_line",
+                        "end_line", "after_line", "limit",
+                        "max_lines_per_file", "lines"}
+        )
+        if expects_int and lowered and lowered.lstrip("-").isdigit():
+            return int(lowered)
+
+        expects_float = (
+            self._annotation_matches(annotation, float)
+            or isinstance(default, float)
+            or name in {"startup_wait", "expected_mtime", "expected_dest_mtime"}
+        )
+        if expects_float:
+            try:
+                return float(lowered)
+            except ValueError:
+                pass
+
+        expects_list = (
+            self._annotation_matches(annotation, list)
+            or isinstance(default, list)
+            or name in {"patches", "reads", "extensions", "paths",
+                        "args", "include", "includes"}
+        )
+        if expects_list:
+            if lowered.startswith("["):
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            if name in {"extensions", "include", "includes"}:
+                parts = [p.strip() for p in text.split(",") if p.strip()]
+                return [p.lstrip("*.") for p in parts]
+
+        expects_dict = (
+            self._annotation_matches(annotation, dict)
+            or isinstance(default, dict)
+            or name in {"env", "config", "inputs", "workflow"}
+        )
+        if expects_dict and lowered.startswith("{"):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        return value
+
+    def _normalize_aliases(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Map common client/prompt aliases to bridge handler names."""
+        normalized = dict(params)
+        if "workspaceDir" in normalized and "workspace_dir" not in normalized:
+            normalized["workspace_dir"] = normalized["workspaceDir"]
+        if "include" in normalized and "extensions" not in normalized:
+            normalized["extensions"] = normalized["include"]
+        if "includes" in normalized and "extensions" not in normalized:
+            normalized["extensions"] = normalized["includes"]
+        if "fileTypes" in normalized and "extensions" not in normalized:
+            normalized["extensions"] = normalized["fileTypes"]
+        if "directory" in normalized and "path" not in normalized:
+            normalized["path"] = normalized["directory"]
+        if "case_insensitive" in normalized and "case_sensitive" not in normalized:
+            raw = normalized["case_insensitive"]
+            if isinstance(raw, str):
+                raw = raw.strip().lower() in {"true", "1", "yes", "y", "on"}
+            normalized["case_sensitive"] = not bool(raw)
+        return normalized
+
     async def dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse:
         """
         Dispatch a JSON-RPC request to the appropriate handler.
@@ -299,15 +432,32 @@ class MethodRouter:
 
         try:
             if isinstance(request.params, dict):
+                normalized_params = self._normalize_aliases(request.params)
                 # Pre-process parameters to expand tilde paths ('~') for path-related arguments
                 path_keys = {'path', 'cwd', 'directory', 'dir', 'dir_path', 'dest', 'src', 'path_a', 'path_b', 'output_dir'}
                 processed_params = {}
-                for k, v in request.params.items():
+                for k, v in normalized_params.items():
                     if k in path_keys and isinstance(v, str):
                         processed_params[k] = os.path.expanduser(v)
                     else:
                         processed_params[k] = v
-                result = await handler(**processed_params)
+
+                # Central Parameter Filtering: Protect all bridge handlers from unexpected client/IDE arguments (e.g. workspace_dir)
+                sig = inspect.signature(handler)
+                has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                if has_var_keyword:
+                    coerced_params = {
+                        k: self._coerce_param(k, v, sig.parameters.get(k))
+                        for k, v in processed_params.items()
+                    }
+                    result = await handler(**coerced_params)
+                else:
+                    filtered_params = {
+                        k: self._coerce_param(k, v, sig.parameters.get(k))
+                        for k, v in processed_params.items()
+                        if k in sig.parameters
+                    }
+                    result = await handler(**filtered_params)
             elif isinstance(request.params, list):
                 result = await handler(*request.params)
             else:

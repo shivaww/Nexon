@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -31,14 +30,15 @@ import 'package:nexon/screens/onboarding_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   await Supabase.initialize(
     url: 'https://tvrqxugomnjthqrcdaih.supabase.co',
     anonKey: 'sb_publishable_AmHw2HDm_ZpxRt4jOlb-EA_vaVRTSG_',
   );
-  
+
   final prefs = await SharedPreferences.getInstance();
-  bool hasCompletedOnboarding = prefs.getBool('has_completed_onboarding_v2') ?? false;
+  bool hasCompletedOnboarding =
+      prefs.getBool('has_completed_onboarding_v2') ?? false;
 
   final session = Supabase.instance.client.auth.currentSession;
   if (hasCompletedOnboarding && session == null) {
@@ -82,6 +82,7 @@ class _ForgeChatAppState extends State<ForgeChatApp> {
       _showOnboarding = false;
     });
   }
+
   @override
   Widget build(BuildContext context) {
     final baseText = GoogleFonts.manropeTextTheme();
@@ -98,7 +99,7 @@ class _ForgeChatAppState extends State<ForgeChatApp> {
         scaffoldBackgroundColor: const Color(0xFFF7F2E8),
         textTheme: baseText,
       ),
-      home: _showOnboarding 
+      home: _showOnboarding
           ? OnboardingScreen(onComplete: _completeOnboarding)
           : const ChatHomePage(),
     );
@@ -182,7 +183,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
         final List decoded = jsonDecode(raw);
         setState(() {
           _sessions = decoded.map((s) => ChatSession.fromJson(s)).toList();
-          _activeSessionId = prefs.getString('active_session_id_v1') ??
+          _activeSessionId =
+              prefs.getString('active_session_id_v1') ??
               (_sessions.isNotEmpty ? _sessions.first.id : 'default');
         });
       } catch (_) {
@@ -204,7 +206,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     if (_activeSessionId != null) {
       await prefs.setString('active_session_id_v1', _activeSessionId!);
     }
-    
+
     // Fire and forget auto-sync to Google Drive
     DriveSyncService.syncToDrive(_sessions);
   }
@@ -215,11 +217,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _editingMessageIndex = null;
       final session = _sessions.firstWhere((s) => s.id == sessionId);
       _selectedProviderId = session.providerId;
-      final settings = _settings[_selectedProviderId] ??
+      final settings =
+          _settings[_selectedProviderId] ??
           ProviderSettings.defaults(_provider);
       if (session.model.isNotEmpty) {
-        _settings[_selectedProviderId] =
-            settings.copyWith(model: session.model);
+        _settings[_selectedProviderId] = settings.copyWith(
+          model: session.model,
+        );
       }
     });
     _saveSettings();
@@ -229,7 +233,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
   }
 
-    void _deleteSession(String sessionId) {
+  void _deleteSession(String sessionId) {
     if (_sessions.length <= 1) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cannot delete the last remaining chat.')),
@@ -284,7 +288,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     setState(() {
       final idx = _sessions.indexWhere((s) => s.id == sessionId);
       if (idx != -1) {
-        _sessions[idx] = _sessions[idx].copyWith(isPinned: !_sessions[idx].isPinned);
+        _sessions[idx] = _sessions[idx].copyWith(
+          isPinned: !_sessions[idx].isPinned,
+        );
       }
     });
     _saveSessions();
@@ -307,7 +313,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
     super.initState();
     _loadSettings();
   }
-
 
   @override
   void dispose() {
@@ -351,8 +356,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
         key = prefs.getString('fallback_api_key_${provider.id}');
         debugPrint('Secure storage read failed for ${provider.id}: $e');
       }
-      final current = nextSettings[provider.id] ??
-          ProviderSettings.defaults(provider);
+      final current =
+          nextSettings[provider.id] ?? ProviderSettings.defaults(provider);
       final normalized = current.maxTokens < 1
           ? current.copyWith(maxTokens: provider.defaultMaxTokens)
           : current;
@@ -371,9 +376,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _searchSettings = loadedSearchSettings;
       _agenticEnabled = agenticRaw ?? true;
       _shellPermission = prefs.getString('shell_permission_v1') ?? 'ask';
-      _agenticWorkspace = agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
+      _agenticWorkspace =
+          agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
-      _deepResearchEnabled = deepResearchRaw ?? false;
+      _deepResearchEnabled = false;
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
         _selectedProviderId = selected;
@@ -393,7 +399,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
         if (key.isEmpty) {
           await _secureStorage.delete(key: _keyStorageName(entry.key));
         } else {
-          await _secureStorage.write(key: _keyStorageName(entry.key), value: key);
+          await _secureStorage.write(
+            key: _keyStorageName(entry.key),
+            value: key,
+          );
         }
       } catch (e) {
         debugPrint('Secure storage write failed for ${entry.key}: $e');
@@ -406,10 +415,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
     await prefs.setString(_settingsKey, jsonEncode(metadata));
     await prefs.setString(_selectedProviderKey, _selectedProviderId);
-    await prefs.setString('search_settings_v1', jsonEncode(_searchSettings.toJson()));
+    await prefs.setString(
+      'search_settings_v1',
+      jsonEncode(_searchSettings.toJson()),
+    );
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
     await prefs.setString('shell_permission_v1', _shellPermission);
-    await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
+    await prefs.setBool('deep_research_enabled_v1', false);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
     // Auto-generate GitHub Actions workflow if Flutter project detected
@@ -436,7 +448,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
       // Extract app name from pubspec
       String appName = 'app';
-      final nameMatch = RegExp(r'^name:\s*(.+)$', multiLine: true).firstMatch(pubContent);
+      final nameMatch = RegExp(
+        r'^name:\s*(.+)$',
+        multiLine: true,
+      ).firstMatch(pubContent);
       if (nameMatch != null) appName = nameMatch.group(1)!.trim();
 
       const workflow = '''name: Build Flutter APK
@@ -476,19 +491,24 @@ jobs:
           retention-days: 7
 ''';
       workflowFile.writeAsStringSync(workflow);
-      debugPrint('[Forge] Auto-generated .github/workflows/build.yml for $appName');
+      debugPrint(
+        '[Forge] Auto-generated .github/workflows/build.yml for $appName',
+      );
     } catch (e) {
       debugPrint('[Forge] Workflow auto-gen failed: $e');
     }
   }
 
-
   Future<void> _selectProvider(String providerId) async {
     setState(() {
       _selectedProviderId = providerId;
-      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      final sessionIndex = _sessions.indexWhere(
+        (s) => s.id == _activeSessionId,
+      );
       if (sessionIndex != -1) {
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(providerId: providerId);
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          providerId: providerId,
+        );
       }
     });
     await _saveSettings();
@@ -502,7 +522,8 @@ jobs:
     final provider = providerCatalog.firstWhere(
       (item) => item.id == (providerId ?? _selectedProviderId),
     );
-    final current = _settings[provider.id] ?? ProviderSettings.defaults(provider);
+    final current =
+        _settings[provider.id] ?? ProviderSettings.defaults(provider);
     final result = await showModalBottomSheet<ProviderSettings>(
       context: context,
       isScrollControlled: true,
@@ -520,15 +541,14 @@ jobs:
 
     if (result == null) return;
     setState(() {
-      _settings = {
-        ..._settings,
-        provider.id: result,
-      };
+      _settings = {..._settings, provider.id: result};
       _selectedProviderId = provider.id;
-      
+
       final targetSessionId = _activeSessionId;
       if (targetSessionId != null) {
-        final sessionIndex = _sessions.indexWhere((s) => s.id == targetSessionId);
+        final sessionIndex = _sessions.indexWhere(
+          (s) => s.id == targetSessionId,
+        );
         if (sessionIndex != -1) {
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
             providerId: provider.id,
@@ -543,15 +563,15 @@ jobs:
   }
 
   Future<List<String>> _fetchModels(ProviderDefinition provider) async {
-    final settings = _settings[provider.id] ?? ProviderSettings.defaults(provider);
+    final settings =
+        _settings[provider.id] ?? ProviderSettings.defaults(provider);
     setState(() => _isFetchingModels = true);
     try {
       final models = await _chatClient.fetchModels(provider, settings);
       final uniqueModels = {
         ...models,
         ...provider.models,
-      }.where((model) => model.trim().isNotEmpty).toList()
-        ..sort();
+      }.where((model) => model.trim().isNotEmpty).toList()..sort();
       setState(() => _modelCache[provider.id] = uniqueModels);
       return uniqueModels;
     } finally {
@@ -585,12 +605,16 @@ jobs:
         ..._settings,
         provider.id: settings.copyWith(model: selected.trim()),
       };
-      
+
       final targetSessionId = _activeSessionId;
       if (targetSessionId != null) {
-        final sessionIndex = _sessions.indexWhere((s) => s.id == targetSessionId);
+        final sessionIndex = _sessions.indexWhere(
+          (s) => s.id == targetSessionId,
+        );
         if (sessionIndex != -1) {
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(model: selected.trim());
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            model: selected.trim(),
+          );
         }
       }
     });
@@ -599,12 +623,12 @@ jobs:
   }
 
   static const String mcpAndSearchSystemPrompt =
-    "Tools available: web search + Termux shell.\n\n"
-    "Web search: emit exactly one line then stop:\n"
-    "<search_request>query</search_request>\n\n"
-    "Run command: emit ONE block then stop:\n"
-    "<command>COMMAND</command>\n\n"
-    "Resume after results arrive.";
+      "Tools available: web search + Termux shell.\n\n"
+      "Web search: emit exactly one line then stop:\n"
+      "<search_request>query</search_request>\n\n"
+      "Run command: emit ONE block then stop:\n"
+      "<command>COMMAND</command>\n\n"
+      "Resume after results arrive.";
 
   void _stopResponse(String sessionId) {
     if (sessionId.isEmpty) return;
@@ -635,25 +659,18 @@ jobs:
     if (sessionIndex == -1) return;
 
     final session = _sessions[sessionIndex];
-    final provider = providerCatalog.firstWhere((p) => p.id == session.providerId);
-    final baseSettings = _settings[session.providerId] ?? ProviderSettings.defaults(provider);
+    final provider = providerCatalog.firstWhere(
+      (p) => p.id == session.providerId,
+    );
+    final baseSettings =
+        _settings[session.providerId] ?? ProviderSettings.defaults(provider);
     final settings = baseSettings.copyWith(
       model: session.model.isNotEmpty ? session.model : baseSettings.model,
       maxTokens: session.maxTokens ?? baseSettings.maxTokens,
     );
-    final activeModel = session.model.isNotEmpty ? session.model : settings.model;
-
-    if (_deepResearchEnabled && !_agenticEnabled) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please turn on Agentic File Access for Research Mode'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
+    final activeModel = session.model.isNotEmpty
+        ? session.model
+        : settings.model;
 
     if (provider.requiresKey && settings.apiKey.trim().isEmpty) {
       await _openProviderSheet(provider.id);
@@ -676,7 +693,9 @@ jobs:
 
     String updatedTitle = session.title;
     if (session.title == 'Welcome Chat' || session.title == 'New Chat') {
-      updatedTitle = prompt.length > 25 ? '${prompt.substring(0, 25)}...' : prompt;
+      updatedTitle = prompt.length > 25
+          ? '${prompt.substring(0, 25)}...'
+          : prompt;
     }
 
     setState(() {
@@ -689,7 +708,10 @@ jobs:
 
       int newActiveBranchIndex = session.activeBranchIndex ?? 0;
 
-      if (isEditing && editIndex != null && editIndex >= 0 && editIndex < baseMessages.length) {
+      if (isEditing &&
+          editIndex != null &&
+          editIndex >= 0 &&
+          editIndex < baseMessages.length) {
         final prefix = baseMessages.sublist(0, editIndex);
         final newBranchMessages = [...prefix, userMessage];
         updatedBranches.add(newBranchMessages);
@@ -697,7 +719,8 @@ jobs:
         baseMessages = newBranchMessages;
       } else {
         baseMessages.add(userMessage);
-        if (newActiveBranchIndex >= 0 && newActiveBranchIndex < updatedBranches.length) {
+        if (newActiveBranchIndex >= 0 &&
+            newActiveBranchIndex < updatedBranches.length) {
           updatedBranches[newActiveBranchIndex] = baseMessages;
         }
       }
@@ -737,7 +760,10 @@ jobs:
           final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
           if (idx != -1) {
             _sessions[idx] = _sessions[idx].copyWith(
-              messages: [..._sessions[idx].messages, const ChatMessage(role: MessageRole.assistant, text: '')],
+              messages: [
+                ..._sessions[idx].messages,
+                const ChatMessage(role: MessageRole.assistant, text: ''),
+              ],
             );
           }
         });
@@ -844,6 +870,9 @@ jobs:
             "  edge: 1 -> 2\n"
             "  edge: 1 -> 3\n\n"
             "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n"
+            "- Artifacts for complete/long outputs: use fenced blocks so the app renders them as files.\n"
+            "  Use ```html for complete HTML pages, ```markdown for essays/guides/reports, ```docx for Word-style documents, and language fences like ```python/```dart/```js for complete scripts or files.\n"
+            "  If the answer is long, a complete file, an essay, a guide, a report, or a full runnable script, put it in one artifact block instead of inline chat text. Use inline code only for small snippets.\n"
             "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
             "- Microsoft Word Document: ```docx\n"
             "  title: Document Title\n"
@@ -941,6 +970,7 @@ Use when you know exact line numbers (after reading the file first).
   <content>full file content here</content>
   <create_dirs>true</create_dirs>
 </tool_request>
+For existing files, prefer passing <expected_sha256> from stat_path/read metadata when available. Mutating file tools create an automatic safety checkpoint before changing existing content.
 
 ── SEARCH FILES (grep across codebase) ──
 <tool_request>
@@ -958,6 +988,14 @@ Returns: file:line:content for each match. Max 50 results.
   <path>/lib/main.dart</path>
 </tool_request>
 Returns: all class/function/widget definitions with line numbers.
+
+── SYMBOL REFERENCES ──
+<tool_request>
+  <method>symbol_references</method>
+  <symbol>MyClass</symbol>
+  <path>/projects/myapp/lib</path>
+</tool_request>
+Use this before renames or cross-file edits.
 
 ── DIRECTORY TREE ──
 <tool_request>
@@ -1047,6 +1085,20 @@ Use octal mode strings (e.g., 755, 644). Set recursive=true for directories.
 Starts process detached. Returns: PID, URL(s), startup log, management commands.
 Other tools: list_services, service_status (pass <id>), service_logs (pass <id>), stop_service (pass <id>).
 
+── DART IDE TOOLS ──
+<tool_request>
+  <method>dart_diagnostics</method>
+  <path>/projects/myapp</path>
+</tool_request>
+Returns structured analyzer diagnostics when the Dart SDK supports JSON output.
+
+<tool_request>
+  <method>dart_format</method>
+  <path>/projects/myapp/lib/main.dart</path>
+  <output>none</output>
+</tool_request>
+Use output=none to check formatting without writing, output=write to apply formatting.
+
 ━━ DECISION GUIDE: WHEN TO USE WHICH ━━
 | Task                    | Use                    | NOT                    |
 |-------------------------|------------------------|------------------------|
@@ -1063,26 +1115,28 @@ Other tools: list_services, service_status (pass <id>), service_logs (pass <id>)
 | Create directory        | mkdir_path             | mkdir -p               |
 | File metadata           | stat_path              | stat, ls -la           |
 | Change permissions      | chmod_path             | chmod                  |
-| Build / analyze / git   | run_command            | N/A                    |
+| Dart diagnostics        | dart_diagnostics       | raw dart analyze       |
+| Dart formatting         | dart_format            | raw dart format        |
+| Symbol references       | symbol_references      | ad-hoc grep            |
+| Build / git / installs  | run_command            | N/A                    |
 | Long-running server     | run_background         | run_command            |
 
 ━━ WORKFLOW FOR EDITING CODE ━━
 1. read_file_rich (confirm exact content and line numbers)
 2. patch_file or replace_lines (precise edit)
-3. run_command: dart analyze (verify no errors)
+3. dart_diagnostics (verify no analyzer errors)
 4. Report result to user
 
 ━━ QUALITY STANDARDS ━━
 - ALWAYS read_file_rich before editing — never edit from memory
 - search text in patch_file must match EXACTLY (copy from read output)
-- Always verify edits with: dart analyze or flutter analyze
+- Always verify edits with dart_diagnostics, flutter analyze, or the relevant project test
 - Write clean, production-grade code — no placeholders, no TODOs
 - Handle errors explicitly; never silently ignore failures
 
 ━━ PROJECT DOCUMENTATION ━━
 For every project, maintain a README.md at the project root.
 """;
-
         }
 
         if (_customMcpUrl.isNotEmpty) {
@@ -1099,7 +1153,9 @@ For every project, maintain a README.md at the project root.
             "\nMemory Tool: Use <memory action=\"read\"></memory>, <memory action=\"append\">text</memory>, or <memory action=\"replace\">text</memory> to save/read personal details across sessions. Limit 10KB. Use only when essential.\n";
 
         if (systemPromptText.isNotEmpty) {
-          historyForApi.add(ChatMessage(role: MessageRole.system, text: systemPromptText));
+          historyForApi.add(
+            ChatMessage(role: MessageRole.system, text: systemPromptText),
+          );
         }
 
         final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
@@ -1107,7 +1163,9 @@ For every project, maintain a README.md at the project root.
           shouldContinue = false;
           break;
         }
-        historyForApi.addAll(_sessions[idx].messages.take(assistantMessageIndex));
+        historyForApi.addAll(
+          _sessions[idx].messages.take(assistantMessageIndex),
+        );
 
         final stream = _chatClient.sendChatStream(
           provider: provider,
@@ -1129,19 +1187,33 @@ For every project, maintain a README.md at the project root.
               reasoningText += chunk.substring(11);
             } else {
               var textChunk = chunk;
-              
+
               // Start of <think> or <reasoning> or <thought>
-              if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
-                final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
+              if (!isThinking &&
+                  (textChunk.contains('<think>') ||
+                      textChunk.contains('<reasoning>') ||
+                      textChunk.contains('<thought>'))) {
+                final tag = textChunk.contains('<think>')
+                    ? '<think>'
+                    : textChunk.contains('<thought>')
+                    ? '<thought>'
+                    : '<reasoning>';
                 final parts = textChunk.split(tag);
                 fullText += parts[0];
                 isThinking = true;
                 textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
               }
-              
+
               // End of </think> or </reasoning> or </thought>
-              if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
-                final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
+              if (isThinking &&
+                  (textChunk.contains('</think>') ||
+                      textChunk.contains('</reasoning>') ||
+                      textChunk.contains('</thought>'))) {
+                final tag = textChunk.contains('</think>')
+                    ? '</think>'
+                    : textChunk.contains('</thought>')
+                    ? '</thought>'
+                    : '</reasoning>';
                 final parts = textChunk.split(tag);
                 reasoningText += parts[0];
                 isThinking = false;
@@ -1156,7 +1228,9 @@ For every project, maintain a README.md at the project root.
 
             if (updateStopwatch.elapsedMilliseconds > 250) {
               setState(() {
-                final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+                final idx = _sessions.indexWhere(
+                  (s) => s.id == targetSessionId,
+                );
                 if (idx != -1) {
                   final msgs = List<ChatMessage>.from(_sessions[idx].messages);
                   if (assistantMessageIndex < msgs.length) {
@@ -1219,31 +1293,52 @@ For every project, maintain a README.md at the project root.
           _scrollToBottom();
         }
 
-        final searchRegex = RegExp(r'<search_request>\s*([\s\S]*?)\s*</search_request>', caseSensitive: false, dotAll: true);
-        final readUrlRegex = RegExp(r'<read_url>\s*([\s\S]*?)\s*</read_url>', caseSensitive: false, dotAll: true);
-        final mcpRegex = RegExp(r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>', caseSensitive: false);
-        final memoryRegex = RegExp(r'<memory\s+action="([^"]+)">\s*([\s\S]*?)\s*</memory>', caseSensitive: false, dotAll: true);
-        
+        final searchRegex = RegExp(
+          r'<search_request>\s*([\s\S]*?)\s*</search_request>',
+          caseSensitive: false,
+          dotAll: true,
+        );
+        final readUrlRegex = RegExp(
+          r'<read_url>\s*([\s\S]*?)\s*</read_url>',
+          caseSensitive: false,
+          dotAll: true,
+        );
+        final mcpRegex = RegExp(
+          r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
+          caseSensitive: false,
+        );
+        final memoryRegex = RegExp(
+          r'<memory\s+action="([^"]+)">\s*([\s\S]*?)\s*</memory>',
+          caseSensitive: false,
+          dotAll: true,
+        );
+
         final searchMatch = searchRegex.firstMatch(fullText);
         final readUrlMatch = readUrlRegex.firstMatch(fullText);
         final mcpMatch = _findMcpMatch(fullText);
         final memoryMatch = memoryRegex.firstMatch(fullText);
 
-        if (fullText.contains('<research_plan>')) {
+        if (_deepResearchEnabled && fullText.contains('<research_plan>')) {
           final planStart = fullText.indexOf('<research_plan>');
           var planEnd = fullText.indexOf('</research_plan>', planStart);
           if (planEnd == -1) {
             planEnd = fullText.length;
           }
-          final planContent = fullText.substring(planStart + 15, planEnd).trim();
-          final phaseRegex = RegExp(r'<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>', caseSensitive: false, dotAll: true);
+          final planContent = fullText
+              .substring(planStart + 15, planEnd)
+              .trim();
+          final phaseRegex = RegExp(
+            r'<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>',
+            caseSensitive: false,
+            dotAll: true,
+          );
           final matches = phaseRegex.allMatches(planContent);
           if (matches.isNotEmpty) {
             final List<Map<String, dynamic>> stepsList = [];
             for (final match in matches) {
               final phaseNum = int.tryParse(match.group(1) ?? '') ?? 0;
               final textContent = match.group(2)?.trim() ?? '';
-              
+
               String title = 'Phase $phaseNum';
               String prompt = textContent;
               final separatorIndex = textContent.indexOf(RegExp(r'[:\-]'));
@@ -1255,30 +1350,33 @@ For every project, maintain a README.md at the project root.
                 "title": title,
                 "prompt": prompt,
                 "status": "pending",
-                "content": ""
+                "content": "",
               });
             }
-            
-            final stateMap = {
-              "status": "pending",
-              "steps": stepsList
-            };
-            
+
+            final stateMap = {"status": "pending", "steps": stepsList};
+
             setState(() {
-              final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+              final msgs = List<ChatMessage>.from(
+                _sessions[sessionIndex].messages,
+              );
               msgs[assistantMessageIndex] = ChatMessage(
                 role: MessageRole.assistant,
-                text: fullText + '\n\n<research_state>${jsonEncode(stateMap)}</research_state>',
+                text:
+                    fullText +
+                    '\n\n<research_state>${jsonEncode(stateMap)}</research_state>',
                 reasoning: reasoningText,
               );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                messages: msgs,
+              );
               _sendingSessionIds.remove(targetSessionId);
             });
             await _saveSessions();
             return;
           }
         }
-        
+
         if (toolCallCount >= 10) {
           shouldContinue = false;
           continue;
@@ -1300,12 +1398,16 @@ For every project, maintain a README.md at the project root.
               googleCx: _searchSettings.googleCx,
             );
             if (mounted) setState(() => _toolStatus = '');
-            
+
             String searchResult = searchResultRaw;
             if (searchResult.length > 4000) {
-              searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
+              searchResult =
+                  searchResult.substring(0, 4000) +
+                  '\n\n...[truncated due to length]';
             }
-            toolOutputs.add("Web Search results for '$query':\n\n$searchResult");
+            toolOutputs.add(
+              "Web Search results for '$query':\n\n$searchResult",
+            );
           }
         }
 
@@ -1319,30 +1421,65 @@ For every project, maintain a README.md at the project root.
             String urlResult = '';
             try {
               var targetUrl = url;
-              if (!targetUrl.startsWith('http')) targetUrl = 'https://$targetUrl';
-              final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+              if (!targetUrl.startsWith('http'))
+                targetUrl = 'https://$targetUrl';
+              final client = HttpClient()
+                ..connectionTimeout = const Duration(seconds: 15);
               final request = await client.getUrl(Uri.parse(targetUrl));
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
-              
+
               var htmlBody = body;
-              final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
+              final bodyMatch = RegExp(
+                r'<body[^>]*>(.*?)</body>',
+                caseSensitive: false,
+                dotAll: true,
+              ).firstMatch(body);
               if (bodyMatch != null) {
                 htmlBody = bodyMatch.group(1) ?? htmlBody;
               }
-              
-              htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: false, dotAll: true), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: false, dotAll: true), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: false), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: false, dotAll: true), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
-              
+
+              htmlBody = htmlBody.replaceAll(
+                RegExp(
+                  r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(
+                  r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(r'<img[^>]*>', caseSensitive: false),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(
+                  r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(r'<!--.*?-->', dotAll: true),
+                '',
+              );
+
               String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
               text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-              
+
               urlResult = text;
               if (urlResult.length > 8000) {
-                urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated due to length]';
+                urlResult =
+                    urlResult.substring(0, 8000) +
+                    '\n\n...[truncated due to length]';
               }
             } catch (e) {
               urlResult = 'Error fetching URL: $e';
@@ -1357,10 +1494,11 @@ For every project, maintain a README.md at the project root.
             executedTools = true;
             final action = match.group(1)?.toLowerCase().trim() ?? '';
             final content = match.group(2)?.trim() ?? '';
-            if (mounted) setState(() => _toolStatus = '🧠 Memory Tool: $action');
-            
+            if (mounted)
+              setState(() => _toolStatus = '🧠 Memory Tool: $action');
+
             final result = await _handleMemoryTool(action, content);
-            
+
             if (mounted) setState(() => _toolStatus = '');
             toolOutputs.add("Memory Tool [$action] Result:\n$result");
           }
@@ -1371,8 +1509,11 @@ For every project, maintain a README.md at the project root.
           for (final match in mcpMatches) {
             executedTools = true;
             String jsonString = match.group(1)?.trim() ?? '';
-            jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
-            
+            jsonString = jsonString
+                .replaceAll(RegExp(r'^```json\s*'), '')
+                .replaceAll(RegExp(r'^```\s*'), '')
+                .replaceAll(RegExp(r'\s*```$'), '');
+
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
             String toolMethod = 'tool';
             Map<String, dynamic> toolParams = {};
@@ -1380,15 +1521,17 @@ For every project, maintain a README.md at the project root.
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
               toolMethod = parsed['method']?.toString() ?? 'tool';
               toolParams = parsed['params'] as Map<String, dynamic>? ?? {};
-              
-              if (toolParams['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
+
+              if (toolParams['server'] == 'remote' &&
+                  _customMcpUrl.isNotEmpty) {
                 mcpEndpoint = _customMcpUrl;
                 toolParams.remove('server');
               }
-              
+
               toolParams['workspace_dir'] = _agenticWorkspace;
               // Always set cwd to workspace so relative paths work
-              if (!toolParams.containsKey('cwd') || (toolParams['cwd'] as String?)?.isEmpty == true) {
+              if (!toolParams.containsKey('cwd') ||
+                  (toolParams['cwd'] as String?)?.isEmpty == true) {
                 toolParams['cwd'] = _agenticWorkspace;
               }
               _resolveToolPaths(toolParams, _agenticWorkspace);
@@ -1397,39 +1540,73 @@ For every project, maintain a README.md at the project root.
             } catch (_) {}
 
             // Permission check before running shell commands
-            if (toolMethod == 'run_command' || toolMethod == 'shell_exec') {
+            if (toolMethod == 'run_command' ||
+                toolMethod == 'shell_exec' ||
+                toolMethod == 'execute_command' ||
+                toolMethod == 'execute_shell' ||
+                toolMethod == 'shell_rich' ||
+                toolMethod == 'run_background') {
               final cmd = toolParams['command']?.toString() ?? '';
               final allowed = await _askShellPermission(cmd);
               if (!allowed) {
-                toolOutputs.add('Tool Result [${toolMethod}]:\n\n{"error": "User denied shell command execution."}');
+                toolOutputs.add(
+                  'Tool Result [${toolMethod}]:\n\n{"error": "User denied shell command execution."}',
+                );
+                continue;
+              }
+            }
+            if (_requiresFileMutationPermission(toolMethod, toolParams)) {
+              final allowed = await _askFileMutationPermission(
+                toolMethod,
+                toolParams,
+              );
+              if (!allowed) {
+                toolOutputs.add(
+                  'Tool Result [${toolMethod}]:\n\n{"error": "User denied file operation."}',
+                );
                 continue;
               }
             }
 
             // Show live status banner
-            if (mounted) setState(() => _toolStatus = _toolStatusLabel(toolMethod, toolParams));
+            if (mounted)
+              setState(
+                () => _toolStatus = _toolStatusLabel(toolMethod, toolParams),
+              );
 
             String mcpResult = '';
             try {
-              final client = HttpClient()..connectionTimeout = const Duration(seconds: 60);
+              final client = HttpClient()
+                ..connectionTimeout = const Duration(seconds: 60);
               final request = await client.postUrl(Uri.parse(mcpEndpoint));
               request.headers.contentType = ContentType.json;
-              
+
               final bytes = utf8.encode(jsonString);
               request.headers.contentLength = bytes.length;
               request.add(bytes);
-              
+
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
               String cleanResult = body;
               try {
                 final parsed = jsonDecode(body) as Map<String, dynamic>;
-                final resultData = parsed['result'] as Map<String, dynamic>? ?? parsed;
-                
-                if (resultData.containsKey('stdout')) {
+                final resultData =
+                    parsed['result'] as Map<String, dynamic>? ?? parsed;
+
+                if (resultData.containsKey('aiBlock')) {
+                  cleanResult = resultData['aiBlock'].toString();
+                } else if (resultData.containsKey('stdout')) {
                   cleanResult = resultData['stdout'].toString();
-                  if (resultData.containsKey('diff') && resultData['diff'].toString().isNotEmpty) {
-                    cleanResult += '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                  if (resultData.containsKey('diff') &&
+                      resultData['diff'].toString().isNotEmpty) {
+                    cleanResult +=
+                        '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                  }
+                  if (resultData.containsKey('stderr') &&
+                      resultData['stderr'].toString().trim().isNotEmpty) {
+                    cleanResult +=
+                        '\n\n--- STDERR ---\n' +
+                        resultData['stderr'].toString();
                   }
                 } else if (resultData.containsKey('error')) {
                   cleanResult = 'Error: ' + resultData['error'].toString();
@@ -1439,7 +1616,10 @@ For every project, maintain a README.md at the project root.
               }
               mcpResult = cleanResult;
               if (mcpResult.length > 32000) {
-                mcpResult = mcpResult.substring(0, 16000) + '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' + mcpResult.substring(mcpResult.length - 6000);
+                mcpResult =
+                    mcpResult.substring(0, 16000) +
+                    '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
+                    mcpResult.substring(mcpResult.length - 6000);
               }
             } catch (e) {
               mcpResult = '{"error": "$e"}';
@@ -1479,7 +1659,9 @@ For every project, maintain a README.md at the project root.
       setState(() {
         final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
         if (idx != -1) {
-          final currentMessages = List<ChatMessage>.from(_sessions[idx].messages);
+          final currentMessages = List<ChatMessage>.from(
+            _sessions[idx].messages,
+          );
           if (currentMessages.isNotEmpty) {
             final lastIdx = currentMessages.length - 1;
             final currentText = currentMessages[lastIdx].text;
@@ -1508,7 +1690,6 @@ For every project, maintain a README.md at the project root.
     }
   }
 
-
   /// Show permission dialog before executing a shell command.
   /// Returns true if the command should proceed.
   Future<bool> _askShellPermission(String command) async {
@@ -1521,7 +1702,9 @@ For every project, maintain a README.md at the project root.
 
     if (!mounted) return false;
 
-    final short = command.length > 80 ? command.substring(0, 77) + '…' : command;
+    final short = command.length > 80
+        ? command.substring(0, 77) + '…'
+        : command;
     final result = await showDialog<String>(
       context: context,
       barrierDismissible: false,
@@ -1552,7 +1735,11 @@ For every project, maintain a README.md at the project root.
           children: [
             const Text(
               'An AI agent is requesting permission to execute the following command in your Termux environment:',
-              style: TextStyle(color: Color(0xFF6C5946), fontSize: 13, height: 1.4),
+              style: TextStyle(
+                color: Color(0xFF6C5946),
+                fontSize: 13,
+                height: 1.4,
+              ),
             ),
             const SizedBox(height: 12),
             Container(
@@ -1601,15 +1788,29 @@ For every project, maintain a README.md at the project root.
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton.icon(
-                    icon: const Icon(Icons.all_inclusive, size: 14, color: Color(0xFF7B4E2E)),
+                    icon: const Icon(
+                      Icons.all_inclusive,
+                      size: 14,
+                      color: Color(0xFF7B4E2E),
+                    ),
                     onPressed: () => Navigator.pop(ctx, 'always'),
-                    label: const Text('Always Allow', style: TextStyle(color: Color(0xFF7B4E2E), fontSize: 12)),
+                    label: const Text(
+                      'Always Allow',
+                      style: TextStyle(color: Color(0xFF7B4E2E), fontSize: 12),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   TextButton.icon(
-                    icon: const Icon(Icons.forum_outlined, size: 14, color: Color(0xFF7B4E2E)),
+                    icon: const Icon(
+                      Icons.forum_outlined,
+                      size: 14,
+                      color: Color(0xFF7B4E2E),
+                    ),
                     onPressed: () => Navigator.pop(ctx, 'session'),
-                    label: const Text('Allow this session', style: TextStyle(color: Color(0xFF7B4E2E), fontSize: 12)),
+                    label: const Text(
+                      'Allow this session',
+                      style: TextStyle(color: Color(0xFF7B4E2E), fontSize: 12),
+                    ),
                   ),
                 ],
               ),
@@ -1621,11 +1822,16 @@ For every project, maintain a README.md at the project root.
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Color(0xFFE5DDD3)),
                         foregroundColor: Colors.red[700],
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       onPressed: () => Navigator.pop(ctx, 'no'),
-                      child: const Text('Block', style: TextStyle(fontWeight: FontWeight.bold)),
+                      child: const Text(
+                        'Block',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1634,12 +1840,17 @@ For every project, maintain a README.md at the project root.
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF7B4E2E),
                         foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         elevation: 0,
                       ),
                       onPressed: () => Navigator.pop(ctx, 'yes'),
-                      child: const Text('Allow Once', style: TextStyle(fontWeight: FontWeight.bold)),
+                      child: const Text(
+                        'Allow Once',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ),
                 ],
@@ -1663,6 +1874,192 @@ For every project, maintain a README.md at the project root.
     return true; // 'yes'
   }
 
+  bool _requiresFileMutationPermission(
+    String method,
+    Map<String, dynamic> params,
+  ) {
+    const mutatingFileTools = {
+      'write_file',
+      'write_file_rich',
+      'edit_file',
+      'patch_file',
+      'replace_lines',
+      'insert_lines',
+      'delete_lines',
+      'append_file',
+      'delete_path',
+      'move_path',
+      'copy_path',
+      'mkdir_path',
+      'chmod_path',
+      'file_write',
+      'file_edit',
+      'file_delete',
+      'dir_create',
+    };
+    if (method == 'dart_format') {
+      final output = params['output']?.toString().toLowerCase().trim();
+      return output == null || output.isEmpty || output == 'write';
+    }
+    return mutatingFileTools.contains(method);
+  }
+
+  String _fileMutationTarget(String method, Map<String, dynamic> params) {
+    String value(String key) => params[key]?.toString().trim() ?? '';
+    final src = value('src');
+    final dest = value('dest');
+    if (src.isNotEmpty && dest.isNotEmpty) return '$src → $dest';
+    for (final key in ['path', 'file', 'directory', 'dir', 'cwd']) {
+      final candidate = value(key);
+      if (candidate.isNotEmpty) return candidate;
+    }
+    return _agenticWorkspace;
+  }
+
+  String _fileMutationPreview(Map<String, dynamic> params) {
+    for (final key in ['content', 'new_content', 'patches', 'mode']) {
+      final value = params[key]?.toString() ?? '';
+      if (value.trim().isNotEmpty) {
+        return value.length > 600 ? '${value.substring(0, 600)}…' : value;
+      }
+    }
+    return '';
+  }
+
+  Future<bool> _askFileMutationPermission(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    if (!mounted) return false;
+    final target = _fileMutationTarget(method, params);
+    final preview = _fileMutationPreview(params);
+
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFBF2),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Color(0xFFE5DDD3), width: 1),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.edit_document, color: Color(0xFF9B4D39), size: 23),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Allow File Change?',
+                style: TextStyle(
+                  color: Color(0xFF2D241C),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 360),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'The AI wants to modify files in your workspace. Review the target before allowing this operation.',
+                  style: TextStyle(
+                    color: Color(0xFF6C5946),
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _PermissionInfoRow(label: 'Tool', value: method),
+                const SizedBox(height: 8),
+                _PermissionInfoRow(label: 'Target', value: target),
+                if (preview.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Preview',
+                    style: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1915),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: SelectableText(
+                      preview,
+                      style: const TextStyle(
+                        color: Color(0xFFFFF7EC),
+                        fontSize: 11.5,
+                        fontFamily: 'monospace',
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFE5DDD3)),
+                    foregroundColor: const Color(0xFFB3261E),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text(
+                    'Block',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF7B4E2E),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    elevation: 0,
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text(
+                    'Allow Once',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
   Match? _findMcpMatch(String fullText) {
     // 0. Try direct command format: <command>...</command>
     final cmdStart = fullText.indexOf('<command>');
@@ -1677,7 +2074,7 @@ For every project, maintain a README.md at the project root.
           'params': {
             'command': commandVal,
             'cwd': '', // will be set to _agenticWorkspace in dispatch block
-          }
+          },
         });
         return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
       }
@@ -1686,93 +2083,129 @@ For every project, maintain a README.md at the project root.
     // 1. Try pure XML format: <tool_request>...<method>x</method>...<param>val</param>...</tool_request>
     final xmlStart = fullText.indexOf('<tool_request>');
     if (xmlStart != -1) {
-       final xmlEnd = fullText.indexOf('</tool_request>', xmlStart);
-       if (xmlEnd != -1) {
-           final xmlContent = fullText.substring(xmlStart + 14, xmlEnd);
-           final Map<String, dynamic> result = {};
+      final xmlEnd = fullText.indexOf('</tool_request>', xmlStart);
+      if (xmlEnd != -1) {
+        final xmlContent = fullText.substring(xmlStart + 14, xmlEnd);
+        final Map<String, dynamic> result = {};
 
-           // Primary: <tagname>value</tagname>
-           final regex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
-           for (final match in regex.allMatches(xmlContent)) {
-             final key = match.group(1)!.toLowerCase();
-             var val = match.group(2)!;
-             val = val.trim();
-             result[key] = val;
-           }
+        const preserveWhitespaceKeys = {
+          'content',
+          'new_content',
+          'patches',
+          'reads',
+        };
 
-           // Fallback: <PARAM name="key">value</PARAM> — LLMs sometimes emit this
-           final paramRegex = RegExp(
-             r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
-           );
-           for (final m in paramRegex.allMatches(xmlContent)) {
-             final key = m.group(1)!.toLowerCase();
-             result[key] = m.group(2)!.trim();
-           }
-           // Also try <parameter name="key">value</parameter>
-           final paramRegex2 = RegExp(
-             r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
-           );
-           for (final m in paramRegex2.allMatches(xmlContent)) {
-             final key = m.group(1)!.toLowerCase();
-             result[key] = m.group(2)!.trim();
-           }
+        String cleanToolValue(String key, String value) {
+          if (preserveWhitespaceKeys.contains(key)) {
+            var result = value;
+            if (result.startsWith('\n')) result = result.substring(1);
+            if (result.endsWith('\n'))
+              result = result.substring(0, result.length - 1);
+            return result;
+          }
+          return value.trim();
+        }
 
-           if (result.containsKey('method')) {
-             // Keys already lowercased above, trim all values
-             for (final key in ['method', 'path', 'query', 'start_line', 'end_line', 'pattern', 'command']) {
-               if (result.containsKey(key) && result[key] is String) {
-                 result[key] = (result[key] as String).trim();
-               }
-             }
-             // TEMP: reuse old code path below via dummy match
-             final method = result['method'];
-             result.remove('method');
-             final jsonStr = jsonEncode({'method': method, 'params': result});
-             return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
-           }
+        // Primary: <tagname>value</tagname>
+        final regex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
+        for (final match in regex.allMatches(xmlContent)) {
+          final key = match.group(1)!.toLowerCase();
+          result[key] = cleanToolValue(key, match.group(2)!);
+        }
 
-           // Legacy path (only reached if no method found via new path above)
-           final Map<String, dynamic> legacyResult = {};
-           for (final match in regex.allMatches(xmlContent)) {
-             final key = match.group(1)!;
-             var val = match.group(2)!;
-             if (key == 'method' || key == 'path' || key == 'query' || key == 'start_line' || key == 'end_line' || key == 'pattern' || key == 'command') {
-               val = val.trim();
-             } else {
-               if (val.startsWith('\n')) val = val.substring(1);
-               if (val.endsWith('\n')) val = val.substring(0, val.length - 1);
-             }
-             legacyResult[key] = val;
-           }
-           if (legacyResult.containsKey('method')) {
-             final method = legacyResult['method'];
-             legacyResult.remove('method');
-             final jsonStr = jsonEncode({'method': method, 'params': legacyResult});
-             return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
-           }
-       }
+        // Fallback: <PARAM name="key">value</PARAM> — LLMs sometimes emit this
+        final paramRegex = RegExp(
+          r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
+        );
+        for (final m in paramRegex.allMatches(xmlContent)) {
+          final key = m.group(1)!.toLowerCase();
+          result[key] = cleanToolValue(key, m.group(2)!);
+        }
+        // Also try <parameter name="key">value</parameter>
+        final paramRegex2 = RegExp(
+          r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
+        );
+        for (final m in paramRegex2.allMatches(xmlContent)) {
+          final key = m.group(1)!.toLowerCase();
+          result[key] = cleanToolValue(key, m.group(2)!);
+        }
+
+        if (result.containsKey('method')) {
+          // Keys already lowercased above, trim all values
+          for (final key in [
+            'method',
+            'path',
+            'query',
+            'start_line',
+            'end_line',
+            'pattern',
+            'command',
+          ]) {
+            if (result.containsKey(key) && result[key] is String) {
+              result[key] = (result[key] as String).trim();
+            }
+          }
+          // TEMP: reuse old code path below via dummy match
+          final method = result['method'];
+          result.remove('method');
+          final jsonStr = jsonEncode({'method': method, 'params': result});
+          return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+        }
+
+        // Legacy path (only reached if no method found via new path above)
+        final Map<String, dynamic> legacyResult = {};
+        for (final match in regex.allMatches(xmlContent)) {
+          final key = match.group(1)!;
+          var val = match.group(2)!;
+          if (key == 'method' ||
+              key == 'path' ||
+              key == 'query' ||
+              key == 'start_line' ||
+              key == 'end_line' ||
+              key == 'pattern' ||
+              key == 'command') {
+            val = val.trim();
+          } else {
+            if (val.startsWith('\n')) val = val.substring(1);
+            if (val.endsWith('\n')) val = val.substring(0, val.length - 1);
+          }
+          legacyResult[key] = val;
+        }
+        if (legacyResult.containsKey('method')) {
+          final method = legacyResult['method'];
+          legacyResult.remove('method');
+          final jsonStr = jsonEncode({
+            'method': method,
+            'params': legacyResult,
+          });
+          return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+        }
+      }
     }
 
     // 2. Fallback to old JSON format
     final mcpStart = fullText.indexOf('<mcp_request>');
     if (mcpStart == -1) return null;
-    
+
     final jsonStart = fullText.indexOf('{', mcpStart);
     if (jsonStart == -1) return null;
-    
+
     final jsonEnd = _findMatchingBracket(fullText, jsonStart);
     if (jsonEnd == -1) return null;
-    
+
     final jsonStr = fullText.substring(jsonStart, jsonEnd + 1);
-    
-    return RegExp(r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>', caseSensitive: false).firstMatch('<mcp_request>$jsonStr</mcp_request>');
+
+    return RegExp(
+      r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
+      caseSensitive: false,
+    ).firstMatch('<mcp_request>$jsonStr</mcp_request>');
   }
 
   int _findMatchingBracket(String text, int startIndex) {
     int count = 0;
     bool inString = false;
     bool escape = false;
-    
+
     for (int i = startIndex; i < text.length; i++) {
       final c = text[i];
       if (escape) {
@@ -1788,8 +2221,9 @@ For every project, maintain a README.md at the project root.
         continue;
       }
       if (inString) continue;
-      
-      if (c == '{' || c == '[') count++;
+
+      if (c == '{' || c == '[')
+        count++;
       else if (c == '}' || c == ']') {
         count--;
         if (count == 0) return i;
@@ -1811,7 +2245,7 @@ For every project, maintain a README.md at the project root.
     } else if (lowerTitle.startsWith('research')) {
       cleanTitle = cleanTitle.substring(8).trim();
     }
-    
+
     final slug = cleanTitle
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9\s-]'), '')
@@ -1831,6 +2265,7 @@ For every project, maintain a README.md at the project root.
       final parts = path.split('/');
       return parts.length > 2 ? '…/${parts.last}' : path;
     }
+
     switch (method) {
       case 'read_file_rich':
       case 'file_read':
@@ -1886,12 +2321,16 @@ For every project, maintain a README.md at the project root.
       case 'file_info':
         return '📋 File info: ${shortPath(p('path'))}';
       case 'run_command':
+      case 'shell_rich':
         final cmd = p('command');
         final short = cmd.length > 45 ? '${cmd.substring(0, 42)}…' : cmd;
         if (cmd.contains('firebase deploy')) return '🚀 Deploying to Firebase…';
-        if (cmd.contains('gh workflow run')) return '⚙️  Triggering GitHub Actions…';
-        if (cmd.contains('gh run watch')) return '⏳ Watching GitHub Actions build…';
-        if (cmd.contains('gh run download')) return '⬇️  Downloading build artifact…';
+        if (cmd.contains('gh workflow run'))
+          return '⚙️  Triggering GitHub Actions…';
+        if (cmd.contains('gh run watch'))
+          return '⏳ Watching GitHub Actions build…';
+        if (cmd.contains('gh run download'))
+          return '⬇️  Downloading build artifact…';
         if (cmd.contains('git commit')) return '📦 Committing to Git…';
         if (cmd.contains('git push')) return '📤 Pushing to GitHub…';
         if (cmd.contains('git status')) return '📊 Checking git status…';
@@ -1901,6 +2340,13 @@ For every project, maintain a README.md at the project root.
         if (cmd.contains('dart analyze')) return '🧹 Running Dart analysis…';
         if (cmd.contains('pkg install')) return '📦 Installing package…';
         return '🔧 Running: $short';
+      case 'dart_diagnostics':
+      case 'dart_analyze':
+        return '🧹 Running Dart diagnostics…';
+      case 'dart_format':
+        return '🎯 Formatting Dart: ${shortPath(p('path'))}';
+      case 'symbol_references':
+        return '🔎 Finding references: ${p('symbol')}';
       case 'git_status':
         return '📊 Checking git status…';
       case 'git_diff':
@@ -1938,31 +2384,35 @@ For every project, maintain a README.md at the project root.
     final activeSession = _sessions.firstWhere((s) => s.id == _activeSessionId);
     final sessionIndex = _sessions.indexOf(activeSession);
     if (sessionIndex == -1) return;
-    
+
     final message = activeSession.messages[messageIndex];
     if (!message.text.contains('<research_state>')) return;
-    
-    final stateStr = message.text.substring(
-      message.text.indexOf('<research_state>') + 16, 
-      message.text.indexOf('</research_state>')
-    ).trim();
+
+    final stateStr = message.text
+        .substring(
+          message.text.indexOf('<research_state>') + 16,
+          message.text.indexOf('</research_state>'),
+        )
+        .trim();
     try {
       final stateMap = jsonDecode(stateStr) as Map<String, dynamic>;
       stateMap['status'] = 'running';
-      
+
       setState(() {
         _sendingSessionIds.add(_sessions[sessionIndex].id);
         final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
         msgs[messageIndex] = ChatMessage(
           role: MessageRole.assistant,
           text: message.text.replaceRange(
-            message.text.indexOf('<research_state>'), 
-            message.text.indexOf('</research_state>') + 17, 
-            '<research_state>${jsonEncode(stateMap)}</research_state>'
+            message.text.indexOf('<research_state>'),
+            message.text.indexOf('</research_state>') + 17,
+            '<research_state>${jsonEncode(stateMap)}</research_state>',
           ),
           reasoning: message.reasoning,
         );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          messages: msgs,
+        );
       });
 
       _runResearchLoop(
@@ -1989,15 +2439,15 @@ For every project, maintain a README.md at the project root.
     final steps = stateMap['steps'] as List;
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
-    
+
     final systemPrompt = "";
-    
+
     // We maintain a single continuous conversation context for the entire research process
     List<ChatMessage> stepMessages = [
       if (systemPrompt.isNotEmpty)
         ChatMessage(role: MessageRole.system, text: systemPrompt),
     ];
-    
+
     for (int i = 0; i < steps.length; i++) {
       if (!mounted) return;
       steps[i]['status'] = 'running';
@@ -2007,10 +2457,13 @@ For every project, maintain a README.md at the project root.
           role: MessageRole.assistant,
           text: '<research_state>${jsonEncode(stateMap)}</research_state>',
         );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          messages: msgs,
+        );
       });
 
-      final stepPrompt = "Research Phase ${i + 1}: ${steps[i]['title']}\nInstructions: ${steps[i]['prompt']}";
+      final stepPrompt =
+          "Research Phase ${i + 1}: ${steps[i]['title']}\nInstructions: ${steps[i]['prompt']}";
       stepMessages.add(ChatMessage(role: MessageRole.user, text: stepPrompt));
 
       String stepContent = '';
@@ -2021,35 +2474,49 @@ For every project, maintain a README.md at the project root.
       while (!stepDone && loopCount < 15) {
         if (!mounted) return;
         loopCount++;
-        
+
         try {
           String responseText = '';
           String reasoningText = '';
           var isThinking = false;
-          
+
           final stream = _chatClient.sendChatStream(
             provider: provider,
             settings: settings,
             model: model,
             messages: stepMessages,
           );
-          
+
           await for (final chunk in stream) {
             if (chunk.startsWith('[REASONING]')) {
               reasoningText += chunk.substring(11);
             } else {
               var textChunk = chunk;
-              
-              if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
-                final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
+
+              if (!isThinking &&
+                  (textChunk.contains('<think>') ||
+                      textChunk.contains('<reasoning>') ||
+                      textChunk.contains('<thought>'))) {
+                final tag = textChunk.contains('<think>')
+                    ? '<think>'
+                    : textChunk.contains('<thought>')
+                    ? '<thought>'
+                    : '<reasoning>';
                 final parts = textChunk.split(tag);
                 responseText += parts[0];
                 isThinking = true;
                 textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
               }
-              
-              if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
-                final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
+
+              if (isThinking &&
+                  (textChunk.contains('</think>') ||
+                      textChunk.contains('</reasoning>') ||
+                      textChunk.contains('</thought>'))) {
+                final tag = textChunk.contains('</think>')
+                    ? '</think>'
+                    : textChunk.contains('</thought>')
+                    ? '</thought>'
+                    : '</reasoning>';
                 final parts = textChunk.split(tag);
                 reasoningText += parts[0];
                 isThinking = false;
@@ -2062,27 +2529,61 @@ For every project, maintain a README.md at the project root.
               }
             }
           }
-          
-          stepMessages.add(ChatMessage(role: MessageRole.assistant, text: responseText, reasoning: reasoningText));
 
-          final searchMatch = RegExp(r'<search_request>\s*([\s\S]*?)\s*</search_request>', caseSensitive: false, dotAll: true).firstMatch(responseText);
-          final readUrlMatch = RegExp(r'<read_url>\s*([\s\S]*?)\s*</read_url>', caseSensitive: false, dotAll: true).firstMatch(responseText);
+          stepMessages.add(
+            ChatMessage(
+              role: MessageRole.assistant,
+              text: responseText,
+              reasoning: reasoningText,
+            ),
+          );
+
+          final searchMatch = RegExp(
+            r'<search_request>\s*([\s\S]*?)\s*</search_request>',
+            caseSensitive: false,
+            dotAll: true,
+          ).firstMatch(responseText);
+          final readUrlMatch = RegExp(
+            r'<read_url>\s*([\s\S]*?)\s*</read_url>',
+            caseSensitive: false,
+            dotAll: true,
+          ).firstMatch(responseText);
           final mcpMatch = _findMcpMatch(responseText);
-          final completeMatch = RegExp(r'<step_complete/?>', caseSensitive: false).firstMatch(responseText);
+          final completeMatch = RegExp(
+            r'<step_complete/?>',
+            caseSensitive: false,
+          ).firstMatch(responseText);
 
           if (completeMatch != null) {
-            final contentClean = responseText.replaceAll(RegExp(r'<step_complete/?>', caseSensitive: false), '').trim();
-            stepContent = stepContent.isEmpty ? contentClean : '$stepContent\n\n$contentClean';
+            final contentClean = responseText
+                .replaceAll(
+                  RegExp(r'<step_complete/?>', caseSensitive: false),
+                  '',
+                )
+                .trim();
+            stepContent = stepContent.isEmpty
+                ? contentClean
+                : '$stepContent\n\n$contentClean';
             stepDone = true;
           } else if (searchMatch != null) {
             final query = searchMatch.group(1)?.trim() ?? '';
-            stepContent = stepContent.isEmpty ? '<search_request>$query</search_request>' : '$stepContent\n\n<search_request>$query</search_request>';
+            stepContent = stepContent.isEmpty
+                ? '<search_request>$query</search_request>'
+                : '$stepContent\n\n<search_request>$query</search_request>';
             steps[i]['content'] = stepContent;
             if (mounted) {
               setState(() {
-                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '<research_state>${jsonEncode(stateMap)}</research_state>');
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+                final msgs = List<ChatMessage>.from(
+                  _sessions[sessionIndex].messages,
+                );
+                msgs[messageIndex] = ChatMessage(
+                  role: MessageRole.assistant,
+                  text:
+                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                );
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  messages: msgs,
+                );
               });
             }
             final searchResultRaw = await _chatClient.searchWeb(
@@ -2093,44 +2594,93 @@ For every project, maintain a README.md at the project root.
             );
             String searchResult = searchResultRaw;
             if (searchResult.length > 4000) {
-              searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated]';
+              searchResult =
+                  searchResult.substring(0, 4000) + '\n\n...[truncated]';
             }
-            stepMessages.add(ChatMessage(role: MessageRole.user, text: "Search results:\n$searchResult"));
+            stepMessages.add(
+              ChatMessage(
+                role: MessageRole.user,
+                text: "Search results:\n$searchResult",
+              ),
+            );
           } else if (readUrlMatch != null) {
             final url = readUrlMatch.group(1)?.trim() ?? '';
-            stepContent = stepContent.isEmpty ? '<read_url>$url</read_url>' : '$stepContent\n\n<read_url>$url</read_url>';
+            stepContent = stepContent.isEmpty
+                ? '<read_url>$url</read_url>'
+                : '$stepContent\n\n<read_url>$url</read_url>';
             steps[i]['content'] = stepContent;
             if (mounted) {
               setState(() {
-                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '<research_state>${jsonEncode(stateMap)}</research_state>');
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+                final msgs = List<ChatMessage>.from(
+                  _sessions[sessionIndex].messages,
+                );
+                msgs[messageIndex] = ChatMessage(
+                  role: MessageRole.assistant,
+                  text:
+                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                );
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  messages: msgs,
+                );
               });
             }
             String urlResult = '';
             try {
               var targetUrl = url;
-              if (!targetUrl.startsWith('http')) targetUrl = 'https://$targetUrl';
-              final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+              if (!targetUrl.startsWith('http'))
+                targetUrl = 'https://$targetUrl';
+              final client = HttpClient()
+                ..connectionTimeout = const Duration(seconds: 15);
               final request = await client.getUrl(Uri.parse(targetUrl));
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
-              
+
               var htmlBody = body;
-              final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
+              final bodyMatch = RegExp(
+                r'<body[^>]*>(.*?)</body>',
+                caseSensitive: false,
+                dotAll: true,
+              ).firstMatch(body);
               if (bodyMatch != null) {
                 htmlBody = bodyMatch.group(1) ?? htmlBody;
               }
-              
-              htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: false, dotAll: true), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: false, dotAll: true), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: false), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: false, dotAll: true), '');
-              htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
-              
+
+              htmlBody = htmlBody.replaceAll(
+                RegExp(
+                  r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(
+                  r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(r'<img[^>]*>', caseSensitive: false),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(
+                  r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ),
+                '',
+              );
+              htmlBody = htmlBody.replaceAll(
+                RegExp(r'<!--.*?-->', dotAll: true),
+                '',
+              );
+
               String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
               text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-              
+
               urlResult = text;
               if (urlResult.length > 8000) {
                 urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated]';
@@ -2139,31 +2689,54 @@ For every project, maintain a README.md at the project root.
               if (e.toString().contains('429')) rethrow;
               urlResult = 'Failed to read URL: $e';
             }
-            stepMessages.add(ChatMessage(role: MessageRole.user, text: "URL Content:\n$urlResult"));
+            stepMessages.add(
+              ChatMessage(
+                role: MessageRole.user,
+                text: "URL Content:\n$urlResult",
+              ),
+            );
           } else if (mcpMatch != null) {
             String jsonString = mcpMatch.group(1)?.trim() ?? '';
-            jsonString = jsonString.replaceAll(RegExp(r'^```json\s*'), '').replaceAll(RegExp(r'^```\s*'), '').replaceAll(RegExp(r'\s*```$'), '');
-            
-            stepContent = stepContent.isEmpty ? '<mcp_request>$jsonString</mcp_request>' : '$stepContent\n\n<mcp_request>$jsonString</mcp_request>';
+            jsonString = jsonString
+                .replaceAll(RegExp(r'^```json\s*'), '')
+                .replaceAll(RegExp(r'^```\s*'), '')
+                .replaceAll(RegExp(r'\s*```$'), '');
+
+            stepContent = stepContent.isEmpty
+                ? '<mcp_request>$jsonString</mcp_request>'
+                : '$stepContent\n\n<mcp_request>$jsonString</mcp_request>';
             steps[i]['content'] = stepContent;
             if (mounted) {
               setState(() {
-                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '<research_state>${jsonEncode(stateMap)}</research_state>');
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+                final msgs = List<ChatMessage>.from(
+                  _sessions[sessionIndex].messages,
+                );
+                msgs[messageIndex] = ChatMessage(
+                  role: MessageRole.assistant,
+                  text:
+                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                );
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  messages: msgs,
+                );
               });
             }
 
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
+            String toolMethod = 'tool';
+            Map<String, dynamic> toolParams = {};
             try {
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
               final params = parsed['params'] as Map<String, dynamic>? ?? {};
+              toolMethod = parsed['method']?.toString() ?? 'tool';
+              toolParams = params;
               if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
                 mcpEndpoint = _customMcpUrl;
                 params.remove('server');
               }
               params['workspace_dir'] = _agenticWorkspace;
-              if (!params.containsKey('cwd') || (params['cwd'] as String?)?.isEmpty == true) {
+              if (!params.containsKey('cwd') ||
+                  (params['cwd'] as String?)?.isEmpty == true) {
                 params['cwd'] = _agenticWorkspace;
               }
               _resolveToolPaths(params, _agenticWorkspace);
@@ -2172,8 +2745,44 @@ For every project, maintain a README.md at the project root.
             } catch (_) {}
 
             String mcpResult = '';
+            if (toolMethod == 'run_command' ||
+                toolMethod == 'shell_exec' ||
+                toolMethod == 'execute_command' ||
+                toolMethod == 'execute_shell' ||
+                toolMethod == 'shell_rich' ||
+                toolMethod == 'run_background') {
+              final cmd = toolParams['command']?.toString() ?? '';
+              final allowed = await _askShellPermission(cmd);
+              if (!allowed) {
+                stepMessages.add(
+                  ChatMessage(
+                    role: MessageRole.user,
+                    text:
+                        'MCP Result:\n{"error": "User denied shell command execution."}',
+                  ),
+                );
+                continue;
+              }
+            }
+            if (_requiresFileMutationPermission(toolMethod, toolParams)) {
+              final allowed = await _askFileMutationPermission(
+                toolMethod,
+                toolParams,
+              );
+              if (!allowed) {
+                stepMessages.add(
+                  ChatMessage(
+                    role: MessageRole.user,
+                    text:
+                        'MCP Result:\n{"error": "User denied file operation."}',
+                  ),
+                );
+                continue;
+              }
+            }
             try {
-              final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+              final client = HttpClient()
+                ..connectionTimeout = const Duration(seconds: 10);
               final request = await client.postUrl(Uri.parse(mcpEndpoint));
               request.headers.contentType = ContentType.json;
               final bytes = utf8.encode(jsonString);
@@ -2181,41 +2790,91 @@ For every project, maintain a README.md at the project root.
               request.add(bytes);
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
-              mcpResult = body;
-              if (mcpResult.length > 4000) {
-                mcpResult = mcpResult.substring(0, 4000) + '\n\n...[truncated]';
+              String cleanResult = body;
+              try {
+                final parsed = jsonDecode(body) as Map<String, dynamic>;
+                final resultData =
+                    parsed['result'] as Map<String, dynamic>? ?? parsed;
+                if (resultData.containsKey('aiBlock')) {
+                  cleanResult = resultData['aiBlock'].toString();
+                } else if (resultData.containsKey('stdout')) {
+                  cleanResult = resultData['stdout'].toString();
+                  if (resultData.containsKey('diff') &&
+                      resultData['diff'].toString().isNotEmpty) {
+                    cleanResult +=
+                        '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                  }
+                  if (resultData.containsKey('stderr') &&
+                      resultData['stderr'].toString().trim().isNotEmpty) {
+                    cleanResult +=
+                        '\n\n--- STDERR ---\n' +
+                        resultData['stderr'].toString();
+                  }
+                } else if (resultData.containsKey('error')) {
+                  cleanResult = 'Error: ' + resultData['error'].toString();
+                }
+              } catch (_) {}
+              mcpResult = cleanResult;
+              if (mcpResult.length > 32000) {
+                mcpResult =
+                    mcpResult.substring(0, 16000) +
+                    '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
+                    mcpResult.substring(mcpResult.length - 6000);
               }
             } catch (e) {
               mcpResult = '{"error": "$e"}';
             }
-            stepMessages.add(ChatMessage(role: MessageRole.user, text: "MCP Result:\n$mcpResult"));
+            stepMessages.add(
+              ChatMessage(
+                role: MessageRole.user,
+                text: "MCP Result:\n$mcpResult",
+              ),
+            );
           } else {
-            stepContent = stepContent.isEmpty ? responseText : '$stepContent\n\n$responseText';
+            stepContent = stepContent.isEmpty
+                ? responseText
+                : '$stepContent\n\n$responseText';
             stepDone = true;
           }
           await Future.delayed(const Duration(seconds: 8));
           consecutive429s = 0;
         } catch (e) {
           final errorStr = e.toString().toLowerCase();
-          if (errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503')) {
+          if (errorStr.contains('429') ||
+              errorStr.contains('500') ||
+              errorStr.contains('503')) {
             loopCount--;
             consecutive429s++;
             int delaySeconds = 10;
-            if (consecutive429s >= 3) delaySeconds = 40;
-            else if (consecutive429s == 2) delaySeconds = 20;
+            if (consecutive429s >= 3)
+              delaySeconds = 40;
+            else if (consecutive429s == 2)
+              delaySeconds = 20;
 
-            stepContent = stepContent.isEmpty ? "API rate limit or server error. Retrying in ${delaySeconds}s..." : "$stepContent\n\nAPI rate limit or server error. Retrying in ${delaySeconds}s...";
+            stepContent = stepContent.isEmpty
+                ? "API rate limit or server error. Retrying in ${delaySeconds}s..."
+                : "$stepContent\n\nAPI rate limit or server error. Retrying in ${delaySeconds}s...";
             steps[i]['content'] = stepContent;
             if (mounted) {
               setState(() {
-                final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-                msgs[messageIndex] = ChatMessage(role: MessageRole.assistant, text: '<research_state>${jsonEncode(stateMap)}</research_state>');
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+                final msgs = List<ChatMessage>.from(
+                  _sessions[sessionIndex].messages,
+                );
+                msgs[messageIndex] = ChatMessage(
+                  role: MessageRole.assistant,
+                  text:
+                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                );
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  messages: msgs,
+                );
               });
             }
             await Future.delayed(Duration(seconds: delaySeconds));
           } else {
-            stepContent = stepContent.isEmpty ? "Error during step: $e" : "$stepContent\n\nError during step: $e";
+            stepContent = stepContent.isEmpty
+                ? "Error during step: $e"
+                : "$stepContent\n\nError during step: $e";
             stepDone = true;
           }
         }
@@ -2230,7 +2889,9 @@ For every project, maintain a README.md at the project root.
             role: MessageRole.assistant,
             text: '<research_state>${jsonEncode(stateMap)}</research_state>',
           );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
         });
         await _saveSessions();
       }
@@ -2244,11 +2905,14 @@ For every project, maintain a README.md at the project root.
           role: MessageRole.assistant,
           text: '<research_state>${jsonEncode(stateMap)}</research_state>',
         );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          messages: msgs,
+        );
       });
     }
 
-    final finalPrompt = "All research phases are complete. Now, output the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.";
+    final finalPrompt =
+        "All research phases are complete. Now, output the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.";
     stepMessages.add(ChatMessage(role: MessageRole.user, text: finalPrompt));
 
     String finalReportText = '';
@@ -2264,23 +2928,37 @@ For every project, maintain a README.md at the project root.
           model: model,
           messages: stepMessages,
         );
-        
+
         var isThinking = false;
         await for (final chunk in stream) {
           if (chunk.startsWith('[REASONING]')) {
             finalReasoningText += chunk.substring(11);
           } else {
             var textChunk = chunk;
-            if (!isThinking && (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>'))) {
-              final tag = textChunk.contains('<think>') ? '<think>' : textChunk.contains('<thought>') ? '<thought>' : '<reasoning>';
+            if (!isThinking &&
+                (textChunk.contains('<think>') ||
+                    textChunk.contains('<reasoning>') ||
+                    textChunk.contains('<thought>'))) {
+              final tag = textChunk.contains('<think>')
+                  ? '<think>'
+                  : textChunk.contains('<thought>')
+                  ? '<thought>'
+                  : '<reasoning>';
               final parts = textChunk.split(tag);
               finalReportText += parts[0];
               isThinking = true;
               textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
             }
-            
-            if (isThinking && (textChunk.contains('</think>') || textChunk.contains('</reasoning>') || textChunk.contains('</thought>'))) {
-              final tag = textChunk.contains('</think>') ? '</think>' : textChunk.contains('</thought>') ? '</thought>' : '</reasoning>';
+
+            if (isThinking &&
+                (textChunk.contains('</think>') ||
+                    textChunk.contains('</reasoning>') ||
+                    textChunk.contains('</thought>'))) {
+              final tag = textChunk.contains('</think>')
+                  ? '</think>'
+                  : textChunk.contains('</thought>')
+                  ? '</thought>'
+                  : '</reasoning>';
               final parts = textChunk.split(tag);
               finalReasoningText += parts[0];
               isThinking = false;
@@ -2297,7 +2975,9 @@ For every project, maintain a README.md at the project root.
         finalReportDone = true;
       } catch (e) {
         final errorStr = e.toString().toLowerCase();
-        if (errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503')) {
+        if (errorStr.contains('429') ||
+            errorStr.contains('500') ||
+            errorStr.contains('503')) {
           finalReportRetries++;
           await Future.delayed(const Duration(seconds: 10));
         } else {
@@ -2316,12 +2996,16 @@ For every project, maintain a README.md at the project root.
           role: MessageRole.assistant,
           text: '<research_state>${jsonEncode(stateMap)}</research_state>',
         );
-        msgs.add(ChatMessage(
-          role: MessageRole.assistant,
-          text: finalReportText,
-          reasoning: finalReasoningText,
-        ));
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        msgs.add(
+          ChatMessage(
+            role: MessageRole.assistant,
+            text: finalReportText,
+            reasoning: finalReasoningText,
+          ),
+        );
+        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          messages: msgs,
+        );
         _sendingSessionIds.remove(_sessions[sessionIndex].id);
       });
       await _saveSessions();
@@ -2354,7 +3038,7 @@ For every project, maintain a README.md at the project root.
     final provider = _provider;
     final settings = _activeSettings;
     final models = _modelCache[provider.id] ?? provider.models;
-    
+
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2369,7 +3053,7 @@ For every project, maintain a README.md at the project root.
           cachedModels: models,
           searchSettings: _searchSettings,
           agenticEnabled: _agenticEnabled,
-          deepResearchEnabled: _deepResearchEnabled,
+          deepResearchEnabled: false,
           agenticWorkspace: _agenticWorkspace,
           customMcpUrl: _customMcpUrl,
           onSearchSettingsChanged: (nextSearchSettings) async {
@@ -2384,9 +3068,9 @@ For every project, maintain a README.md at the project root.
             });
             await _saveSettings();
           },
-          onDeepResearchEnabledChanged: (val) async {
+          onDeepResearchEnabledChanged: (_) async {
             setState(() {
-              _deepResearchEnabled = val;
+              _deepResearchEnabled = false;
             });
             await _saveSettings();
           },
@@ -2404,33 +3088,55 @@ For every project, maintain a README.md at the project root.
           },
           onImageAttached: (base64Content) {
             setState(() {
-              final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              final sessionIndex = _sessions.indexWhere(
+                (s) => s.id == _activeSessionId,
+              );
               if (sessionIndex != -1) {
-                final list = List<String>.from(_sessions[sessionIndex].attachedImagesBase64)..add(base64Content);
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedImagesBase64: list);
+                final list = List<String>.from(
+                  _sessions[sessionIndex].attachedImagesBase64,
+                )..add(base64Content);
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  attachedImagesBase64: list,
+                );
               }
             });
             _saveSessions();
           },
           onFileAttached: (file) {
             setState(() {
-              final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              final sessionIndex = _sessions.indexWhere(
+                (s) => s.id == _activeSessionId,
+              );
               if (sessionIndex != -1) {
-                final list = List<AttachedFile>.from(_sessions[sessionIndex].attachedFiles)..add(file);
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedFiles: list);
+                final list = List<AttachedFile>.from(
+                  _sessions[sessionIndex].attachedFiles,
+                )..add(file);
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  attachedFiles: list,
+                );
               }
             });
             _saveSessions();
           },
           onProviderChanged: (newProviderId) async {
-            final nextProvider = providerCatalog.firstWhere((p) => p.id == newProviderId);
-            final nextSettings = _settings[newProviderId] ?? ProviderSettings.defaults(nextProvider);
-            final nextModel = nextSettings.model.isNotEmpty ? nextSettings.model : nextProvider.models.first;
+            final nextProvider = providerCatalog.firstWhere(
+              (p) => p.id == newProviderId,
+            );
+            final nextSettings =
+                _settings[newProviderId] ??
+                ProviderSettings.defaults(nextProvider);
+            final nextModel = nextSettings.model.isNotEmpty
+                ? nextSettings.model
+                : nextProvider.models.first;
             setState(() {
               _selectedProviderId = newProviderId;
-              _settings[newProviderId] = nextSettings.copyWith(model: nextModel);
-              
-              final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              _settings[newProviderId] = nextSettings.copyWith(
+                model: nextModel,
+              );
+
+              final sessionIndex = _sessions.indexWhere(
+                (s) => s.id == _activeSessionId,
+              );
               if (sessionIndex != -1) {
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   providerId: newProviderId,
@@ -2445,10 +3151,16 @@ For every project, maintain a README.md at the project root.
           onModelChanged: (newModel) async {
             setState(() {
               final currentProv = _selectedProviderId;
-              final currentSettings = _settings[currentProv] ?? ProviderSettings.defaults(_provider);
-              _settings[currentProv] = currentSettings.copyWith(model: newModel);
-              
-              final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              final currentSettings =
+                  _settings[currentProv] ??
+                  ProviderSettings.defaults(_provider);
+              _settings[currentProv] = currentSettings.copyWith(
+                model: newModel,
+              );
+
+              final sessionIndex = _sessions.indexWhere(
+                (s) => s.id == _activeSessionId,
+              );
               if (sessionIndex != -1) {
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   model: newModel,
@@ -2461,10 +3173,16 @@ For every project, maintain a README.md at the project root.
           onMaxTokensChanged: (newMaxTokens) async {
             setState(() {
               final currentProv = _selectedProviderId;
-              final currentSettings = _settings[currentProv] ?? ProviderSettings.defaults(_provider);
-              _settings[currentProv] = currentSettings.copyWith(maxTokens: newMaxTokens);
-              
-              final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              final currentSettings =
+                  _settings[currentProv] ??
+                  ProviderSettings.defaults(_provider);
+              _settings[currentProv] = currentSettings.copyWith(
+                maxTokens: newMaxTokens,
+              );
+
+              final sessionIndex = _sessions.indexWhere(
+                (s) => s.id == _activeSessionId,
+              );
               if (sessionIndex != -1) {
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   maxTokens: newMaxTokens,
@@ -2477,8 +3195,12 @@ For every project, maintain a README.md at the project root.
           onReasoningEnabledChanged: (enabled) async {
             setState(() {
               final currentProv = _selectedProviderId;
-              final currentSettings = _settings[currentProv] ?? ProviderSettings.defaults(_provider);
-              _settings[currentProv] = currentSettings.copyWith(reasoningEnabled: enabled);
+              final currentSettings =
+                  _settings[currentProv] ??
+                  ProviderSettings.defaults(_provider);
+              _settings[currentProv] = currentSettings.copyWith(
+                reasoningEnabled: enabled,
+              );
             });
             await _saveSettings();
           },
@@ -2493,12 +3215,18 @@ For every project, maintain a README.md at the project root.
 
   void _removeImage(int index) {
     setState(() {
-      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      final sessionIndex = _sessions.indexWhere(
+        (s) => s.id == _activeSessionId,
+      );
       if (sessionIndex != -1) {
-        final list = List<String>.from(_sessions[sessionIndex].attachedImagesBase64);
+        final list = List<String>.from(
+          _sessions[sessionIndex].attachedImagesBase64,
+        );
         if (index >= 0 && index < list.length) {
           list.removeAt(index);
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedImagesBase64: list);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            attachedImagesBase64: list,
+          );
         }
       }
     });
@@ -2507,12 +3235,18 @@ For every project, maintain a README.md at the project root.
 
   void _removeFile(int index) {
     setState(() {
-      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      final sessionIndex = _sessions.indexWhere(
+        (s) => s.id == _activeSessionId,
+      );
       if (sessionIndex != -1) {
-        final list = List<AttachedFile>.from(_sessions[sessionIndex].attachedFiles);
+        final list = List<AttachedFile>.from(
+          _sessions[sessionIndex].attachedFiles,
+        );
         if (index >= 0 && index < list.length) {
           list.removeAt(index);
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(attachedFiles: list);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            attachedFiles: list,
+          );
         }
       }
     });
@@ -2521,7 +3255,9 @@ For every project, maintain a README.md at the project root.
 
   void _editUserMessage(int index) {
     setState(() {
-      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      final sessionIndex = _sessions.indexWhere(
+        (s) => s.id == _activeSessionId,
+      );
       if (sessionIndex != -1) {
         final session = _sessions[sessionIndex];
         final messages = List<ChatMessage>.from(session.messages);
@@ -2543,7 +3279,9 @@ For every project, maintain a README.md at the project root.
 
   void _switchBranch(int branchIndex) {
     setState(() {
-      final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
+      final sessionIndex = _sessions.indexWhere(
+        (s) => s.id == _activeSessionId,
+      );
       if (sessionIndex != -1) {
         final session = _sessions[sessionIndex];
         final branches = session.branches ?? [session.messages];
@@ -2564,7 +3302,7 @@ For every project, maintain a README.md at the project root.
       final position = _scrollController.position;
       final maxScroll = position.maxScrollExtent;
       final currentScroll = position.pixels;
-      
+
       if (force || (maxScroll - currentScroll) <= 150.0) {
         _scrollController.animateTo(
           maxScroll,
@@ -2590,8 +3328,8 @@ For every project, maintain a README.md at the project root.
     final width = MediaQuery.sizeOf(context).width;
     final wide = width >= 840;
     final activeSession = _activeSession;
-    
-        final chatHistoryPanel = ChatHistoryPanel(
+
+    final chatHistoryPanel = ChatHistoryPanel(
       sessions: _sessions,
       activeSessionId: _activeSessionId,
       onSessionTap: _switchSession,
@@ -2606,11 +3344,7 @@ For every project, maintain a README.md at the project root.
       body: SafeArea(
         child: Row(
           children: [
-            if (wide)
-              SizedBox(
-                width: 330,
-                child: chatHistoryPanel,
-              ),
+            if (wide) SizedBox(width: 330, child: chatHistoryPanel),
             Expanded(
               child: ChatSurface(
                 provider: _provider,
@@ -2637,7 +3371,7 @@ For every project, maintain a README.md at the project root.
                 activeBranchIndex: activeSession.activeBranchIndex,
                 onBranchChanged: _switchBranch,
                 agenticWorkspace: _agenticWorkspace,
-                deepResearchEnabled: _deepResearchEnabled,
+                deepResearchEnabled: false,
                 onStartResearch: _startResearchLoop,
                 fileName: _getResearchFileName(activeSession.title),
               ),
@@ -2648,7 +3382,8 @@ For every project, maintain a README.md at the project root.
     );
   }
 
-  static String _keyStorageName(String providerId) => 'provider_api_key_$providerId';
+  static String _keyStorageName(String providerId) =>
+      'provider_api_key_$providerId';
 }
 
 class ChatHistoryPanel extends StatelessWidget {
@@ -2723,10 +3458,14 @@ class ChatHistoryPanel extends StatelessWidget {
                   curve: Curves.easeOutCubic,
                   margin: const EdgeInsets.symmetric(vertical: 3),
                   decoration: BoxDecoration(
-                    color: selected ? const Color(0xFFFFF8EA) : Colors.transparent,
+                    color: selected
+                        ? const Color(0xFFFFF8EA)
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: selected ? const Color(0xFFD8B98D) : Colors.transparent,
+                      color: selected
+                          ? const Color(0xFFD8B98D)
+                          : Colors.transparent,
                     ),
                   ),
                   child: ListTile(
@@ -2738,7 +3477,11 @@ class ChatHistoryPanel extends StatelessWidget {
                         if (session.isPinned)
                           const Padding(
                             padding: EdgeInsets.only(right: 4.0),
-                            child: Icon(Icons.push_pin, size: 12, color: Color(0xFF7B4E2E)),
+                            child: Icon(
+                              Icons.push_pin,
+                              size: 12,
+                              color: Color(0xFF7B4E2E),
+                            ),
                           ),
                         const Icon(Icons.chat_bubble_outline, size: 20),
                       ],
@@ -2747,13 +3490,18 @@ class ChatHistoryPanel extends StatelessWidget {
                       session.title,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                        fontWeight: selected
+                            ? FontWeight.w800
+                            : FontWeight.w600,
                         color: const Color(0xFF33291F),
                       ),
                     ),
                     subtitle: Text(
                       '$messageCount message${messageCount == 1 ? '' : 's'}',
-                      style: const TextStyle(color: Color(0xFF6C5946), fontSize: 11),
+                      style: const TextStyle(
+                        color: Color(0xFF6C5946),
+                        fontSize: 11,
+                      ),
                     ),
                     trailing: IconButton(
                       icon: const Icon(Icons.delete_outline, size: 18),
@@ -2790,7 +3538,11 @@ class ChatHistoryPanel extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 16.0),
                 child: Text(
                   session.title,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D241C),
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -2810,8 +3562,14 @@ class ChatHistoryPanel extends StatelessWidget {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.edit_outlined, color: Color(0xFF7B4E2E)),
-                title: const Text('Rename chat', style: TextStyle(fontWeight: FontWeight.bold)),
+                leading: const Icon(
+                  Icons.edit_outlined,
+                  color: Color(0xFF7B4E2E),
+                ),
+                title: const Text(
+                  'Rename chat',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
                 onTap: () async {
                   Navigator.pop(ctx);
                   _showRenameDialog(context, session);
@@ -2831,7 +3589,10 @@ class ChatHistoryPanel extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFFFFFBF2),
-        title: const Text('Rename Chat', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Rename Chat',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
         content: TextField(
           controller: controller,
           decoration: const InputDecoration(labelText: 'Chat Title'),
@@ -2925,11 +3686,7 @@ class ChatSurface extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFFFBF6EC),
-            Color(0xFFF5EFE4),
-            Color(0xFFEFE5D5),
-          ],
+          colors: [Color(0xFFFBF6EC), Color(0xFFF5EFE4), Color(0xFFEFE5D5)],
         ),
       ),
       child: Column(
@@ -2950,11 +3707,14 @@ class ChatSurface extends StatelessWidget {
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
-                  if (msg.text.contains('<mcp_request>') || msg.text.contains('<tool_request>') || msg.text.contains('<command>')) {
+                  if (msg.text.contains('<mcp_request>') ||
+                      msg.text.contains('<tool_request>') ||
+                      msg.text.contains('<command>')) {
                     state = AvatarAnimationState.mcp;
                   } else if (msg.text.contains('<search_request>')) {
                     state = AvatarAnimationState.searching;
-                  } else if ((msg.reasoning?.isNotEmpty ?? false) && msg.text.isEmpty) {
+                  } else if ((msg.reasoning?.isNotEmpty ?? false) &&
+                      msg.text.isEmpty) {
                     state = AvatarAnimationState.reasoning;
                   } else {
                     state = AvatarAnimationState.typing;
@@ -2963,18 +3723,19 @@ class ChatSurface extends StatelessWidget {
                 final isUser = messages[index].role == MessageRole.user;
                 List<int> branchIndicesForVersions = [];
                 int currentVersionIndex = 0;
-                
+
                 if (isUser && branches != null && branches!.isNotEmpty) {
                   final activeMsgs = messages;
                   final prefix = activeMsgs.sublist(0, index);
                   final seenTexts = <String>{};
-                  
+
                   for (int b = 0; b < branches!.length; b++) {
                     final branchMsgs = branches![b];
                     if (branchMsgs.length > index) {
                       bool matches = true;
                       for (int j = 0; j < index; j++) {
-                        if (branchMsgs[j].text != prefix[j].text || branchMsgs[j].role != prefix[j].role) {
+                        if (branchMsgs[j].text != prefix[j].text ||
+                            branchMsgs[j].role != prefix[j].role) {
                           matches = false;
                           break;
                         }
@@ -2988,9 +3749,10 @@ class ChatSurface extends StatelessWidget {
                       }
                     }
                   }
-                  
+
                   currentVersionIndex = branchIndicesForVersions.indexWhere(
-                    (bIdx) => branches![bIdx][index].text == messages[index].text
+                    (bIdx) =>
+                        branches![bIdx][index].text == messages[index].text,
                   );
                   if (currentVersionIndex == -1) currentVersionIndex = 0;
                 }
@@ -3024,11 +3786,17 @@ class ChatSurface extends StatelessWidget {
             child: toolStatus.isNotEmpty
                 ? Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 9,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFEEF4FF),
                       border: Border(
-                        top: BorderSide(color: const Color(0xFFBDD3F8), width: 1),
+                        top: BorderSide(
+                          color: const Color(0xFFBDD3F8),
+                          width: 1,
+                        ),
                       ),
                     ),
                     child: Row(
@@ -3038,7 +3806,9 @@ class ChatSurface extends StatelessWidget {
                           height: 14,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF3B82F6)),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(0xFF3B82F6),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -3129,7 +3899,10 @@ class ChatHeader extends StatelessWidget {
                   child: GestureDetector(
                     onTap: onOpenModel,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFFFFCF6),
                         borderRadius: BorderRadius.circular(12),
@@ -3138,7 +3911,11 @@ class ChatHeader extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.tune, size: 16, color: Color(0xFF7B4E2E)),
+                          const Icon(
+                            Icons.tune,
+                            size: 16,
+                            color: Color(0xFF7B4E2E),
+                          ),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
@@ -3177,7 +3954,7 @@ class ChatHeader extends StatelessWidget {
 
 String formatMathText(String text) {
   var formatted = text;
-  
+
   // Replace double dollar sign math blocks with markdown code block
   final blockMathRegex = RegExp(r'\$\$(.*?)\$\$', dotAll: true);
   formatted = formatted.replaceAllMapped(blockMathRegex, (match) {
@@ -3232,7 +4009,11 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Row(
                 children: [
-                  const Icon(Icons.psychology_outlined, size: 18, color: Color(0xFF7B4E2E)),
+                  const Icon(
+                    Icons.psychology_outlined,
+                    size: 18,
+                    color: Color(0xFF7B4E2E),
+                  ),
                   const SizedBox(width: 8),
                   const Text(
                     'Thought Process',
@@ -3244,7 +4025,9 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
                   ),
                   const Spacer(),
                   Icon(
-                    _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    _expanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
                     size: 18,
                     color: const Color(0xFF6C5946),
                   ),
@@ -3284,89 +4067,398 @@ class _McpToolBlockState extends State<McpToolBlock> {
   bool _expanded = false;
 
   /// Returns (icon, label, subtitle) for a method + params.
-  (IconData, Color, String, String?) _describe(String method, Map<String, dynamic> params) {
+  (IconData, Color, String, String?) _describe(
+    String method,
+    Map<String, dynamic> params,
+  ) {
     String p(String key) => params[key]?.toString() ?? '';
     String shortPath(String path) {
       if (path.isEmpty) return '';
       final parts = path.split('/');
       return parts.length > 2 ? '…/${parts.last}' : path;
     }
+
     switch (method) {
       case 'read_file_rich':
-      case 'file_read': {
-        final path = shortPath(p('path'));
-        final start = p('start_line');
-        final end = p('end_line');
-        final sub = (start.isNotEmpty && end.isNotEmpty) ? 'lines $start–$end' : null;
-        return (Icons.menu_book_outlined, const Color(0xFF0369A1), 'Read  $path', sub);
-      }
+      case 'file_read':
+        {
+          final path = shortPath(p('path'));
+          final start = p('start_line');
+          final end = p('end_line');
+          final sub = (start.isNotEmpty && end.isNotEmpty)
+              ? 'lines $start–$end'
+              : null;
+          return (
+            Icons.menu_book_outlined,
+            const Color(0xFF0369A1),
+            'Read  $path',
+            sub,
+          );
+        }
       case 'multi_read_rich':
       case 'multi_read':
-        return (Icons.library_books_outlined, const Color(0xFF0369A1), 'Batch read files', null);
+        return (
+          Icons.library_books_outlined,
+          const Color(0xFF0369A1),
+          'Batch read files',
+          null,
+        );
       case 'patch_file':
-        return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Patch  ${shortPath(p('path'))}', 'search-replace');
+        return (
+          Icons.edit_outlined,
+          const Color(0xFF7C3AED),
+          'Patch  ${shortPath(p('path'))}',
+          'search-replace',
+        );
       case 'replace_lines':
-        return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Replace lines  ${p('start_line')}–${p('end_line')}', shortPath(p('path')));
+        return (
+          Icons.edit_outlined,
+          const Color(0xFF7C3AED),
+          'Replace lines  ${p('start_line')}–${p('end_line')}',
+          shortPath(p('path')),
+        );
       case 'insert_lines':
-        return (Icons.playlist_add, const Color(0xFF059669), 'Insert after line ${p('after_line')}', shortPath(p('path')));
+        return (
+          Icons.playlist_add,
+          const Color(0xFF059669),
+          'Insert after line ${p('after_line')}',
+          shortPath(p('path')),
+        );
       case 'delete_lines':
-        return (Icons.delete_sweep_outlined, const Color(0xFFDC2626), 'Delete lines ${p('start_line')}–${p('end_line')}', shortPath(p('path')));
+        return (
+          Icons.delete_sweep_outlined,
+          const Color(0xFFDC2626),
+          'Delete lines ${p('start_line')}–${p('end_line')}',
+          shortPath(p('path')),
+        );
       case 'write_file_rich':
       case 'file_write':
-        return (Icons.edit_document, const Color(0xFF059669), 'Write  ${shortPath(p('path'))}', null);
+        return (
+          Icons.edit_document,
+          const Color(0xFF059669),
+          'Write  ${shortPath(p('path'))}',
+          null,
+        );
       case 'search_rich':
       case 'file_search':
-        return (Icons.search, const Color(0xFF0369A1), 'Search files', p('query').isNotEmpty ? '"${p('query')}"' : p('pattern').isNotEmpty ? '"${p('pattern')}"' : null);
+        return (
+          Icons.search,
+          const Color(0xFF0369A1),
+          'Search files',
+          p('query').isNotEmpty
+              ? '"${p('query')}"'
+              : p('pattern').isNotEmpty
+              ? '"${p('pattern')}"'
+              : null,
+        );
       case 'file_outline':
-        return (Icons.account_tree_outlined, const Color(0xFF0369A1), 'Outline  ${shortPath(p('path'))}', null);
+        return (
+          Icons.account_tree_outlined,
+          const Color(0xFF0369A1),
+          'Outline  ${shortPath(p('path'))}',
+          null,
+        );
       case 'tree':
-        return (Icons.folder_open_outlined, const Color(0xFFD97706), 'Tree  ${shortPath(p('path'))}', null);
+        return (
+          Icons.folder_open_outlined,
+          const Color(0xFFD97706),
+          'Tree  ${shortPath(p('path'))}',
+          null,
+        );
       case 'diff_files':
-        return (Icons.difference_outlined, const Color(0xFF475569), 'Diff files', null);
-      case 'file_edit': {
-        final path = shortPath(p('path'));
-        final start = p('start_line');
-        final end = p('end_line');
-        final sub = (start.isNotEmpty && end.isNotEmpty) ? 'lines $start–$end' : null;
-        return (Icons.edit_outlined, const Color(0xFF7C3AED), 'Edit  $path', sub);
-      }
+        return (
+          Icons.difference_outlined,
+          const Color(0xFF475569),
+          'Diff files',
+          null,
+        );
+      case 'symbol_references':
+        return (
+          Icons.functions,
+          const Color(0xFF7C3AED),
+          'References',
+          p('symbol'),
+        );
+      case 'append_file':
+        return (
+          Icons.note_add_outlined,
+          const Color(0xFF059669),
+          'Append  ${shortPath(p('path'))}',
+          null,
+        );
+      case 'delete_path':
+        return (
+          Icons.delete_outline,
+          const Color(0xFFDC2626),
+          'Delete  ${shortPath(p('path'))}',
+          p('recursive') == 'true' ? 'recursive' : null,
+        );
+      case 'move_path':
+        return (
+          Icons.drive_file_move_outlined,
+          const Color(0xFF475569),
+          'Move  ${shortPath(p('src'))}',
+          shortPath(p('dest')),
+        );
+      case 'copy_path':
+        return (
+          Icons.copy_outlined,
+          const Color(0xFF475569),
+          'Copy  ${shortPath(p('src'))}',
+          shortPath(p('dest')),
+        );
+      case 'mkdir_path':
+        return (
+          Icons.create_new_folder_outlined,
+          const Color(0xFFD97706),
+          'Create dir  ${shortPath(p('path'))}',
+          null,
+        );
+      case 'stat_path':
+        return (
+          Icons.info_outline,
+          const Color(0xFF475569),
+          'Stat  ${shortPath(p('path'))}',
+          null,
+        );
+      case 'chmod_path':
+        return (
+          Icons.lock_outline,
+          const Color(0xFF475569),
+          'Chmod ${p('mode')}',
+          shortPath(p('path')),
+        );
+      case 'file_edit':
+        {
+          final path = shortPath(p('path'));
+          final start = p('start_line');
+          final end = p('end_line');
+          final sub = (start.isNotEmpty && end.isNotEmpty)
+              ? 'lines $start–$end'
+              : null;
+          return (
+            Icons.edit_outlined,
+            const Color(0xFF7C3AED),
+            'Edit  $path',
+            sub,
+          );
+        }
       case 'file_delete':
-        return (Icons.delete_outline, const Color(0xFFDC2626), 'Delete  ${shortPath(p('path'))}', null);
+        return (
+          Icons.delete_outline,
+          const Color(0xFFDC2626),
+          'Delete  ${shortPath(p('path'))}',
+          null,
+        );
       case 'dir_list':
-        return (Icons.folder_open_outlined, const Color(0xFFD97706), 'List  ${shortPath(p('path'))}', null);
+        return (
+          Icons.folder_open_outlined,
+          const Color(0xFFD97706),
+          'List  ${shortPath(p('path'))}',
+          null,
+        );
       case 'dir_create':
-        return (Icons.create_new_folder_outlined, const Color(0xFFD97706), 'Create dir  ${shortPath(p('path'))}', null);
+        return (
+          Icons.create_new_folder_outlined,
+          const Color(0xFFD97706),
+          'Create dir  ${shortPath(p('path'))}',
+          null,
+        );
       case 'find_paths':
-        return (Icons.find_in_page_outlined, const Color(0xFF0369A1), 'Find paths', p('pattern').isNotEmpty ? '"${p('pattern')}"' : null);
+        return (
+          Icons.find_in_page_outlined,
+          const Color(0xFF0369A1),
+          'Find paths',
+          p('pattern').isNotEmpty ? '"${p('pattern')}"' : null,
+        );
       case 'code_search':
-        return (Icons.manage_search, const Color(0xFF0369A1), 'Code search', '"${p('query')}" in ${shortPath(p('path'))}');
+        return (
+          Icons.manage_search,
+          const Color(0xFF0369A1),
+          'Code search',
+          '"${p('query')}" in ${shortPath(p('path'))}',
+        );
       case 'symbol_search':
-        return (Icons.functions, const Color(0xFF7C3AED), 'Symbol search', p('symbol'));
+        return (
+          Icons.functions,
+          const Color(0xFF7C3AED),
+          'Symbol search',
+          p('symbol'),
+        );
       case 'file_info':
-        return (Icons.info_outline, const Color(0xFF475569), 'File info', shortPath(p('path')));
-      case 'run_command': {
-        final cmd = p('command');
-        final short = cmd.length > 55 ? '${cmd.substring(0, 52)}…' : cmd;
-        if (cmd.contains('firebase deploy')) return (Icons.cloud_upload_outlined, const Color(0xFFEA4335), '🚀 Deploy to Firebase', null);
-        if (cmd.contains('gh workflow run')) return (Icons.play_circle_outline, const Color(0xFF24292E), '⚙️ Trigger GitHub Actions', null);
-        if (cmd.contains('gh run watch')) return (Icons.timelapse, const Color(0xFF24292E), '⏳ Watch Actions build', null);
-        if (cmd.contains('gh run download')) return (Icons.download_outlined, const Color(0xFF24292E), '⬇️ Download artifact', null);
-        if (cmd.contains('git commit')) return (Icons.commit, const Color(0xFFF05032), '📦 Git commit', null);
-        if (cmd.contains('git push')) return (Icons.upload_outlined, const Color(0xFFF05032), '📤 Git push', null);
-        if (cmd.contains('git status')) return (Icons.info_outline, const Color(0xFFF05032), '📊 Git status', null);
-        if (cmd.contains('git diff')) return (Icons.difference_outlined, const Color(0xFFF05032), '🔍 Git diff', null);
-        if (cmd.contains('flutter build')) return (Icons.build_outlined, const Color(0xFF0175C2), '🔨 Flutter build', null);
-        if (cmd.contains('flutter test')) return (Icons.science_outlined, const Color(0xFF0175C2), '🧪 Flutter test', null);
-        if (cmd.contains('dart analyze')) return (Icons.analytics_outlined, const Color(0xFF0175C2), '🧹 Dart analyze', null);
-        if (cmd.contains('pkg install')) return (Icons.install_desktop_outlined, const Color(0xFF475569), '📦 Install package', null);
-        return (Icons.terminal, const Color(0xFF1E293B), short, p('cwd').isNotEmpty ? 'cwd: ${shortPath(p('cwd'))}' : null);
-      }
+        return (
+          Icons.info_outline,
+          const Color(0xFF475569),
+          'File info',
+          shortPath(p('path')),
+        );
+      case 'run_command':
+      case 'shell_rich':
+        {
+          final cmd = p('command');
+          final short = cmd.length > 55 ? '${cmd.substring(0, 52)}…' : cmd;
+          if (cmd.contains('firebase deploy'))
+            return (
+              Icons.cloud_upload_outlined,
+              const Color(0xFFEA4335),
+              '🚀 Deploy to Firebase',
+              null,
+            );
+          if (cmd.contains('gh workflow run'))
+            return (
+              Icons.play_circle_outline,
+              const Color(0xFF24292E),
+              '⚙️ Trigger GitHub Actions',
+              null,
+            );
+          if (cmd.contains('gh run watch'))
+            return (
+              Icons.timelapse,
+              const Color(0xFF24292E),
+              '⏳ Watch Actions build',
+              null,
+            );
+          if (cmd.contains('gh run download'))
+            return (
+              Icons.download_outlined,
+              const Color(0xFF24292E),
+              '⬇️ Download artifact',
+              null,
+            );
+          if (cmd.contains('git commit'))
+            return (
+              Icons.commit,
+              const Color(0xFFF05032),
+              '📦 Git commit',
+              null,
+            );
+          if (cmd.contains('git push'))
+            return (
+              Icons.upload_outlined,
+              const Color(0xFFF05032),
+              '📤 Git push',
+              null,
+            );
+          if (cmd.contains('git status'))
+            return (
+              Icons.info_outline,
+              const Color(0xFFF05032),
+              '📊 Git status',
+              null,
+            );
+          if (cmd.contains('git diff'))
+            return (
+              Icons.difference_outlined,
+              const Color(0xFFF05032),
+              '🔍 Git diff',
+              null,
+            );
+          if (cmd.contains('flutter build'))
+            return (
+              Icons.build_outlined,
+              const Color(0xFF0175C2),
+              '🔨 Flutter build',
+              null,
+            );
+          if (cmd.contains('flutter test'))
+            return (
+              Icons.science_outlined,
+              const Color(0xFF0175C2),
+              '🧪 Flutter test',
+              null,
+            );
+          if (cmd.contains('dart analyze'))
+            return (
+              Icons.analytics_outlined,
+              const Color(0xFF0175C2),
+              '🧹 Dart analyze',
+              null,
+            );
+          if (cmd.contains('pkg install'))
+            return (
+              Icons.install_desktop_outlined,
+              const Color(0xFF475569),
+              '📦 Install package',
+              null,
+            );
+          return (
+            Icons.terminal,
+            const Color(0xFF1E293B),
+            short,
+            p('cwd').isNotEmpty ? 'cwd: ${shortPath(p('cwd'))}' : null,
+          );
+        }
+      case 'run_background':
+        return (
+          Icons.play_circle_outline,
+          const Color(0xFF059669),
+          'Background service',
+          p('command'),
+        );
+      case 'list_services':
+        return (
+          Icons.list_alt_outlined,
+          const Color(0xFF475569),
+          'List services',
+          null,
+        );
+      case 'service_status':
+        return (
+          Icons.info_outline,
+          const Color(0xFF475569),
+          'Service status',
+          p('id'),
+        );
+      case 'service_logs':
+        return (
+          Icons.article_outlined,
+          const Color(0xFF475569),
+          'Service logs',
+          p('id'),
+        );
+      case 'stop_service':
+        return (
+          Icons.stop_circle_outlined,
+          const Color(0xFFDC2626),
+          'Stop service',
+          p('id'),
+        );
+      case 'dart_diagnostics':
+      case 'dart_analyze':
+        return (
+          Icons.analytics_outlined,
+          const Color(0xFF0175C2),
+          'Dart diagnostics',
+          shortPath(p('path')),
+        );
+      case 'dart_format':
+        return (
+          Icons.format_align_left,
+          const Color(0xFF0175C2),
+          'Dart format',
+          shortPath(p('path')),
+        );
       case 'git_status':
-        return (Icons.info_outline, const Color(0xFFF05032), 'Git status', null);
+        return (
+          Icons.info_outline,
+          const Color(0xFFF05032),
+          'Git status',
+          null,
+        );
       case 'git_diff':
-        return (Icons.difference_outlined, const Color(0xFFF05032), 'Git diff', null);
+        return (
+          Icons.difference_outlined,
+          const Color(0xFFF05032),
+          'Git diff',
+          null,
+        );
       default:
-        return (Icons.build_circle_outlined, const Color(0xFF2B6CB0), method, null);
+        return (
+          Icons.build_circle_outlined,
+          const Color(0xFF2B6CB0),
+          method,
+          null,
+        );
     }
   }
 
@@ -3377,7 +4469,9 @@ class _McpToolBlockState extends State<McpToolBlock> {
     String formattedContent = widget.mcpJson;
 
     if (widget.isXml) {
-      final methodMatch = RegExp(r'<method>([\s\S]*?)</method>').firstMatch(widget.mcpJson);
+      final methodMatch = RegExp(
+        r'<method>([\s\S]*?)</method>',
+      ).firstMatch(widget.mcpJson);
       if (methodMatch != null) {
         method = methodMatch.group(1)?.trim() ?? method;
       }
@@ -3444,7 +4538,9 @@ class _McpToolBlockState extends State<McpToolBlock> {
                     ),
                   ),
                   Icon(
-                    _expanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                    _expanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
                     size: 18,
                     color: color.withOpacity(0.6),
                   ),
@@ -3476,6 +4572,49 @@ class _McpToolBlockState extends State<McpToolBlock> {
   }
 }
 
+class _PermissionInfoRow extends StatelessWidget {
+  const _PermissionInfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7EC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE7D8C4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF8A7765),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+          const SizedBox(height: 3),
+          SelectableText(
+            value,
+            style: const TextStyle(
+              color: Color(0xFF2D241C),
+              fontSize: 12,
+              fontFamily: 'monospace',
+              height: 1.25,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class CodeBlockWidget extends StatelessWidget {
   const CodeBlockWidget({
@@ -3497,11 +4636,7 @@ class CodeBlockWidget extends StatelessWidget {
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(12),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 3),
-          ),
+          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 3)),
         ],
       ),
       child: Column(
@@ -3529,7 +4664,11 @@ class CodeBlockWidget extends StatelessWidget {
                 const Spacer(),
                 IconButton(
                   tooltip: 'Copy code',
-                  icon: const Icon(Icons.copy_all_outlined, size: 18, color: Color(0xFFDCCBB8)),
+                  icon: const Icon(
+                    Icons.copy_all_outlined,
+                    size: 18,
+                    color: Color(0xFFDCCBB8),
+                  ),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: code));
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -3539,7 +4678,11 @@ class CodeBlockWidget extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip: 'Save file',
-                  icon: const Icon(Icons.download_rounded, size: 18, color: Color(0xFFDCCBB8)),
+                  icon: const Icon(
+                    Icons.download_rounded,
+                    size: 18,
+                    color: Color(0xFFDCCBB8),
+                  ),
                   onPressed: onSave,
                 ),
               ],
@@ -3562,49 +4705,178 @@ class CodeBlockWidget extends StatelessWidget {
   }
 }
 
-String getExtension(String lang) {
-  switch (lang.toLowerCase()) {
-    case 'python': case 'py': return 'py';
-    case 'dart': return 'dart';
-    case 'javascript': case 'js': return 'js';
-    case 'typescript': case 'ts': return 'ts';
-    case 'html': return 'html';
-    case 'css': return 'css';
-    case 'json': return 'json';
-    case 'bash': case 'sh': case 'shell': return 'sh';
-    case 'rust': case 'rs': return 'rs';
-    case 'go': return 'go';
-    case 'cpp': case 'c++': return 'cpp';
-    case 'c': return 'c';
-    case 'java': return 'java';
-    case 'kotlin': case 'kt': return 'kt';
-    default: return 'txt';
+class FileArtifactWidget extends StatelessWidget {
+  const FileArtifactWidget({
+    required this.content,
+    required this.language,
+    super.key,
+  });
+
+  final String content;
+  final String language;
+
+  String get filename => 'artifact.${getExtension(language)}';
+
+  Future<void> _save(BuildContext context) async {
+    final bytes = Uint8List.fromList(utf8.encode(content));
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save Artifact',
+      fileName: filename,
+      bytes: bytes,
+    );
+    if (path != null && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Saved $filename')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFCF6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE7D8C4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: const BoxDecoration(
+              color: Color(0xFFF7F2E8),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
+              border: Border(bottom: BorderSide(color: Color(0xFFE7D8C4))),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.insert_drive_file_outlined,
+                  size: 16,
+                  color: Color(0xFF7B4E2E),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    filename,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF2D241C),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Copy',
+                  icon: const Icon(Icons.copy, size: 17),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: content));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Artifact copied')),
+                    );
+                  },
+                ),
+                IconButton(
+                  tooltip: 'Save',
+                  icon: const Icon(Icons.download_rounded, size: 18),
+                  onPressed: () => _save(context),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 260),
+            padding: const EdgeInsets.all(12),
+            color: const Color(0xFF1E1915),
+            child: SingleChildScrollView(
+              child: SelectableText(
+                content,
+                style: GoogleFonts.jetBrainsMono(
+                  color: const Color(0xFFFFF7EC),
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
-Future<void> _saveCodeBlock(BuildContext context, String code, String language) async {
+String getExtension(String lang) {
+  switch (lang.toLowerCase()) {
+    case 'python':
+    case 'py':
+      return 'py';
+    case 'dart':
+      return 'dart';
+    case 'javascript':
+    case 'js':
+      return 'js';
+    case 'typescript':
+    case 'ts':
+      return 'ts';
+    case 'html':
+      return 'html';
+    case 'css':
+      return 'css';
+    case 'json':
+      return 'json';
+    case 'bash':
+    case 'sh':
+    case 'shell':
+      return 'sh';
+    case 'rust':
+    case 'rs':
+      return 'rs';
+    case 'go':
+      return 'go';
+    case 'cpp':
+    case 'c++':
+      return 'cpp';
+    case 'c':
+      return 'c';
+    case 'java':
+      return 'java';
+    case 'kotlin':
+    case 'kt':
+      return 'kt';
+    default:
+      return 'txt';
+  }
+}
+
+Future<void> _saveCodeBlock(
+  BuildContext context,
+  String code,
+  String language,
+) async {
   try {
     final ext = getExtension(language);
     final filename = 'code_${DateTime.now().millisecondsSinceEpoch}.$ext';
-    
+
     if (Platform.isAndroid) {
       await Permission.storage.request();
     }
-    
+
     final bytes = Uint8List.fromList(utf8.encode(code));
     final String? path = await FilePicker.platform.saveFile(
       dialogTitle: 'Save Code Block',
       fileName: filename,
       bytes: bytes,
     );
-    
+
     if (path == null) {
       return; // User cancelled
     }
-    
+
     final file = File(path);
     await file.writeAsBytes(bytes);
-    
+
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -3630,13 +4902,17 @@ class ContentBlock {
   final String content;
   final String language;
 
-  ContentBlock({required this.isCode, required this.content, this.language = ''});
+  ContentBlock({
+    required this.isCode,
+    required this.content,
+    this.language = '',
+  });
 }
 
 List<ContentBlock> parseContentBlocks(String text) {
   final blocks = <ContentBlock>[];
   final parts = text.split('```');
-  
+
   for (var i = 0; i < parts.length; i++) {
     final part = parts[i];
     if (i % 2 == 0) {
@@ -3647,7 +4923,9 @@ List<ContentBlock> parseContentBlocks(String text) {
       final lines = part.split('\n');
       final language = lines.first.trim();
       final codeContent = lines.skip(1).join('\n');
-      blocks.add(ContentBlock(isCode: true, content: codeContent, language: language));
+      blocks.add(
+        ContentBlock(isCode: true, content: codeContent, language: language),
+      );
     }
   }
   return blocks;
@@ -3745,7 +5023,10 @@ String convertLatexToUnicode(String text) {
     return '√($inside)';
   });
 
-  final fracRegex = RegExp(r'\\frac\s*\{\s*(.*?)\s*\}\s*\{\s*(.*?)\s*\}', dotAll: true);
+  final fracRegex = RegExp(
+    r'\\frac\s*\{\s*(.*?)\s*\}\s*\{\s*(.*?)\s*\}',
+    dotAll: true,
+  );
   formatted = formatted.replaceAllMapped(fracRegex, (match) {
     final num = match.group(1) ?? '';
     final den = match.group(2) ?? '';
@@ -3766,10 +5047,25 @@ String convertLatexToUnicode(String text) {
   });
 
   final superscriptMap = {
-    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-    '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-    '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
-    'n': 'ⁿ', 'i': 'ⁱ', 'x': 'ˣ', 'y': 'ʸ'
+    '0': '⁰',
+    '1': '¹',
+    '2': '²',
+    '3': '³',
+    '4': '⁴',
+    '5': '⁵',
+    '6': '⁶',
+    '7': '⁷',
+    '8': '⁸',
+    '9': '⁹',
+    '+': '⁺',
+    '-': '⁻',
+    '=': '⁼',
+    '(': '⁽',
+    ')': '⁾',
+    'n': 'ⁿ',
+    'i': 'ⁱ',
+    'x': 'ˣ',
+    'y': 'ʸ',
   };
   final superRegex = RegExp(r'\^([0-9a-nixy\+\-\=\(\)])');
   formatted = formatted.replaceAllMapped(superRegex, (match) {
@@ -3778,10 +5074,25 @@ String convertLatexToUnicode(String text) {
   });
 
   final subscriptMap = {
-    '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
-    '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-    '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
-    'x': 'ₓ', 'y': 'y', 'i': 'ᵢ', 'j': 'ⱼ'
+    '0': '₀',
+    '1': '₁',
+    '2': '₂',
+    '3': '₃',
+    '4': '₄',
+    '5': '₅',
+    '6': '₆',
+    '7': '₇',
+    '8': '₈',
+    '9': '₉',
+    '+': '₊',
+    '-': '₋',
+    '=': '₌',
+    '(': '₍',
+    ')': '₎',
+    'x': 'ₓ',
+    'y': 'y',
+    'i': 'ᵢ',
+    'j': 'ⱼ',
   };
   final subRegex = RegExp(r'_([0-9\+\-\=\(\)xyij])');
   formatted = formatted.replaceAllMapped(subRegex, (match) {
@@ -3789,7 +5100,10 @@ String convertLatexToUnicode(String text) {
     return subscriptMap[char] ?? '_$char';
   });
 
-  formatted = formatted.replaceAllMapped(RegExp(r'\\text\s*\{\s*(.*?)\s*\}'), (m) => m.group(1) ?? '');
+  formatted = formatted.replaceAllMapped(
+    RegExp(r'\\text\s*\{\s*(.*?)\s*\}'),
+    (m) => m.group(1) ?? '',
+  );
 
   return formatted;
 }
@@ -3829,7 +5143,8 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = message.text;
-    final isToolOutput = message.role == MessageRole.system ||
+    final isToolOutput =
+        message.role == MessageRole.system ||
         text.startsWith('Tool Result [') ||
         text.startsWith('Search results:\n') ||
         text.startsWith('URL Content:\n') ||
@@ -3861,7 +5176,11 @@ class MessageBubble extends StatelessWidget {
               Row(
                 children: [
                   if (isUser) ...[
-                    const Icon(Icons.person_outline, size: 16, color: Color(0xFF7B4E2E)),
+                    const Icon(
+                      Icons.person_outline,
+                      size: 16,
+                      color: Color(0xFF7B4E2E),
+                    ),
                     const SizedBox(width: 6),
                     const Text(
                       'You',
@@ -3874,18 +5193,26 @@ class MessageBubble extends StatelessWidget {
                     if (versionsCount > 1) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFF5EFE4),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFDCCBB8), width: 0.5),
+                          border: Border.all(
+                            color: const Color(0xFFDCCBB8),
+                            width: 0.5,
+                          ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             GestureDetector(
                               onTap: currentVersionIndex > 0
-                                  ? () => onVersionChanged?.call(currentVersionIndex - 1)
+                                  ? () => onVersionChanged?.call(
+                                      currentVersionIndex - 1,
+                                    )
                                   : null,
                               child: Icon(
                                 Icons.chevron_left,
@@ -3896,7 +5223,9 @@ class MessageBubble extends StatelessWidget {
                               ),
                             ),
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
                               child: Text(
                                 '${currentVersionIndex + 1}/$versionsCount',
                                 style: const TextStyle(
@@ -3908,7 +5237,9 @@ class MessageBubble extends StatelessWidget {
                             ),
                             GestureDetector(
                               onTap: currentVersionIndex < versionsCount - 1
-                                  ? () => onVersionChanged?.call(currentVersionIndex + 1)
+                                  ? () => onVersionChanged?.call(
+                                      currentVersionIndex + 1,
+                                    )
                                   : null,
                               child: Icon(
                                 Icons.chevron_right,
@@ -3923,7 +5254,11 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ],
                   ] else ...[
-                    ProviderAvatar(label: providerShortName, small: true, animationState: animationState),
+                    ProviderAvatar(
+                      label: providerShortName,
+                      small: true,
+                      animationState: animationState,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       providerName,
@@ -3937,18 +5272,28 @@ class MessageBubble extends StatelessWidget {
                   const Spacer(),
                   IconButton(
                     tooltip: 'Copy text',
-                    icon: const Icon(Icons.content_copy_rounded, size: 14, color: Color(0xFF6C5946)),
+                    icon: const Icon(
+                      Icons.content_copy_rounded,
+                      size: 14,
+                      color: Color(0xFF6C5946),
+                    ),
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: message.text));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Message copied to clipboard')),
+                        const SnackBar(
+                          content: Text('Message copied to clipboard'),
+                        ),
                       );
                     },
                   ),
                   if (isUser)
                     IconButton(
                       tooltip: 'Edit message',
-                      icon: const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF6C5946)),
+                      icon: const Icon(
+                        Icons.edit_outlined,
+                        size: 14,
+                        color: Color(0xFF6C5946),
+                      ),
                       onPressed: onEditUserMessage,
                     ),
                 ],
@@ -3978,100 +5323,105 @@ class MessageBubble extends StatelessWidget {
                 ),
               ),
             if (isToolOutput)
-              Builder(builder: (context) {
-                // Parse a smart header for tool results
-                final text = message.text;
-                String header;
-                IconData headerIcon;
-                Color headerColor;
-                final hasError = text.contains('"error"') || text.contains('Error:');
-                if (hasError) {
-                  headerIcon = Icons.error_outline;
-                  headerColor = const Color(0xFFDC2626);
-                } else {
-                  headerIcon = Icons.check_circle_outline;
-                  headerColor = const Color(0xFF059669);
-                }
+              Builder(
+                builder: (context) {
+                  // Parse a smart header for tool results
+                  final text = message.text;
+                  String header;
+                  IconData headerIcon;
+                  Color headerColor;
+                  final hasError =
+                      text.contains('"error"') || text.contains('Error:');
+                  if (hasError) {
+                    headerIcon = Icons.error_outline;
+                    headerColor = const Color(0xFFDC2626);
+                  } else {
+                    headerIcon = Icons.check_circle_outline;
+                    headerColor = const Color(0xFF059669);
+                  }
 
-                // Extract tool name from "Tool Result [method]:" or "Web Search results" etc.
-                final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]').firstMatch(text);
-                final webSearchMatch = text.startsWith('Web Search results') || text.startsWith('Search results:\n');
-                final urlMatch = text.startsWith("Content of URL") || text.startsWith("URL Content:\n");
-                final mcpMatch = text.startsWith("MCP Result:\n");
-                if (toolResultMatch != null) {
-                  final method = toolResultMatch.group(1) ?? 'tool';
-                  final sizeKb = (text.length / 1024).toStringAsFixed(1);
-                  header = hasError
-                      ? '❌ Failed: $method'
-                      : '✅ Tool Result [$method]  ·  ${sizeKb} KB';
-                  headerIcon = hasError ? Icons.error_outline : Icons.check_circle_outline;
-                } else if (webSearchMatch) {
-                  header = '🔍 Web Search Results';
-                  headerIcon = Icons.search;
-                  headerColor = const Color(0xFF0369A1);
-                } else if (urlMatch) {
-                  header = '🌐 URL Content Fetched';
-                  headerIcon = Icons.language;
-                  headerColor = const Color(0xFF0369A1);
-                } else if (mcpMatch) {
-                  header = '⚙️ MCP Tool Result';
-                  headerIcon = Icons.settings;
-                  headerColor = const Color(0xFF059669);
-                } else {
-                  header = text.split('\n').first;
-                }
+                  // Extract tool name from "Tool Result [method]:" or "Web Search results" etc.
+                  final toolResultMatch = RegExp(
+                    r'Tool Result \[(\w+)\]',
+                  ).firstMatch(text);
+                  final webSearchMatch =
+                      text.startsWith('Web Search results') ||
+                      text.startsWith('Search results:\n');
+                  final urlMatch =
+                      text.startsWith("Content of URL") ||
+                      text.startsWith("URL Content:\n");
+                  final mcpMatch = text.startsWith("MCP Result:\n");
+                  if (toolResultMatch != null) {
+                    final method = toolResultMatch.group(1) ?? 'tool';
+                    final sizeKb = (text.length / 1024).toStringAsFixed(1);
+                    header = hasError
+                        ? '❌ Failed: $method'
+                        : '✅ Tool Result [$method]  ·  ${sizeKb} KB';
+                    headerIcon = hasError
+                        ? Icons.error_outline
+                        : Icons.check_circle_outline;
+                  } else if (webSearchMatch) {
+                    header = '🔍 Web Search Results';
+                    headerIcon = Icons.search;
+                    headerColor = const Color(0xFF0369A1);
+                  } else if (urlMatch) {
+                    header = '🌐 URL Content Fetched';
+                    headerIcon = Icons.language;
+                    headerColor = const Color(0xFF0369A1);
+                  } else if (mcpMatch) {
+                    header = '⚙️ MCP Tool Result';
+                    headerIcon = Icons.settings;
+                    headerColor = const Color(0xFF059669);
+                  } else {
+                    header = text.split('\n').first;
+                  }
 
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: headerColor.withOpacity(0.05),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: headerColor.withOpacity(0.2)),
-                  ),
-                  child: ExpansionTile(
-                    title: Text(
-                      header,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: headerColor,
-                        fontFamily: 'monospace',
-                      ),
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: headerColor.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: headerColor.withOpacity(0.2)),
                     ),
-                    leading: Icon(headerIcon, color: headerColor, size: 17),
-                    collapsedBackgroundColor: Colors.transparent,
-                    backgroundColor: Colors.transparent,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: MarkdownBody(
-                            data: message.text
-                                .replaceAll('<', '&lt;')
-                                .replaceAll('>', '&gt;')
-                                .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
-                                .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
-                                .replaceAll(r'\boldsymbol', r'\mathbf'),                            selectable: true,
-                            builders: {
-                              'latex': LatexElementBuilder(),
-                            },
-                            extensionSet: md.ExtensionSet(
-                              [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
-                              [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
-                            ),
-                            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)),
-                          ),
+                    child: ExpansionTile(
+                      title: Text(
+                        header,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: headerColor,
+                          fontFamily: 'monospace',
                         ),
                       ),
-                    ],
-                  ),
-                );
-              })
+                      leading: Icon(headerIcon, color: headerColor, size: 17),
+                      collapsedBackgroundColor: Colors.transparent,
+                      backgroundColor: Colors.transparent,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: _buildToolResultDetails(
+                                context,
+                                message.text,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              )
             else if (isUser)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFFFDF9),
                   borderRadius: BorderRadius.circular(12),
@@ -4086,25 +5436,42 @@ class MessageBubble extends StatelessWidget {
                         child: Wrap(
                           spacing: 6,
                           runSpacing: 6,
-                          children: message.files.map((f) => Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF0EBE1),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: const Color(0xFFDCCBB8)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.insert_drive_file, size: 13, color: Color(0xFF7B4E2E)),
-                                const SizedBox(width: 5),
-                                Text(
-                                  f.name,
-                                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF4A3424), fontWeight: FontWeight.w600),
+                          children: message.files
+                              .map(
+                                (f) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF0EBE1),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: const Color(0xFFDCCBB8),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.insert_drive_file,
+                                        size: 13,
+                                        color: Color(0xFF7B4E2E),
+                                      ),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        f.name,
+                                        style: const TextStyle(
+                                          fontSize: 11.5,
+                                          color: Color(0xFF4A3424),
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ],
-                            ),
-                          )).toList(),
+                              )
+                              .toList(),
                         ),
                       ),
                     SelectableText(
@@ -4123,159 +5490,236 @@ class MessageBubble extends StatelessWidget {
               if (message.reasoning.isNotEmpty && reasoningEnabled)
                 ThoughtBlock(thought: message.reasoning),
               if (message.text.contains('<research_state>'))
-                Builder(builder: (context) {
-                  try {
-                    final startIndex = message.text.indexOf('<research_state>');
-                    final endIndex = message.text.indexOf('</research_state>');
-                    final jsonStr = message.text.substring(startIndex + 16, endIndex).trim();
-                    final stateMap = jsonDecode(jsonStr) as Map<String, dynamic>;
-                    final textBefore = message.text.substring(0, startIndex).trim();
-                    var cleanTextBefore = textBefore;
-                    if (cleanTextBefore.contains('<research_plan>')) {
-                      final planIndex = cleanTextBefore.indexOf('<research_plan>');
-                      final planEndIndex = cleanTextBefore.indexOf('</research_plan>', planIndex);
-                      if (planEndIndex != -1) {
-                        cleanTextBefore = (cleanTextBefore.substring(0, planIndex) + 
-                                           cleanTextBefore.substring(planEndIndex + 16)).trim();
-                      } else {
-                        cleanTextBefore = cleanTextBefore.substring(0, planIndex).trim();
+                Builder(
+                  builder: (context) {
+                    try {
+                      final startIndex = message.text.indexOf(
+                        '<research_state>',
+                      );
+                      final endIndex = message.text.indexOf(
+                        '</research_state>',
+                      );
+                      final jsonStr = message.text
+                          .substring(startIndex + 16, endIndex)
+                          .trim();
+                      final stateMap =
+                          jsonDecode(jsonStr) as Map<String, dynamic>;
+                      final textBefore = message.text
+                          .substring(0, startIndex)
+                          .trim();
+                      var cleanTextBefore = textBefore;
+                      if (cleanTextBefore.contains('<research_plan>')) {
+                        final planIndex = cleanTextBefore.indexOf(
+                          '<research_plan>',
+                        );
+                        final planEndIndex = cleanTextBefore.indexOf(
+                          '</research_plan>',
+                          planIndex,
+                        );
+                        if (planEndIndex != -1) {
+                          cleanTextBefore =
+                              (cleanTextBefore.substring(0, planIndex) +
+                                      cleanTextBefore.substring(
+                                        planEndIndex + 16,
+                                      ))
+                                  .trim();
+                        } else {
+                          cleanTextBefore = cleanTextBefore
+                              .substring(0, planIndex)
+                              .trim();
+                        }
                       }
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (cleanTextBefore.isNotEmpty) ...[
-                          ..._buildBlocks(context, cleanTextBefore),
-                          const SizedBox(height: 12),
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (cleanTextBefore.isNotEmpty) ...[
+                            ..._buildBlocks(context, cleanTextBefore),
+                            const SizedBox(height: 12),
+                          ],
+                          ResearchPlanWidget(
+                            stateMap: stateMap,
+                            workspaceDir: agenticWorkspace,
+                            fileName: fileName,
+                            onStartResearch: onStartResearch,
+                          ),
                         ],
-                        ResearchPlanWidget(
-                          stateMap: stateMap,
-                          workspaceDir: agenticWorkspace,
-                          fileName: fileName,
-                          onStartResearch: onStartResearch,
-                        ),
-                      ],
-                    );
-                  } catch (_) {
-                    return const Text('Error rendering research state', style: TextStyle(color: Colors.red));
-                  }
-                })
+                      );
+                    } catch (_) {
+                      return const Text(
+                        'Error rendering research state',
+                        style: TextStyle(color: Colors.red),
+                      );
+                    }
+                  },
+                )
               else if (message.text.contains('<search_request>'))
-                Builder(builder: (context) {
-                  try {
-                    final startIndex = message.text.indexOf('<search_request>');
-                    final endIndex = message.text.indexOf('</search_request>');
-                    final query = message.text.substring(startIndex + 16, endIndex).trim();
-                    return Container(
-                      margin: const EdgeInsets.symmetric(vertical: 8),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF0F5FA),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFD0E0F0)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.search, color: Color(0xFF2B6CB0), size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Tool Use: Searched the web for "$query"',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF2B6CB0),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  } catch (_) {
-                    return const Text('Error rendering search request', style: TextStyle(color: Colors.red));
-                  }
-                })
-              else if (message.text.contains('<read_url>'))
-                Builder(builder: (context) {
-                  try {
-                    final startIndex = message.text.indexOf('<read_url>');
-                    final endIndex = message.text.indexOf('</read_url>');
-                    final url = message.text.substring(startIndex + 10, endIndex).trim();
-                    return Container(
-                      margin: const EdgeInsets.symmetric(vertical: 8),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF0F5FA),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFD0E0F0)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.link, color: Color(0xFF2B6CB0), size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Tool Use: Reading webpage at "$url"',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF2B6CB0),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  } catch (_) {
-                    return const Text('Error rendering read_url request', style: TextStyle(color: Colors.red));
-                  }
-                })
-              else if (message.text.contains('<mcp_request>') || message.text.contains('<tool_request>') || message.text.contains('<command>'))
-                Builder(builder: (context) {
-                  try {
-                    final isXml = message.text.contains('<tool_request>') || message.text.contains('<command>');
-                    final openTag = message.text.contains('<tool_request>') 
-                        ? '<tool_request>' 
-                        : (message.text.contains('<command>') ? '<command>' : '<mcp_request>');
-                    final closeTag = message.text.contains('</tool_request>') 
-                        ? '</tool_request>' 
-                        : (message.text.contains('</command>') ? '</command>' : '</mcp_request>');
-                    
-                    final startIndex = message.text.indexOf(openTag);
-                    final endIndex = message.text.indexOf(closeTag);
-                    final textBefore = message.text.substring(0, startIndex).trim();
-                    
-                    if (endIndex == -1) {
-                      var contentStr = message.text.substring(startIndex + openTag.length).trim();
-                      if (openTag == '<command>') {
-                        contentStr = '<method>run_command</method><command>$contentStr</command>';
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (textBefore.isNotEmpty) ..._buildBlocks(context, textBefore),
-                          McpToolBlock(mcpJson: contentStr, isXml: isXml),
-                        ],
+                Builder(
+                  builder: (context) {
+                    try {
+                      final startIndex = message.text.indexOf(
+                        '<search_request>',
                       );
-                    } else {
-                      var contentStr = message.text.substring(startIndex + openTag.length, endIndex).trim();
-                      if (openTag == '<command>') {
-                        contentStr = '<method>run_command</method><command>$contentStr</command>';
-                      }
-                      final textAfter = message.text.substring(endIndex + closeTag.length).trim();
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (textBefore.isNotEmpty) ..._buildBlocks(context, textBefore),
-                          McpToolBlock(mcpJson: contentStr, isXml: isXml),
-                          if (textAfter.isNotEmpty) ..._buildBlocks(context, textAfter),
-                        ],
+                      final endIndex = message.text.indexOf(
+                        '</search_request>',
+                      );
+                      final query = message.text
+                          .substring(startIndex + 16, endIndex)
+                          .trim();
+                      return Container(
+                        margin: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF0F5FA),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFD0E0F0)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.search,
+                              color: Color(0xFF2B6CB0),
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Tool Use: Searched the web for "$query"',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF2B6CB0),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    } catch (_) {
+                      return const Text(
+                        'Error rendering search request',
+                        style: TextStyle(color: Colors.red),
                       );
                     }
-                  } catch (e) {
-                    return Text('Error rendering tool request: $e', style: const TextStyle(color: Colors.red));
-                  }
-                })
+                  },
+                )
+              else if (message.text.contains('<read_url>'))
+                Builder(
+                  builder: (context) {
+                    try {
+                      final startIndex = message.text.indexOf('<read_url>');
+                      final endIndex = message.text.indexOf('</read_url>');
+                      final url = message.text
+                          .substring(startIndex + 10, endIndex)
+                          .trim();
+                      return Container(
+                        margin: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF0F5FA),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFFD0E0F0)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.link,
+                              color: Color(0xFF2B6CB0),
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Tool Use: Reading webpage at "$url"',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF2B6CB0),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    } catch (_) {
+                      return const Text(
+                        'Error rendering read_url request',
+                        style: TextStyle(color: Colors.red),
+                      );
+                    }
+                  },
+                )
+              else if (message.text.contains('<mcp_request>') ||
+                  message.text.contains('<tool_request>') ||
+                  message.text.contains('<command>'))
+                Builder(
+                  builder: (context) {
+                    try {
+                      final isXml =
+                          message.text.contains('<tool_request>') ||
+                          message.text.contains('<command>');
+                      final openTag = message.text.contains('<tool_request>')
+                          ? '<tool_request>'
+                          : (message.text.contains('<command>')
+                                ? '<command>'
+                                : '<mcp_request>');
+                      final closeTag = message.text.contains('</tool_request>')
+                          ? '</tool_request>'
+                          : (message.text.contains('</command>')
+                                ? '</command>'
+                                : '</mcp_request>');
+
+                      final startIndex = message.text.indexOf(openTag);
+                      final endIndex = message.text.indexOf(closeTag);
+                      final textBefore = message.text
+                          .substring(0, startIndex)
+                          .trim();
+
+                      if (endIndex == -1) {
+                        var contentStr = message.text
+                            .substring(startIndex + openTag.length)
+                            .trim();
+                        if (openTag == '<command>') {
+                          contentStr =
+                              '<method>run_command</method><command>$contentStr</command>';
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (textBefore.isNotEmpty)
+                              ..._buildBlocks(context, textBefore),
+                            McpToolBlock(mcpJson: contentStr, isXml: isXml),
+                          ],
+                        );
+                      } else {
+                        var contentStr = message.text
+                            .substring(startIndex + openTag.length, endIndex)
+                            .trim();
+                        if (openTag == '<command>') {
+                          contentStr =
+                              '<method>run_command</method><command>$contentStr</command>';
+                        }
+                        final textAfter = message.text
+                            .substring(endIndex + closeTag.length)
+                            .trim();
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (textBefore.isNotEmpty)
+                              ..._buildBlocks(context, textBefore),
+                            McpToolBlock(mcpJson: contentStr, isXml: isXml),
+                            if (textAfter.isNotEmpty)
+                              ..._buildBlocks(context, textAfter),
+                          ],
+                        );
+                      }
+                    } catch (e) {
+                      return Text(
+                        'Error rendering tool request: $e',
+                        style: const TextStyle(color: Colors.red),
+                      );
+                    }
+                  },
+                )
               else
                 ..._buildBlocks(context, message.text),
             ],
@@ -4284,6 +5728,63 @@ class MessageBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  List<Widget> _buildToolResultDetails(BuildContext context, String text) {
+    final sections = text.split(RegExp(r'\n\n---\n\n'));
+    return sections
+        .where((section) => section.trim().isNotEmpty)
+        .map((section) => _buildToolResultSection(context, section.trim()))
+        .toList();
+  }
+
+  Widget _buildToolResultSection(BuildContext context, String section) {
+    var body = section;
+    final firstBreak = body.indexOf('\n\n');
+    if (body.startsWith('Tool Result [') && firstBreak != -1) {
+      body = body.substring(firstBreak + 2);
+    } else if (body.startsWith('MCP Result:\n')) {
+      body = body.substring('MCP Result:\n'.length);
+    }
+
+    String? diff;
+    if (body.contains('--- DIFF ---')) {
+      final parts = body.split('--- DIFF ---');
+      body = parts.first.trim();
+      diff = parts.skip(1).join('--- DIFF ---').trim();
+    }
+
+    final embeddedDiffIndex = body.indexOf('\nDIFF:\n');
+    if (embeddedDiffIndex != -1 && diff != null) {
+      body = body.substring(0, embeddedDiffIndex).trim();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (body.trim().isNotEmpty)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E1915),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              body.trim(),
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11.5,
+                height: 1.35,
+                color: Color(0xFFFFF7EC),
+              ),
+            ),
+          ),
+        if (diff != null && diff.trim().isNotEmpty)
+          DiffViewerWidget(content: diff.trim()),
+      ],
     );
   }
 
@@ -4310,12 +5811,18 @@ class MessageBubble extends StatelessWidget {
           ),
           child: SelectableText(
             resultContent,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: Color(0xFFD4D4D4)),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: Color(0xFFD4D4D4),
+            ),
           ),
-        )
+        ),
       ];
     }
-    return parseContentBlocks(text).map((block) => _buildSingleBlock(context, block)).toList();
+    return parseContentBlocks(
+      text,
+    ).map((block) => _buildSingleBlock(context, block)).toList();
   }
 
   Widget _buildSingleBlock(BuildContext context, ContentBlock block) {
@@ -4351,16 +5858,59 @@ class MessageBubble extends StatelessWidget {
       }
       final lang = block.language.toLowerCase();
       final contentLower = block.content.toLowerCase();
-      final isCompleteWebpage = contentLower.contains('<html') || contentLower.contains('<!doctype');
-      final isArtifact = lang == 'artifact' || ((lang == 'html' || lang == 'react' || lang == 'javascript') && isCompleteWebpage);
+      final isCompleteWebpage =
+          contentLower.contains('<html') || contentLower.contains('<!doctype');
+      final lineCount = '\n'.allMatches(block.content).length + 1;
+      final isCompleteCodeFile =
+          lineCount >= 35 ||
+          contentLower.contains('void main(') ||
+          contentLower.contains('def main(') ||
+          contentLower.contains('if __name__') ||
+          contentLower.contains('class ') ||
+          contentLower.contains('function ');
+      final isArtifact =
+          lang == 'artifact' ||
+          ((lang == 'html' || lang == 'react' || lang == 'javascript') &&
+              isCompleteWebpage);
       if (isArtifact) {
         return HtmlArtifactWidget(htmlContent: block.content);
       }
-      if (block.language.toLowerCase() == 'docx') {
-        return DocxArtifactWidget(docxContent: block.content, workspacePath: agenticWorkspace);
+      if (isCompleteCodeFile &&
+          {
+            'python',
+            'py',
+            'dart',
+            'javascript',
+            'js',
+            'typescript',
+            'ts',
+            'html',
+            'css',
+            'json',
+            'yaml',
+            'yml',
+            'bash',
+            'sh',
+            'java',
+            'kotlin',
+            'go',
+            'rust',
+            'rs',
+          }.contains(lang)) {
+        return FileArtifactWidget(content: block.content, language: lang);
       }
-      if (block.language.toLowerCase() == 'md' || block.language.toLowerCase() == 'markdown') {
-        return MdArtifactWidget(mdContent: block.content, workspacePath: agenticWorkspace);
+      if (block.language.toLowerCase() == 'docx') {
+        return DocxArtifactWidget(
+          docxContent: block.content,
+          workspacePath: agenticWorkspace,
+        );
+      }
+      if (block.language.toLowerCase() == 'md' ||
+          block.language.toLowerCase() == 'markdown') {
+        return MdArtifactWidget(
+          mdContent: block.content,
+          workspacePath: agenticWorkspace,
+        );
       }
       return CodeBlockWidget(
         code: block.content,
@@ -4374,19 +5924,36 @@ class MessageBubble extends StatelessWidget {
           data: block.content
               .replaceAll('<', '&lt;')
               .replaceAll('>', '&gt;')
-              .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
-              .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
-              .replaceAll(r'\boldsymbol', r'\mathbf'),            selectable: true,
+              .replaceAllMapped(
+                RegExp(r'\\\[([\s\S]*?)\\\]'),
+                (m) => '\$\$' + (m.group(1) ?? '') + '\$\$',
+              )
+              .replaceAllMapped(
+                RegExp(r'\\\(([\s\S]*?)\\\)'),
+                (m) => '\$' + (m.group(1) ?? '') + '\$',
+              )
+              .replaceAll(r'\boldsymbol', r'\mathbf'),
+          selectable: true,
           builders: {
             'latex': LatexElementBuilder(
-              textStyle: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 15.5, fontWeight: FontWeight.w400),
+              textStyle: const TextStyle(
+                color: Color(0xFF1E1E1E),
+                fontSize: 15.5,
+                fontWeight: FontWeight.w400,
+              ),
               textScaleFactor: 1.15,
             ),
             'table': ScrollableTableBuilder(),
           },
           extensionSet: md.ExtensionSet(
-            [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
-            [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
+            [
+              LatexBlockSyntax(),
+              ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+            ],
+            [
+              LatexInlineSyntax(),
+              ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+            ],
           ),
           styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
             p: const TextStyle(
@@ -4395,13 +5962,35 @@ class MessageBubble extends StatelessWidget {
               fontSize: 15.5,
               fontWeight: FontWeight.w400,
             ),
-            h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
-            h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
-            h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
-            listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
-            tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
+            h1: const TextStyle(
+              color: Color(0xFF2D241C),
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+            h2: const TextStyle(
+              color: Color(0xFF2D241C),
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+            h3: const TextStyle(
+              color: Color(0xFF2D241C),
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+            listBullet: const TextStyle(
+              color: Color(0xFF7B4E2E),
+              fontSize: 15.5,
+            ),
+            tableBorder: TableBorder.all(
+              color: const Color(0xFFDCCBB8),
+              width: 1,
+            ),
             tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
-            tableHead: const TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold, fontSize: 14),
+            tableHead: const TextStyle(
+              color: Color(0xFF2D241C),
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
           ),
         ),
       );
@@ -4474,13 +6063,11 @@ class _PulseDotState extends State<PulseDot>
   @override
   Widget build(BuildContext context) {
     return FadeTransition(
-      opacity: Tween<double>(begin: 0.32, end: 1).animate(
-        CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-      ),
-      child: const CircleAvatar(
-        radius: 4,
-        backgroundColor: Color(0xFF8A6A4F),
-      ),
+      opacity: Tween<double>(
+        begin: 0.32,
+        end: 1,
+      ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut)),
+      child: const CircleAvatar(radius: 4, backgroundColor: Color(0xFF8A6A4F)),
     );
   }
 }
@@ -4527,7 +6114,10 @@ class Composer extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 8.0),
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 920),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF9F6EE),
                   borderRadius: BorderRadius.circular(12),
@@ -4535,7 +6125,11 @@ class Composer extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF7B4E2E)),
+                    const Icon(
+                      Icons.edit_outlined,
+                      size: 14,
+                      color: Color(0xFF7B4E2E),
+                    ),
                     const SizedBox(width: 8),
                     const Expanded(
                       child: Text(
@@ -4549,7 +6143,11 @@ class Composer extends StatelessWidget {
                     ),
                     GestureDetector(
                       onTap: onCancelEdit,
-                      child: const Icon(Icons.close, size: 16, color: Color(0xFF7B4E2E)),
+                      child: const Icon(
+                        Icons.close,
+                        size: 16,
+                        color: Color(0xFF7B4E2E),
+                      ),
                     ),
                   ],
                 ),
@@ -4567,7 +6165,10 @@ class Composer extends StatelessWidget {
                     final file = attachedFiles[idx];
                     return Container(
                       margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFF0EBE1),
                         borderRadius: BorderRadius.circular(18),
@@ -4576,16 +6177,28 @@ class Composer extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.insert_drive_file, size: 14, color: Color(0xFF7B4E2E)),
+                          const Icon(
+                            Icons.insert_drive_file,
+                            size: 14,
+                            color: Color(0xFF7B4E2E),
+                          ),
                           const SizedBox(width: 6),
                           Text(
                             file.name,
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF4A3424), fontWeight: FontWeight.w600),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF4A3424),
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           const SizedBox(width: 8),
                           GestureDetector(
                             onTap: () => onRemoveFile(idx),
-                            child: const Icon(Icons.close, size: 14, color: Color(0xFF7B4E2E)),
+                            child: const Icon(
+                              Icons.close,
+                              size: 14,
+                              color: Color(0xFF7B4E2E),
+                            ),
                           ),
                         ],
                       ),
@@ -4613,7 +6226,9 @@ class Composer extends StatelessWidget {
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: const Color(0xFFDCCBB8)),
                             image: DecorationImage(
-                              image: MemoryImage(base64Decode(attachedImages[idx])),
+                              image: MemoryImage(
+                                base64Decode(attachedImages[idx]),
+                              ),
                               fit: BoxFit.cover,
                             ),
                           ),
@@ -4626,7 +6241,11 @@ class Composer extends StatelessWidget {
                             child: const CircleAvatar(
                               radius: 8,
                               backgroundColor: Colors.black54,
-                              child: Icon(Icons.close, size: 10, color: Colors.white),
+                              child: Icon(
+                                Icons.close,
+                                size: 10,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                         ),
@@ -4663,7 +6282,10 @@ class Composer extends StatelessWidget {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: const Color(0xFFFFF8EA),
-                      border: Border.all(color: const Color(0xFFD8B98D), width: 1.5),
+                      border: Border.all(
+                        color: const Color(0xFFD8B98D),
+                        width: 1.5,
+                      ),
                     ),
                     child: const Icon(
                       Icons.add,
@@ -4679,7 +6301,7 @@ class Composer extends StatelessWidget {
                     maxLines: 6,
                     textInputAction: TextInputAction.newline,
                     decoration: InputDecoration(
-                      hintText: deepResearchEnabled ? 'Deep Research Mode is ON...' : 'Message any provider...',
+                      hintText: 'Message any provider...',
                       border: InputBorder.none,
                       isDense: true,
                     ),
@@ -4836,24 +6458,33 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _searchProvider = widget.searchSettings.provider;
     final initialKeys = [
       widget.searchSettings.apiKey,
-      ...widget.searchSettings.fallbackApiKeys
+      ...widget.searchSettings.fallbackApiKeys,
     ].where((k) => k.isNotEmpty).join(', ');
     _searchKeyController = TextEditingController(text: initialKeys);
-    _searchCxController = TextEditingController(text: widget.searchSettings.googleCx);
-    _agenticWorkspaceController = TextEditingController(text: widget.agenticWorkspace);
+    _searchCxController = TextEditingController(
+      text: widget.searchSettings.googleCx,
+    );
+    _agenticWorkspaceController = TextEditingController(
+      text: widget.agenticWorkspace,
+    );
     _customMcpUrlController = TextEditingController(text: widget.customMcpUrl);
-    
+
     SharedPreferences.getInstance().then((prefs) {
       if (mounted) {
         setState(() {
-          _driveBackupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
-          _managedSubscriptionEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
+          _driveBackupEnabled =
+              prefs.getBool('google_drive_backup_enabled') ?? false;
+          _managedSubscriptionEnabled =
+              prefs.getBool('nexon_managed_subscription_enabled') ?? false;
           _activePlanTier = prefs.getString('nexon_managed_plan_tier') ?? '';
         });
       }
     });
     _fetchLiveWallet();
-    _walletSyncTimer = Timer.periodic(const Duration(minutes: 1), (_) => _fetchLiveWallet());
+    _walletSyncTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _fetchLiveWallet(),
+    );
   }
 
   @override
@@ -4862,7 +6493,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     if (oldWidget.settings.model != widget.settings.model ||
         oldWidget.provider.id != widget.provider.id ||
         oldWidget.settings.maxTokens != widget.settings.maxTokens ||
-        oldWidget.settings.reasoningEnabled != widget.settings.reasoningEnabled ||
+        oldWidget.settings.reasoningEnabled !=
+            widget.settings.reasoningEnabled ||
         oldWidget.searchSettings.enabled != widget.searchSettings.enabled ||
         oldWidget.agenticEnabled != widget.agenticEnabled ||
         oldWidget.deepResearchEnabled != widget.deepResearchEnabled ||
@@ -4884,21 +6516,31 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   int _getTotalDailyCap(String planTier) {
     switch (planTier.toUpperCase()) {
-      case 'GO': return 550000;
-      case 'PLUS': return 1100000;
-      case 'PRO': return 2000000;
-      case 'MAX': return 3100000;
-      default: return 100000; // Free tier
+      case 'GO':
+        return 550000;
+      case 'PLUS':
+        return 1100000;
+      case 'PRO':
+        return 2000000;
+      case 'MAX':
+        return 3100000;
+      default:
+        return 100000; // Free tier
     }
   }
 
   int _getTotalMonthlyCap(String planTier) {
     switch (planTier.toUpperCase()) {
-      case 'GO': return 16500000;
-      case 'PLUS': return 33500000;
-      case 'PRO': return 61000000;
-      case 'MAX': return 95000000;
-      default: return 0;
+      case 'GO':
+        return 16500000;
+      case 'PLUS':
+        return 33500000;
+      case 'PRO':
+        return 61000000;
+      case 'MAX':
+        return 95000000;
+      default:
+        return 0;
     }
   }
 
@@ -4956,9 +6598,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       }
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Model fetch failed: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Model fetch failed: $error')));
     } finally {
       if (mounted) setState(() => _fetching = false);
     }
@@ -4970,19 +6612,37 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: const Color(0xFFFFFBF2),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Attach Image', style: TextStyle(color: Color(0xFF7B4E2E), fontWeight: FontWeight.bold, fontFamily: 'serif')),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Text(
+            'Attach Image',
+            style: TextStyle(
+              color: Color(0xFF7B4E2E),
+              fontWeight: FontWeight.bold,
+              fontFamily: 'serif',
+            ),
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
                 leading: const Icon(Icons.camera_alt, color: Color(0xFF2D241C)),
-                title: const Text('Take a Photo', style: TextStyle(color: Color(0xFF2D241C))),
+                title: const Text(
+                  'Take a Photo',
+                  style: TextStyle(color: Color(0xFF2D241C)),
+                ),
                 onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
               ),
               ListTile(
-                leading: const Icon(Icons.photo_library, color: Color(0xFF2D241C)),
-                title: const Text('Choose from Gallery', style: TextStyle(color: Color(0xFF2D241C))),
+                leading: const Icon(
+                  Icons.photo_library,
+                  color: Color(0xFF2D241C),
+                ),
+                title: const Text(
+                  'Choose from Gallery',
+                  style: TextStyle(color: Color(0xFF2D241C)),
+                ),
                 onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
               ),
             ],
@@ -5025,13 +6685,24 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     } catch (e) {
       if (mounted) {
         final errorStr = e.toString().toLowerCase();
-        if (errorStr.contains('camera_access_denied') || errorStr.contains('permission') || errorStr.contains('denied')) {
+        if (errorStr.contains('camera_access_denied') ||
+            errorStr.contains('permission') ||
+            errorStr.contains('denied')) {
           showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
               backgroundColor: const Color(0xFFFFFBF2),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Permission Denied', style: TextStyle(color: Color(0xFF7B4E2E), fontWeight: FontWeight.bold, fontFamily: 'serif')),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                'Permission Denied',
+                style: TextStyle(
+                  color: Color(0xFF7B4E2E),
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'serif',
+                ),
+              ),
               content: const Text(
                 'Camera or Gallery permission was denied. If you selected "Don\'t ask again", you will need to enable this permission manually in the app settings to use this feature.',
                 style: TextStyle(color: Color(0xFF2D241C), height: 1.4),
@@ -5039,7 +6710,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('Cancel', style: TextStyle(color: Color(0xFF7B4E2E))),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: Color(0xFF7B4E2E)),
+                  ),
                 ),
                 ElevatedButton(
                   onPressed: () {
@@ -5049,7 +6723,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF7B4E2E),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                   child: const Text('Open Settings'),
                 ),
@@ -5057,9 +6733,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to pick image: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Failed to pick image: $e')));
         }
       }
     }
@@ -5067,26 +6743,41 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   Future<void> _pickFile() async {
     try {
-
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['pdf', 'txt', 'md', 'json', 'py', 'dart', 'js', 'html', 'css', 'yaml', 'yml'],
+        allowedExtensions: [
+          'pdf',
+          'txt',
+          'md',
+          'json',
+          'py',
+          'dart',
+          'js',
+          'html',
+          'css',
+          'yaml',
+          'yml',
+        ],
         allowMultiple: false,
       );
       if (result != null && result.files.single.path != null) {
         final file = File(result.files.single.path!);
         final ext = result.files.single.extension?.toLowerCase();
         String text = '';
-        
+
         if (ext == 'pdf') {
-          final PdfDocument document = PdfDocument(inputBytes: await file.readAsBytes());
+          final PdfDocument document = PdfDocument(
+            inputBytes: await file.readAsBytes(),
+          );
           text = PdfTextExtractor(document).extractText();
           document.dispose();
         } else {
           text = await file.readAsString();
         }
-        
-        widget.onFileAttached(AttachedFile(name: result.files.single.name, content: text));
+
+        widget.onFileAttached(
+          AttachedFile(name: result.files.single.name, content: text),
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Document attached successfully')),
@@ -5095,20 +6786,21 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to read document: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to read document: $e')));
       }
     }
   }
 
   void _updateSearchSettings() {
     final rawKeyString = _searchKeyController.text.trim();
-    final keys = rawKeyString.split(',')
+    final keys = rawKeyString
+        .split(',')
         .map((k) => k.trim())
         .where((k) => k.isNotEmpty)
         .toList();
-        
+
     widget.onSearchSettingsChanged(
       SearchSettings(
         enabled: _searchEnabled,
@@ -5137,7 +6829,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       color: const Color(0xFF7B4E2E).withValues(alpha: 0.2),
                       blurRadius: 6,
                       offset: const Offset(0, 2),
-                    )
+                    ),
                   ]
                 : null,
           ),
@@ -5167,8 +6859,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final currentProvider = providerCatalog.firstWhere((p) => p.id == _selectedProviderId);
-    final models = widget.cachedModels.isNotEmpty ? widget.cachedModels : currentProvider.models;
+    final currentProvider = providerCatalog.firstWhere(
+      (p) => p.id == _selectedProviderId,
+    );
+    final models = widget.cachedModels.isNotEmpty
+        ? widget.cachedModels
+        : currentProvider.models;
     final visionEnabled = modelHasVision(_selectedModel);
 
     return Container(
@@ -5203,7 +6899,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ),
           ),
           const SizedBox(height: 20),
-          
+
           // Header Row
           const Text(
             'Input & Settings',
@@ -5214,7 +6910,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               letterSpacing: -0.5,
             ),
           ),
-          
+
           // Custom Tab Bar Selector
           Container(
             margin: const EdgeInsets.symmetric(vertical: 14),
@@ -5283,22 +6979,47 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       dropdownColor: const Color(0xFFFFFBF2),
                       decoration: const InputDecoration(
                         labelText: 'AI Provider',
-                        labelStyle: TextStyle(color: Color(0xFF6C5946), fontWeight: FontWeight.bold, fontSize: 13),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
-                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
-                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF7B4E2E))),
-                        prefixIcon: Icon(Icons.hub_outlined, color: Color(0xFF7B4E2E), size: 20),
+                        labelStyle: TextStyle(
+                          color: Color(0xFF6C5946),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                        ),
+                        prefixIcon: Icon(
+                          Icons.hub_outlined,
+                          color: Color(0xFF7B4E2E),
+                          size: 20,
+                        ),
                       ),
                       items: providerCatalog.map((p) {
                         return DropdownMenuItem<String>(
                           value: p.id,
-                          child: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                          child: Text(
+                            p.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
                         );
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {
-                          final nextProvider = providerCatalog.firstWhere((p) => p.id == val);
+                          final nextProvider = providerCatalog.firstWhere(
+                            (p) => p.id == val,
+                          );
                           setState(() {
                             _selectedProviderId = val;
                             _selectedModel = nextProvider.models.first;
@@ -5316,14 +7037,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Color(0xFFDCCBB8)),
                         padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         backgroundColor: Colors.white,
                       ),
                       onPressed: () {
                         Navigator.pop(context);
                         widget.onConfigureKey(_selectedProviderId);
                       },
-                      child: const Icon(Icons.key, color: Color(0xFF7B4E2E), size: 20),
+                      child: const Icon(
+                        Icons.key,
+                        color: Color(0xFF7B4E2E),
+                        size: 20,
+                      ),
                     ),
                   ),
                 ],
@@ -5333,16 +7060,35 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
-                      value: models.contains(_selectedModel) ? _selectedModel : models.first,
+                      value: models.contains(_selectedModel)
+                          ? _selectedModel
+                          : models.first,
                       dropdownColor: const Color(0xFFFFFBF2),
                       decoration: const InputDecoration(
                         labelText: 'Model Name',
-                        labelStyle: TextStyle(color: Color(0xFF6C5946), fontWeight: FontWeight.bold, fontSize: 13),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
-                        enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFFDCCBB8))),
-                        focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF7B4E2E))),
-                        prefixIcon: Icon(Icons.memory_outlined, color: Color(0xFF7B4E2E), size: 20),
+                        labelStyle: TextStyle(
+                          color: Color(0xFF6C5946),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                        ),
+                        prefixIcon: Icon(
+                          Icons.memory_outlined,
+                          color: Color(0xFF7B4E2E),
+                          size: 20,
+                        ),
                       ),
                       items: models.map((m) {
                         return DropdownMenuItem<String>(
@@ -5350,7 +7096,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           child: Text(
                             m,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         );
                       }).toList(),
@@ -5370,7 +7119,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Color(0xFFDCCBB8)),
                         padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         backgroundColor: Colors.white,
                       ),
                       onPressed: _fetching ? null : _fetch,
@@ -5378,9 +7129,16 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           ? const SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7B4E2E)),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF7B4E2E),
+                              ),
                             )
-                          : const Icon(Icons.sync, color: Color(0xFF7B4E2E), size: 20),
+                          : const Icon(
+                              Icons.sync,
+                              color: Color(0xFF7B4E2E),
+                              size: 20,
+                            ),
                     ),
                   ),
                 ],
@@ -5406,24 +7164,40 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   const Text(
                     'Max Output Tokens',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
                   ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         '$_maxTokens tokens',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF7B4E2E)),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF7B4E2E),
+                        ),
                       ),
                       const SizedBox(width: 4),
                       GestureDetector(
                         onTap: () async {
-                          final controller = TextEditingController(text: _maxTokens.toString());
+                          final controller = TextEditingController(
+                            text: _maxTokens.toString(),
+                          );
                           final customVal = await showDialog<int>(
                             context: context,
                             builder: (ctx) => AlertDialog(
                               backgroundColor: const Color(0xFFFFFBF2),
-                              title: const Text('Custom Token Limit', style: TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold)),
+                              title: const Text(
+                                'Custom Token Limit',
+                                style: TextStyle(
+                                  color: Color(0xFF2D241C),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                               content: TextField(
                                 controller: controller,
                                 keyboardType: TextInputType.number,
@@ -5454,7 +7228,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             widget.onMaxTokensChanged(customVal);
                           }
                         },
-                        child: const Icon(Icons.edit_outlined, size: 14, color: Color(0xFF7B4E2E)),
+                        child: const Icon(
+                          Icons.edit_outlined,
+                          size: 14,
+                          color: Color(0xFF7B4E2E),
+                        ),
                       ),
                     ],
                   ),
@@ -5486,14 +7264,22 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
-                            color: selected ? Colors.white : const Color(0xFF6C5946),
+                            color: selected
+                                ? Colors.white
+                                : const Color(0xFF6C5946),
                           ),
                         ),
                         selected: selected,
                         selectedColor: const Color(0xFF7B4E2E),
                         backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        side: BorderSide(color: selected ? Colors.transparent : const Color(0xFFE5DDD3)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        side: BorderSide(
+                          color: selected
+                              ? Colors.transparent
+                              : const Color(0xFFE5DDD3),
+                        ),
                         onSelected: (sel) {
                           if (sel) {
                             setState(() => _maxTokens = preset);
@@ -5526,7 +7312,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   Text(
                     'CoT Thinking / Reasoning',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
                   ),
                   SizedBox(height: 2),
                   Text(
@@ -5572,12 +7362,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     children: [
                       Text(
                         'Agentic File Access',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D241C),
+                        ),
                       ),
                       SizedBox(height: 2),
                       Text(
                         'Let models read/write local files',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF6C5946),
+                        ),
                       ),
                     ],
                   ),
@@ -5597,7 +7394,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   controller: _agenticWorkspaceController,
                   decoration: const InputDecoration(
                     labelText: 'Workspace Directory Path',
-                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    labelStyle: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                     border: OutlineInputBorder(),
                     hintText: 'e.g. /data/data/com.termux/files/home',
                   ),
@@ -5608,7 +7409,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   controller: _customMcpUrlController,
                   decoration: const InputDecoration(
                     labelText: 'Custom MCP URL (Optional)',
-                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    labelStyle: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                     border: OutlineInputBorder(),
                     hintText: 'e.g. http://192.168.1.10:8390/mcp',
                   ),
@@ -5638,12 +7443,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     children: [
                       Text(
                         'Agentic Web Search',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D241C),
+                        ),
                       ),
                       SizedBox(height: 2),
                       Text(
                         'Let models search the web if needed',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF6C5946),
+                        ),
                       ),
                     ],
                   ),
@@ -5664,13 +7476,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   dropdownColor: const Color(0xFFFFFBF2),
                   decoration: const InputDecoration(
                     labelText: 'Search API Provider',
-                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    labelStyle: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                     border: OutlineInputBorder(),
                   ),
                   items: ['tavily', 'exa', 'firecrawl', 'google'].map((p) {
                     return DropdownMenuItem<String>(
                       value: p,
-                      child: Text(p.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                      child: Text(
+                        p.toUpperCase(),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     );
                   }).toList(),
                   onChanged: (val) {
@@ -5685,7 +7504,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   controller: _searchKeyController,
                   decoration: const InputDecoration(
                     labelText: 'Search API Key(s) (comma-separated)',
-                    labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                    labelStyle: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                     border: OutlineInputBorder(),
                     hintText: 'key1, key2...',
                   ),
@@ -5698,7 +7521,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     controller: _searchCxController,
                     decoration: const InputDecoration(
                       labelText: 'Google Search Engine ID (CX)',
-                      labelStyle: TextStyle(color: Color(0xFF6C5946), fontSize: 13, fontWeight: FontWeight.bold),
+                      labelStyle: TextStyle(
+                        color: Color(0xFF6C5946),
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
                       border: OutlineInputBorder(),
                     ),
                     onChanged: (_) => _updateSearchSettings(),
@@ -5734,12 +7561,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     children: [
                       Text(
                         'Google Drive Backup',
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D241C),
+                        ),
                       ),
                       SizedBox(height: 2),
                       Text(
                         'Auto-sync chats & artifacts to Drive',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF6C5946),
+                        ),
                       ),
                     ],
                   ),
@@ -5763,79 +7597,150 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         TextButton.icon(
-                          onPressed: _isRestoring || _isBackingUp ? null : () async {
-                            setState(() => _isRestoring = true);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Restoring Google Drive backup...')),
-                            );
-                            try {
-                              final success = await DriveSyncService.restoreFromDrive();
-                              if (success && mounted) {
-                                await widget.onRestoreCompleted();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('✅ Restore Successful!'), backgroundColor: Colors.green),
-                                );
-                              } else if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('❌ Restore Failed or No Backup Found.'), backgroundColor: Colors.red),
-                                );
-                              }
-                            } catch (e) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-                                );
-                              }
-                            } finally {
-                              if (mounted) setState(() => _isRestoring = false);
-                            }
-                          },
-                          icon: _isRestoring 
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) 
+                          onPressed: _isRestoring || _isBackingUp
+                              ? null
+                              : () async {
+                                  setState(() => _isRestoring = true);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Restoring Google Drive backup...',
+                                      ),
+                                    ),
+                                  );
+                                  try {
+                                    final result =
+                                        await DriveSyncService.restoreFromDriveDetailed();
+                                    if (result.success && mounted) {
+                                      await widget.onRestoreCompleted();
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('✅ ${result.message}'),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                    } else if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('❌ ${result.message}'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Error: $e'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted)
+                                      setState(() => _isRestoring = false);
+                                  }
+                                },
+                          icon: _isRestoring
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : const Icon(Icons.cloud_download, size: 16),
-                          label: Text(_isRestoring ? 'Restoring...' : 'Restore'),
+                          label: Text(
+                            _isRestoring ? 'Restoring...' : 'Restore',
+                          ),
                           style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFF7B4E2E),
                             backgroundColor: const Color(0xFFF5EFE6),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
                         TextButton.icon(
-                          onPressed: _isBackingUp || _isRestoring ? null : () async {
-                            setState(() => _isBackingUp = true);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Starting Google Drive backup...')),
-                            );
-                            try {
-                              final success = await DriveSyncService.syncToDrive(widget.sessions, force: true);
-                              if (success && mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('✅ Backup Successful!'), backgroundColor: Colors.green),
-                                );
-                              } else if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('❌ Backup Failed. Try re-logging into Supabase.'), backgroundColor: Colors.red),
-                                );
-                              }
-                            } catch (e) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-                                );
-                              }
-                            } finally {
-                              if (mounted) setState(() => _isBackingUp = false);
-                            }
-                          },
-                          icon: _isBackingUp 
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) 
+                          onPressed: _isBackingUp || _isRestoring
+                              ? null
+                              : () async {
+                                  setState(() => _isBackingUp = true);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Starting Google Drive backup...',
+                                      ),
+                                    ),
+                                  );
+                                  try {
+                                    final result =
+                                        await DriveSyncService.syncToDriveDetailed(
+                                          widget.sessions,
+                                          force: true,
+                                        );
+                                    if (result.success && mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('✅ ${result.message}'),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                    } else if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('❌ ${result.message}'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Error: $e'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted)
+                                      setState(() => _isBackingUp = false);
+                                  }
+                                },
+                          icon: _isBackingUp
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : const Icon(Icons.cloud_upload, size: 16),
-                          label: Text(_isBackingUp ? 'Backing up...' : 'Force Backup'),
+                          label: Text(
+                            _isBackingUp ? 'Backing up...' : 'Force Backup',
+                          ),
                           style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFF7B4E2E),
                             backgroundColor: const Color(0xFFF5EFE6),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
                           ),
                         ),
                       ],
@@ -5851,39 +7756,69 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     children: [
                       const Text(
                         'Account',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF6C5946)),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF6C5946),
+                        ),
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        Supabase.instance.client.auth.currentSession?.user.email ?? 'Not logged in',
-                        style: const TextStyle(fontSize: 14, color: Color(0xFF2D241C), fontWeight: FontWeight.w500),
+                        Supabase
+                                .instance
+                                .client
+                                .auth
+                                .currentSession
+                                ?.user
+                                .email ??
+                            'Not logged in',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF2D241C),
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                      if (Supabase.instance.client.auth.currentSession != null) ...[
+                      if (Supabase.instance.client.auth.currentSession !=
+                          null) ...[
                         const SizedBox(height: 6),
                         Text(
                           'Active Plan: ${_activePlanTier.isEmpty ? "FREE" : _activePlanTier.toUpperCase()}',
-                          style: const TextStyle(fontSize: 13, color: Color(0xFF7B4E2E), fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF7B4E2E),
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           'Daily Pool: ${_liveDailyPool != null ? "${_formatNumber(_liveDailyPool!)} / ${_formatNumber(_getTotalDailyCap(_activePlanTier))}" : "Loading..."}',
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF6C5946),
+                          ),
                         ),
                         if (_activePlanTier.isNotEmpty) ...[
                           const SizedBox(height: 2),
                           Text(
                             'Monthly Pool: ${_liveSubscriptionCredits != null ? "${_formatNumber(_liveSubscriptionCredits!)} / ${_formatNumber(_getTotalMonthlyCap(_activePlanTier))}" : "Loading..."}',
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF6C5946),
+                            ),
                           ),
                         ],
-                        if (_liveTopupCredits != null && _liveTopupCredits! > 0) ...[
+                        if (_liveTopupCredits != null &&
+                            _liveTopupCredits! > 0) ...[
                           const SizedBox(height: 2),
                           Text(
                             'Top-up Credits: ${_formatNumber(_liveTopupCredits!)}',
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF6C5946),
+                            ),
                           ),
-                        ]
-                      ]
+                        ],
+                      ],
                     ],
                   ),
                   TextButton.icon(
@@ -5894,13 +7829,23 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       if (mounted) {
                         Navigator.pushAndRemoveUntil(
                           context,
-                          MaterialPageRoute(builder: (_) => const ForgeChatApp(hasCompletedOnboarding: false)),
+                          MaterialPageRoute(
+                            builder: (_) => const ForgeChatApp(
+                              hasCompletedOnboarding: false,
+                            ),
+                          ),
                           (route) => false,
                         );
                       }
                     },
                     icon: const Icon(Icons.logout, size: 16, color: Colors.red),
-                    label: const Text('Logout', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                    label: const Text(
+                      'Logout',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -5924,7 +7869,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   Text(
                     'AI Memory',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
                   ),
                   SizedBox(height: 2),
                   Text(
@@ -5947,16 +7896,30 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   } else {
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('AI Memory is already empty.')),
+                        const SnackBar(
+                          content: Text('AI Memory is already empty.'),
+                        ),
                       );
                     }
                   }
                 },
-                icon: const Icon(Icons.delete_outline, size: 16, color: Colors.red),
-                label: const Text('Clear', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                icon: const Icon(
+                  Icons.delete_outline,
+                  size: 16,
+                  color: Colors.red,
+                ),
+                label: const Text(
+                  'Clear',
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Colors.red),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
             ],
@@ -5980,14 +7943,21 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   children: [
                     const Text(
                       'Nexon Pro Subscription',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D241C),
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      _managedSubscriptionEnabled 
-                          ? 'Active Plan: ${_activePlanTier.toUpperCase()}' 
+                      _managedSubscriptionEnabled
+                          ? 'Active Plan: ${_activePlanTier.toUpperCase()}'
                           : 'Switch to a Managed API key and skip the hassle.',
-                      style: const TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6C5946),
+                      ),
                     ),
                   ],
                 ),
@@ -6000,7 +7970,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     isScrollControlled: true,
                     backgroundColor: Colors.white,
                     shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(20),
+                      ),
                     ),
                     builder: (sheetContext) {
                       return Padding(
@@ -6008,7 +7980,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           left: 20,
                           right: 20,
                           top: 24,
-                          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
+                          bottom:
+                              MediaQuery.of(sheetContext).viewInsets.bottom +
+                              24,
                         ),
                         child: SingleChildScrollView(
                           child: Column(
@@ -6016,16 +7990,22 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text(
                                     'Manage Subscription',
-                                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF2D241C)),
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w900,
+                                      color: Color(0xFF2D241C),
+                                    ),
                                   ),
                                   IconButton(
                                     icon: const Icon(Icons.close),
-                                    onPressed: () => Navigator.pop(sheetContext),
-                                  )
+                                    onPressed: () =>
+                                        Navigator.pop(sheetContext),
+                                  ),
                                 ],
                               ),
                               const SizedBox(height: 24),
@@ -6039,10 +8019,22 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF2D241C),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
                 ),
-                child: const Text('Manage', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                child: const Text(
+                  'Manage',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             ],
           ),
@@ -6110,7 +8102,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     required Color borderColor,
     bool isPremium = false,
   }) {
-    final bool isThisPlanActive = _managedSubscriptionEnabled && _activePlanTier == title.toLowerCase();
+    final bool isThisPlanActive =
+        _managedSubscriptionEnabled && _activePlanTier == title.toLowerCase();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -6141,14 +8134,21 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       if (isPremium) ...[
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFF2D241C),
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: const Text(
                             'BEST VALUE',
-                            style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ],
@@ -6157,7 +8157,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946), fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF6C5946),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ],
               ),
@@ -6177,17 +8181,33 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _buildPlanStat('Monthly Credits', isThisPlanActive && _liveSubscriptionCredits != null ? '${(_liveSubscriptionCredits! / 1000000).toStringAsFixed(1)}M' : monthlyCredits),
-              _buildPlanStat('Daily Cap', isThisPlanActive && _liveDailyPool != null ? '${(_liveDailyPool! / 1000).toStringAsFixed(1)}K' : dailyCap),
+              _buildPlanStat(
+                'Monthly Credits',
+                isThisPlanActive && _liveSubscriptionCredits != null
+                    ? '${(_liveSubscriptionCredits! / 1000000).toStringAsFixed(1)}M'
+                    : monthlyCredits,
+              ),
+              _buildPlanStat(
+                'Daily Cap',
+                isThisPlanActive && _liveDailyPool != null
+                    ? '${(_liveDailyPool! / 1000).toStringAsFixed(1)}K'
+                    : dailyCap,
+              ),
               ElevatedButton(
                 onPressed: () async {
                   final prefs = await SharedPreferences.getInstance();
                   final newState = !isThisPlanActive;
                   final newTier = newState ? title.toLowerCase() : '';
-                  await prefs.setBool('nexon_managed_subscription_enabled', newState);
+                  await prefs.setBool(
+                    'nexon_managed_subscription_enabled',
+                    newState,
+                  );
                   await prefs.setString('nexon_managed_plan_tier', newTier);
                   if (newState) {
-                    await prefs.setString('nexon_managed_backend_url', 'https://nexon-jyp1.onrender.com');
+                    await prefs.setString(
+                      'nexon_managed_backend_url',
+                      'https://nexon-jyp1.onrender.com',
+                    );
                   }
                   setState(() {
                     _managedSubscriptionEnabled = newState;
@@ -6195,18 +8215,37 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   });
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(newState ? 'Activated Nexon $title Plan!' : 'Reverted to Bring-Your-Own-Key')),
+                      SnackBar(
+                        content: Text(
+                          newState
+                              ? 'Activated Nexon $title Plan!'
+                              : 'Reverted to Bring-Your-Own-Key',
+                        ),
+                      ),
                     );
                   }
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isThisPlanActive ? Colors.green : const Color(0xFF2D241C),
+                  backgroundColor: isThisPlanActive
+                      ? Colors.green
+                      : const Color(0xFF2D241C),
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 0,
+                  ),
                   minimumSize: const Size(0, 36),
                 ),
-                child: Text(isThisPlanActive ? 'Active' : 'Subscribe', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                child: Text(
+                  isThisPlanActive ? 'Active' : 'Subscribe',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
               ),
             ],
           ),
@@ -6225,7 +8264,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         ),
         Text(
           value,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF2D241C),
+          ),
         ),
       ],
     );
@@ -6247,7 +8290,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             children: [
               const Text(
                 'Media & Document Attachments',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D241C),
+                ),
               ),
               const SizedBox(height: 4),
               const Text(
@@ -6255,7 +8302,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
               ),
               const SizedBox(height: 18),
-              
+
               // Grid of media attachment buttons
               GridView.count(
                 shrinkWrap: true,
@@ -6275,7 +8322,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         _pickImage();
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Selected model does not support vision (image input).')),
+                          const SnackBar(
+                            content: Text(
+                              'Selected model does not support vision (image input).',
+                            ),
+                          ),
                         );
                       }
                     },
@@ -6290,7 +8341,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         _pickImage();
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Selected model does not support vision (image input).')),
+                          const SnackBar(
+                            content: Text(
+                              'Selected model does not support vision (image input).',
+                            ),
+                          ),
                         );
                       }
                     },
@@ -6309,7 +8364,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     isEnabled: false,
                     onTap: () {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Audio input is not supported yet.')),
+                        const SnackBar(
+                          content: Text('Audio input is not supported yet.'),
+                        ),
                       );
                     },
                   ),
@@ -6339,7 +8396,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: isEnabled ? Colors.white : const Color(0xFFF1EAE0),
-            border: Border.all(color: isEnabled ? const Color(0xFFE2D6C5) : Colors.transparent),
+            border: Border.all(
+              color: isEnabled ? const Color(0xFFE2D6C5) : Colors.transparent,
+            ),
             borderRadius: BorderRadius.circular(14),
             boxShadow: isEnabled
                 ? [
@@ -6347,7 +8406,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       color: const Color(0xFF7B4E2E).withValues(alpha: 0.05),
                       blurRadius: 8,
                       offset: const Offset(0, 3),
-                    )
+                    ),
                   ]
                 : null,
           ),
@@ -6358,7 +8417,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               Icon(
                 icon,
                 size: 24,
-                color: isEnabled ? const Color(0xFF7B4E2E) : const Color(0xFF9E8F7F),
+                color: isEnabled
+                    ? const Color(0xFF7B4E2E)
+                    : const Color(0xFF9E8F7F),
               ),
               const SizedBox(height: 8),
               Text(
@@ -6366,7 +8427,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
-                  color: isEnabled ? const Color(0xFF2D241C) : const Color(0xFF9E8F7F),
+                  color: isEnabled
+                      ? const Color(0xFF2D241C)
+                      : const Color(0xFF9E8F7F),
                 ),
               ),
               const SizedBox(height: 2),
@@ -6374,7 +8437,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 subtitle,
                 style: TextStyle(
                   fontSize: 10,
-                  color: isEnabled ? const Color(0xFF77624F) : const Color(0xFFB0A59A),
+                  color: isEnabled
+                      ? const Color(0xFF77624F)
+                      : const Color(0xFFB0A59A),
                 ),
               ),
             ],
@@ -6383,7 +8448,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       ),
     );
   }
-  Widget _buildMediaItem(IconData icon, String label, {required bool isEnabled, required VoidCallback onTap}) {
+
+  Widget _buildMediaItem(
+    IconData icon,
+    String label, {
+    required bool isEnabled,
+    required VoidCallback onTap,
+  }) {
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 200),
       opacity: isEnabled ? 1.0 : 0.4,
@@ -6405,7 +8476,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       color: const Color(0xFF7B4E2E).withValues(alpha: 0.08),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
-                    )
+                    ),
                   ]
                 : null,
           ),
@@ -6415,7 +8486,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               Icon(
                 icon,
                 size: 26,
-                color: isEnabled ? const Color(0xFF7B4E2E) : const Color(0xFFB0A496),
+                color: isEnabled
+                    ? const Color(0xFF7B4E2E)
+                    : const Color(0xFFB0A496),
               ),
               const SizedBox(height: 8),
               Text(
@@ -6423,7 +8496,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: isEnabled ? const Color(0xFF2D241C) : const Color(0xFFB0A496),
+                  color: isEnabled
+                      ? const Color(0xFF2D241C)
+                      : const Color(0xFFB0A496),
                 ),
               ),
             ],
@@ -6495,9 +8570,9 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
       setState(() => _models = models);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Model fetch failed: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Model fetch failed: $error')));
     } finally {
       if (mounted) setState(() => _fetching = false);
     }
@@ -6525,7 +8600,13 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
           const SizedBox(height: 12),
           Row(
             children: [
-              const Text('Fallback API Keys', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF3B3027))),
+              const Text(
+                'Fallback API Keys',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF3B3027),
+                ),
+              ),
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.add_circle, color: Color(0xFF7B4E2E)),
@@ -6552,12 +8633,18 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
                         labelText: 'Fallback Key ${idx + 1}',
                         prefixIcon: const Icon(Icons.vpn_key),
                         border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                    icon: const Icon(
+                      Icons.remove_circle_outline,
+                      color: Colors.red,
+                    ),
                     onPressed: () {
                       setState(() {
                         _fallbackControllers[idx].dispose();
@@ -6612,7 +8699,8 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             decoration: const InputDecoration(
               labelText: 'Max tokens',
-              helperText: 'Lower this if a provider says you do not have enough credits.',
+              helperText:
+                  'Lower this if a provider says you do not have enough credits.',
               prefixIcon: Icon(Icons.speed),
               border: OutlineInputBorder(),
             ),
@@ -6646,9 +8734,8 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
               Expanded(
                 child: FilledButton(
                   onPressed: () {
-                    final parsedMaxTokens = int.tryParse(
-                          _maxTokensController.text.trim(),
-                        ) ??
+                    final parsedMaxTokens =
+                        int.tryParse(_maxTokensController.text.trim()) ??
                         widget.provider.defaultMaxTokens;
                     Navigator.of(context).pop(
                       ProviderSettings(
@@ -6721,9 +8808,9 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
       setState(() => _models = models);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Model fetch failed: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Model fetch failed: $error')));
     } finally {
       if (mounted) setState(() => _fetching = false);
     }
@@ -6798,7 +8885,8 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: () => Navigator.of(context).pop(_manualController.text),
+              onPressed: () =>
+                  Navigator.of(context).pop(_manualController.text),
               child: const Text('Use typed model'),
             ),
           ),
@@ -6916,7 +9004,12 @@ class AppMark extends StatelessWidget {
       width: 42,
       height: 42,
       alignment: Alignment.center,
-      child: Image.asset('assets/icon_transparent.png', fit: BoxFit.cover, width: 38, height: 38),
+      child: Image.asset(
+        'assets/icon_transparent.png',
+        fit: BoxFit.cover,
+        width: 38,
+        height: 38,
+      ),
     );
   }
 }
@@ -6939,7 +9032,8 @@ class ProviderAvatar extends StatefulWidget {
   State<ProviderAvatar> createState() => _ProviderAvatarState();
 }
 
-class _ProviderAvatarState extends State<ProviderAvatar> with SingleTickerProviderStateMixin {
+class _ProviderAvatarState extends State<ProviderAvatar>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
   @override
@@ -6957,14 +9051,17 @@ class _ProviderAvatarState extends State<ProviderAvatar> with SingleTickerProvid
   @override
   void didUpdateWidget(covariant ProviderAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.animationState != AvatarAnimationState.idle && oldWidget.animationState == AvatarAnimationState.idle) {
+    if (widget.animationState != AvatarAnimationState.idle &&
+        oldWidget.animationState == AvatarAnimationState.idle) {
       _controller.repeat(reverse: true);
-    } else if (widget.animationState == AvatarAnimationState.idle && oldWidget.animationState != AvatarAnimationState.idle) {
+    } else if (widget.animationState == AvatarAnimationState.idle &&
+        oldWidget.animationState != AvatarAnimationState.idle) {
       _controller.stop();
       _controller.animateTo(0);
     } else if (widget.animationState != oldWidget.animationState) {
       // Just ensure it's still running, maybe change duration depending on state
-      if (widget.animationState == AvatarAnimationState.searching || widget.animationState == AvatarAnimationState.mcp) {
+      if (widget.animationState == AvatarAnimationState.searching ||
+          widget.animationState == AvatarAnimationState.mcp) {
         _controller.duration = const Duration(milliseconds: 800);
       } else if (widget.animationState == AvatarAnimationState.reasoning) {
         _controller.duration = const Duration(milliseconds: 2000);
@@ -6984,12 +9081,17 @@ class _ProviderAvatarState extends State<ProviderAvatar> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     final size = widget.small ? 24.0 : 38.0;
-    
+
     final avatar = Container(
       width: size,
       height: size,
       alignment: Alignment.center,
-      child: Image.asset('assets/icon_transparent.png', fit: BoxFit.cover, width: size, height: size),
+      child: Image.asset(
+        'assets/icon_transparent.png',
+        fit: BoxFit.cover,
+        width: size,
+        height: size,
+      ),
     );
 
     if (widget.animationState == AvatarAnimationState.idle) return avatar;
@@ -7045,7 +9147,8 @@ class ChatClient {
     ProviderDefinition provider,
     ProviderSettings settings,
   ) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 20);
     try {
       final uri = Uri.parse('${_baseUrl(provider, settings)}/models');
       final request = await client.getUrl(uri);
@@ -7065,11 +9168,13 @@ class ChatClient {
                 final id = item['id']?.toString() ?? '';
                 final arch = item['architecture'];
                 if (arch is Map) {
-                  final modality = arch['modality']?.toString().toLowerCase() ?? '';
+                  final modality =
+                      arch['modality']?.toString().toLowerCase() ?? '';
                   if (modality.isNotEmpty && !modality.endsWith('text')) {
                     return ''; // Filter out non-text generation models
                   }
-                  if (modality.contains('image') || modality.contains('vision')) {
+                  if (modality.contains('image') ||
+                      modality.contains('vision')) {
                     ChatClient.modelsWithVision.add(id);
                   }
                 }
@@ -7102,72 +9207,84 @@ class ChatClient {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final isManagedMode = provider.id == 'nexon';
-    final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
-    final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+    final managedUrl =
+        prefs.getString('nexon_managed_backend_url') ??
+        'https://nexon-jyp1.onrender.com';
+    final token =
+        Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 30);
     try {
-      final allKeys = isManagedMode ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
-          .map((k) => k.trim())
-          .where((k) => k.isNotEmpty)
-          .toList();
+      final allKeys = isManagedMode
+          ? [token]
+          : [
+              settings.apiKey,
+              ...settings.fallbackApiKeys,
+            ].map((k) => k.trim()).where((k) => k.isNotEmpty).toList();
       if (allKeys.isEmpty) allKeys.add('');
 
       for (int i = 0; i < allKeys.length; i++) {
         final currentKey = allKeys[i];
-        
+
         bool success = false;
         Exception? lastException;
         String? responseText;
 
         for (int retry = 0; retry < 3; retry++) {
           try {
-            final baseUrl = isManagedMode ? managedUrl : _baseUrl(provider, settings);
-            final urlString = baseUrl.endsWith('/v1') 
-                ? '$baseUrl/chat/completions' 
+            final baseUrl = isManagedMode
+                ? managedUrl
+                : _baseUrl(provider, settings);
+            final urlString = baseUrl.endsWith('/v1')
+                ? '$baseUrl/chat/completions'
                 : '$baseUrl/v1/chat/completions';
             final uri = Uri.parse(urlString);
             final request = await client.postUrl(uri);
-            _setHeaders(request, provider, settings, currentKey, stream: false, isManaged: isManagedMode);
+            _setHeaders(
+              request,
+              provider,
+              settings,
+              currentKey,
+              stream: false,
+              isManaged: isManagedMode,
+            );
             request.headers.contentType = ContentType.json;
 
             final payload = <String, dynamic>{
               'model': model,
-              'messages': messages
-                  .map((message) {
-                    String finalText = message.text;
-                    if (message.files.isNotEmpty) {
-                      finalText += '\n\n';
-                      for (final file in message.files) {
-                        finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
-                      }
-                    }
+              'messages': messages.map((message) {
+                String finalText = message.text;
+                if (message.files.isNotEmpty) {
+                  finalText += '\n\n';
+                  for (final file in message.files) {
+                    finalText +=
+                        '--- File: ${file.name} ---\n${file.content}\n\n';
+                  }
+                }
 
-                    if (message.images.isNotEmpty) {
-                      return {
-                        'role': message.role.apiName,
-                        'content': [
-                          {'type': 'text', 'text': finalText},
-                          ...message.images.map((img) => {
-                                'type': 'image_url',
-                                'image_url': {
-                                  'url': 'data:image/jpeg;base64,$img'
-                                }
-                              })
-                        ]
-                      };
-                    }
-                    return {
-                      'role': message.role.apiName,
-                      'content': finalText,
-                    };
-                  })
-                  .toList(),
+                if (message.images.isNotEmpty) {
+                  return {
+                    'role': message.role.apiName,
+                    'content': [
+                      {'type': 'text', 'text': finalText},
+                      ...message.images.map(
+                        (img) => {
+                          'type': 'image_url',
+                          'image_url': {'url': 'data:image/jpeg;base64,$img'},
+                        },
+                      ),
+                    ],
+                  };
+                }
+                return {'role': message.role.apiName, 'content': finalText};
+              }).toList(),
               'max_tokens': settings.maxTokens,
               'temperature': 1.0,
               'top_p': 0.95,
               'stream': false,
-              if (provider.id == 'openrouter') 'include_reasoning': settings.reasoningEnabled,
+              if (provider.id == 'openrouter')
+                'include_reasoning': settings.reasoningEnabled,
             };
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
@@ -7175,12 +9292,13 @@ class ChatClient {
             request.add(payloadBytes);
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
-            
+
             if (response.statusCode < 200 || response.statusCode >= 300) {
               throw HttpException('HTTP ${response.statusCode}: $body');
             }
             final decoded = jsonDecode(body);
-            if (decoded is Map<String, dynamic> && decoded.containsKey('credits_status')) {
+            if (decoded is Map<String, dynamic> &&
+                decoded.containsKey('credits_status')) {
               final status = decoded['credits_status'];
               if (mounted) {
                 setState(() {
@@ -7199,24 +9317,32 @@ class ChatClient {
             if (errorStr.contains('402')) {
               throw lastException ?? Exception('Payment Required (402)');
             }
-            final isRateLimit = errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503');
+            final isRateLimit =
+                errorStr.contains('429') ||
+                errorStr.contains('500') ||
+                errorStr.contains('503');
             if (!isRateLimit) break;
             if (retry < 2) await Future.delayed(const Duration(seconds: 20));
           }
         }
-        
+
         if (success && responseText != null) return responseText;
-        
+
         final errorStr = lastException.toString().toLowerCase();
         if (errorStr.contains('402')) {
           throw lastException ?? Exception('Payment Required (402)');
         }
-        final isRateLimit = errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503');
+        final isRateLimit =
+            errorStr.contains('429') ||
+            errorStr.contains('500') ||
+            errorStr.contains('503');
         if (!isRateLimit || i == allKeys.length - 1) {
           throw lastException ?? Exception('Unknown error');
         }
       }
-      throw const HttpException('Failed to send request with any provided API key');
+      throw const HttpException(
+        'Failed to send request with any provided API key',
+      );
     } finally {
       client.close(force: true);
     }
@@ -7230,79 +9356,91 @@ class ChatClient {
   }) async* {
     final prefs = await SharedPreferences.getInstance();
     final isManagedMode = provider.id == 'nexon';
-    final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
-    final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
+    final managedUrl =
+        prefs.getString('nexon_managed_backend_url') ??
+        'https://nexon-jyp1.onrender.com';
+    final token =
+        Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 30);
     try {
-      final allKeys = isManagedMode ? [token] : [settings.apiKey, ...settings.fallbackApiKeys]
-          .map((k) => k.trim())
-          .where((k) => k.isNotEmpty)
-          .toList();
+      final allKeys = isManagedMode
+          ? [token]
+          : [
+              settings.apiKey,
+              ...settings.fallbackApiKeys,
+            ].map((k) => k.trim()).where((k) => k.isNotEmpty).toList();
       if (allKeys.isEmpty) allKeys.add('');
 
       for (int i = 0; i < allKeys.length; i++) {
         final currentKey = allKeys[i];
-        
+
         HttpClientResponse? response;
         bool success = false;
         Exception? lastException;
 
         for (int retry = 0; retry < 3; retry++) {
           try {
-            final baseUrl = isManagedMode ? managedUrl : _baseUrl(provider, settings);
-            final urlString = baseUrl.endsWith('/v1') 
-                ? '$baseUrl/chat/completions' 
+            final baseUrl = isManagedMode
+                ? managedUrl
+                : _baseUrl(provider, settings);
+            final urlString = baseUrl.endsWith('/v1')
+                ? '$baseUrl/chat/completions'
                 : '$baseUrl/v1/chat/completions';
             final uri = Uri.parse(urlString);
             final request = await client.postUrl(uri);
-            _setHeaders(request, provider, settings, currentKey, stream: true, isManaged: isManagedMode);
+            _setHeaders(
+              request,
+              provider,
+              settings,
+              currentKey,
+              stream: true,
+              isManaged: isManagedMode,
+            );
             request.headers.contentType = ContentType.json;
 
             final payload = <String, dynamic>{
               'model': model,
-              'messages': messages
-                  .map((message) {
-                    String finalText = message.text;
-                    if (message.files.isNotEmpty) {
-                      finalText += '\n\n';
-                      for (final file in message.files) {
-                        finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
-                      }
-                    }
+              'messages': messages.map((message) {
+                String finalText = message.text;
+                if (message.files.isNotEmpty) {
+                  finalText += '\n\n';
+                  for (final file in message.files) {
+                    finalText +=
+                        '--- File: ${file.name} ---\n${file.content}\n\n';
+                  }
+                }
 
-                    if (message.images.isNotEmpty) {
-                      return {
-                        'role': message.role.apiName,
-                        'content': [
-                          {'type': 'text', 'text': finalText},
-                          ...message.images.map((img) => {
-                                'type': 'image_url',
-                                'image_url': {
-                                  'url': 'data:image/jpeg;base64,$img'
-                                }
-                              })
-                        ]
-                      };
-                    }
-                    return {
-                      'role': message.role.apiName,
-                      'content': finalText,
-                    };
-                  })
-                  .toList(),
+                if (message.images.isNotEmpty) {
+                  return {
+                    'role': message.role.apiName,
+                    'content': [
+                      {'type': 'text', 'text': finalText},
+                      ...message.images.map(
+                        (img) => {
+                          'type': 'image_url',
+                          'image_url': {'url': 'data:image/jpeg;base64,$img'},
+                        },
+                      ),
+                    ],
+                  };
+                }
+                return {'role': message.role.apiName, 'content': finalText};
+              }).toList(),
               'max_tokens': settings.maxTokens,
               'temperature': 1.0,
               'top_p': 0.95,
               'stream': true,
-              if (provider.id == 'openrouter') 'include_reasoning': settings.reasoningEnabled,
+              if (provider.id == 'openrouter')
+                'include_reasoning': settings.reasoningEnabled,
             };
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
             response = await request.close();
-            
+
             if (response.statusCode < 200 || response.statusCode >= 300) {
               final body = await response.transform(utf8.decoder).join();
               throw HttpException('HTTP ${response.statusCode}: $body');
@@ -7315,7 +9453,10 @@ class ChatClient {
             if (errorStr.contains('402')) {
               throw lastException ?? Exception('Payment Required (402)');
             }
-            final isRateLimit = errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503');
+            final isRateLimit =
+                errorStr.contains('429') ||
+                errorStr.contains('500') ||
+                errorStr.contains('503');
             if (!isRateLimit) break;
             if (retry < 2) await Future.delayed(const Duration(seconds: 20));
           }
@@ -7326,7 +9467,10 @@ class ChatClient {
           if (errorStr.contains('402')) {
             throw lastException ?? Exception('Payment Required (402)');
           }
-          final isRateLimit = errorStr.contains('429') || errorStr.contains('500') || errorStr.contains('503');
+          final isRateLimit =
+              errorStr.contains('429') ||
+              errorStr.contains('500') ||
+              errorStr.contains('503');
           if (!isRateLimit || i == allKeys.length - 1) {
             throw lastException ?? Exception('Unknown error');
           }
@@ -7338,51 +9482,50 @@ class ChatClient {
             .transform(utf8.decoder)
             .transform(const LineSplitter());
 
-      await for (final line in lines) {
-        final trimmedLine = line.trim();
-        if (trimmedLine.isEmpty) continue;
-        if (trimmedLine.startsWith('data:')) {
-          final dataStr = trimmedLine.substring(5).trim();
-          if (dataStr == '[DONE]') {
-            break;
-          }
-          try {
-            final decoded = jsonDecode(dataStr);
-            if (decoded is Map<String, dynamic>) {
-              if (decoded.containsKey('credits_status')) {
-                final status = decoded['credits_status'];
-                if (mounted) {
-                  setState(() {
-                    _liveDailyPool = status['daily'] as int?;
-                    _liveSubscriptionCredits = status['subscription'] as int?;
-                    _liveTopupCredits = status['topup'] as int?;
-                  });
+        await for (final line in lines) {
+          final trimmedLine = line.trim();
+          if (trimmedLine.isEmpty) continue;
+          if (trimmedLine.startsWith('data:')) {
+            final dataStr = trimmedLine.substring(5).trim();
+            if (dataStr == '[DONE]') {
+              break;
+            }
+            try {
+              final decoded = jsonDecode(dataStr);
+              if (decoded is Map<String, dynamic>) {
+                if (decoded.containsKey('credits_status')) {
+                  final status = decoded['credits_status'];
+                  if (mounted) {
+                    setState(() {
+                      _liveDailyPool = status['daily'] as int?;
+                      _liveSubscriptionCredits = status['subscription'] as int?;
+                      _liveTopupCredits = status['topup'] as int?;
+                    });
+                  }
+                  continue;
                 }
-                continue;
-              }
-              final choices = decoded['choices'];
-              if (choices is List && choices.isNotEmpty) {
-                final first = choices.first;
-                if (first is Map) {
-                  final delta = first['delta'];
-                  if (delta is Map) {
-                    if (delta['reasoning_content'] != null) {
-                      yield '[REASONING]${delta['reasoning_content']}';
-                    } else if (delta['content'] != null) {
-                      yield delta['content'].toString();
-                    } else if (first['text'] != null) {
-                      yield first['text'].toString();
+                final choices = decoded['choices'];
+                if (choices is List && choices.isNotEmpty) {
+                  final first = choices.first;
+                  if (first is Map) {
+                    final delta = first['delta'];
+                    if (delta is Map) {
+                      if (delta['reasoning_content'] != null) {
+                        yield '[REASONING]${delta['reasoning_content']}';
+                      } else if (delta['content'] != null) {
+                        yield delta['content'].toString();
+                      } else if (first['text'] != null) {
+                        yield first['text'].toString();
+                      }
                     }
                   }
                 }
               }
-            }
-          } catch (_) {
+            } catch (_) {}
           }
         }
+        break; // Successfully streamed, do not try next key
       }
-      break; // Successfully streamed, do not try next key
-    }
     } finally {
       client.close(force: true);
     }
@@ -7394,7 +9537,8 @@ class ChatClient {
     List<String> apiKeys, {
     String? googleCx,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
     try {
       final keys = apiKeys.where((k) => k.trim().isNotEmpty).toList();
       if (keys.isEmpty) keys.add('');
@@ -7406,11 +9550,13 @@ class ChatClient {
             final uri = Uri.parse('https://api.tavily.com/search');
             final request = await client.postUrl(uri);
             request.headers.contentType = ContentType.json;
-            request.write(jsonEncode({
-              'api_key': currentKey,
-              'query': query,
-              'max_results': 4,
-            }));
+            request.write(
+              jsonEncode({
+                'api_key': currentKey,
+                'query': query,
+                'max_results': 4,
+              }),
+            );
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -7419,18 +9565,18 @@ class ChatClient {
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['results'] is List) {
               final results = decoded['results'] as List;
-              return results.map((r) => '- [${r['title']}](${r['url']}): ${r['content']}').join('\n\n');
+              return results
+                  .map((r) => '- [${r['title']}](${r['url']}): ${r['content']}')
+                  .join('\n\n');
             }
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
             final request = await client.postUrl(uri);
             request.headers.set('x-api-key', currentKey);
             request.headers.contentType = ContentType.json;
-            request.write(jsonEncode({
-              'query': query,
-              'numResults': 4,
-              'text': true,
-            }));
+            request.write(
+              jsonEncode({'query': query, 'numResults': 4, 'text': true}),
+            );
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -7439,17 +9585,19 @@ class ChatClient {
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['results'] is List) {
               final results = decoded['results'] as List;
-              return results.map((r) => '- [${r['title']}](${r['url']}): ${r['text'] ?? r['highlights']?.first ?? ''}').join('\n\n');
+              return results
+                  .map(
+                    (r) =>
+                        '- [${r['title']}](${r['url']}): ${r['text'] ?? r['highlights']?.first ?? ''}',
+                  )
+                  .join('\n\n');
             }
           } else if (provider == 'firecrawl') {
             final uri = Uri.parse('https://api.firecrawl.dev/v1/search');
             final request = await client.postUrl(uri);
             request.headers.set('Authorization', 'Bearer $currentKey');
             request.headers.contentType = ContentType.json;
-            request.write(jsonEncode({
-              'query': query,
-              'limit': 4,
-            }));
+            request.write(jsonEncode({'query': query, 'limit': 4}));
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -7458,10 +9606,17 @@ class ChatClient {
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['data'] is List) {
               final results = decoded['data'] as List;
-              return results.map((r) => '- [${r['title'] ?? r['metadata']?['title']}](${r['url'] ?? r['metadata']?['source']}): ${r['markdown'] ?? r['snippet'] ?? ''}').join('\n\n');
+              return results
+                  .map(
+                    (r) =>
+                        '- [${r['title'] ?? r['metadata']?['title']}](${r['url'] ?? r['metadata']?['source']}): ${r['markdown'] ?? r['snippet'] ?? ''}',
+                  )
+                  .join('\n\n');
             }
           } else if (provider == 'google') {
-            final uri = Uri.parse('https://www.googleapis.com/customsearch/v1?key=$currentKey&cx=${googleCx ?? ''}&q=${Uri.encodeComponent(query)}');
+            final uri = Uri.parse(
+              'https://www.googleapis.com/customsearch/v1?key=$currentKey&cx=${googleCx ?? ''}&q=${Uri.encodeComponent(query)}',
+            );
             final request = await client.getUrl(uri);
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
@@ -7471,12 +9626,18 @@ class ChatClient {
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['items'] is List) {
               final results = decoded['items'] as List;
-              return results.map((r) => '- [${r['title']}](${r['link']}): ${r['snippet']}').join('\n\n');
+              return results
+                  .map(
+                    (r) => '- [${r['title']}](${r['link']}): ${r['snippet']}',
+                  )
+                  .join('\n\n');
             }
           }
         } catch (e) {
           if (i < keys.length - 1) {
-            debugPrint('Search failed with key index $i: $e. Trying fallback key.');
+            debugPrint(
+              'Search failed with key index $i: $e. Trying fallback key.',
+            );
             continue;
           }
           rethrow;
@@ -7505,7 +9666,10 @@ class ChatClient {
     required bool stream,
     bool isManaged = false,
   }) {
-    request.headers.set('Accept', stream ? 'text/event-stream' : 'application/json');
+    request.headers.set(
+      'Accept',
+      stream ? 'text/event-stream' : 'application/json',
+    );
     if (stream) {
       request.headers.set('Cache-Control', 'no-cache');
       request.headers.set('Connection', 'keep-alive');
@@ -7535,7 +9699,8 @@ class ChatClient {
         if (first['text'] != null) return first['text'].toString();
       }
     }
-    if (decoded['output_text'] != null) return decoded['output_text'].toString();
+    if (decoded['output_text'] != null)
+      return decoded['output_text'].toString();
     if (decoded['content'] != null) return decoded['content'].toString();
     return const JsonEncoder.withIndent('  ').convert(decoded);
   }
@@ -7592,7 +9757,8 @@ class ProviderSettings {
       baseUrl: json['baseUrl']?.toString() ?? '',
       model: json['model']?.toString() ?? '',
       maxTokens: _readInt(json['maxTokens'], 0),
-      fallbackApiKeys: (json['fallbackApiKeys'] as List<dynamic>?)
+      fallbackApiKeys:
+          (json['fallbackApiKeys'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           const [],
@@ -7673,7 +9839,8 @@ class SearchSettings {
       enabled: json['enabled'] as bool? ?? false,
       provider: json['provider']?.toString() ?? 'tavily',
       apiKey: json['apiKey']?.toString() ?? '',
-      fallbackApiKeys: (json['fallbackApiKeys'] as List<dynamic>?)
+      fallbackApiKeys:
+          (json['fallbackApiKeys'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           const [],
@@ -7682,12 +9849,12 @@ class SearchSettings {
   }
 
   Map<String, dynamic> toJson() => {
-        'enabled': enabled,
-        'provider': provider,
-        'apiKey': apiKey,
-        'fallbackApiKeys': fallbackApiKeys,
-        'googleCx': googleCx,
-      };
+    'enabled': enabled,
+    'provider': provider,
+    'apiKey': apiKey,
+    'fallbackApiKeys': fallbackApiKeys,
+    'googleCx': googleCx,
+  };
 
   SearchSettings copyWith({
     bool? enabled,
@@ -7818,36 +9985,78 @@ class ChatSession {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'messages': messages.map((m) => {
-          'role': m.role.apiName,
-          'text': m.text,
-          'isError': m.isError,
-          'reasoning': m.reasoning,
-          'images': m.images,
-          'files': m.files.map((f) => f.toJson()).toList(),
-        }).toList(),
-        'providerId': providerId,
-        'model': model,
-        'maxTokens': maxTokens,
-        'attachedImagesBase64': attachedImagesBase64,
-        'attachedFiles': attachedFiles.map((f) => f.toJson()).toList(),
-        'isPinned': isPinned,
-        'branches': branches?.map((branch) => branch.map((m) => {
-          'role': m.role.apiName,
-          'text': m.text,
-          'isError': m.isError,
-          'reasoning': m.reasoning,
-          'images': m.images,
-          'files': m.files.map((f) => f.toJson()).toList(),
-        }).toList()).toList(),
-        'activeBranchIndex': activeBranchIndex,
-      };
+    'id': id,
+    'title': title,
+    'messages': messages
+        .map(
+          (m) => {
+            'role': m.role.apiName,
+            'text': m.text,
+            'isError': m.isError,
+            'reasoning': m.reasoning,
+            'images': m.images,
+            'files': m.files.map((f) => f.toJson()).toList(),
+          },
+        )
+        .toList(),
+    'providerId': providerId,
+    'model': model,
+    'maxTokens': maxTokens,
+    'attachedImagesBase64': attachedImagesBase64,
+    'attachedFiles': attachedFiles.map((f) => f.toJson()).toList(),
+    'isPinned': isPinned,
+    'branches': branches
+        ?.map(
+          (branch) => branch
+              .map(
+                (m) => {
+                  'role': m.role.apiName,
+                  'text': m.text,
+                  'isError': m.isError,
+                  'reasoning': m.reasoning,
+                  'images': m.images,
+                  'files': m.files.map((f) => f.toJson()).toList(),
+                },
+              )
+              .toList(),
+        )
+        .toList(),
+    'activeBranchIndex': activeBranchIndex,
+  };
 
   factory ChatSession.fromJson(Map<String, dynamic> json) {
-    final messagesList = (json['messages'] as List?)
-            ?.map((m) => ChatMessage(
+    final messagesList =
+        (json['messages'] as List?)
+            ?.map(
+              (m) => ChatMessage(
+                role: MessageRole.values.firstWhere(
+                  (v) => v.apiName == m['role'],
+                  orElse: () => MessageRole.user,
+                ),
+                text: m['text']?.toString() ?? '',
+                isError: m['isError'] as bool? ?? false,
+                reasoning: m['reasoning']?.toString() ?? '',
+                images:
+                    (m['images'] as List?)?.map((e) => e.toString()).toList() ??
+                    const [],
+                files:
+                    (m['files'] as List?)
+                        ?.map(
+                          (e) => AttachedFile.fromJson(
+                            Map<String, dynamic>.from(e as Map),
+                          ),
+                        )
+                        .toList() ??
+                    const [],
+              ),
+            )
+            .toList() ??
+        [];
+    final branchesList = (json['branches'] as List?)
+        ?.map(
+          (branch) => (branch as List)
+              .map(
+                (m) => ChatMessage(
                   role: MessageRole.values.firstWhere(
                     (v) => v.apiName == m['role'],
                     orElse: () => MessageRole.user,
@@ -7855,26 +10064,25 @@ class ChatSession {
                   text: m['text']?.toString() ?? '',
                   isError: m['isError'] as bool? ?? false,
                   reasoning: m['reasoning']?.toString() ?? '',
-                  images: (m['images'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-                  files: (m['files'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
-                ))
-            .toList() ??
-        [];
-    final branchesList = (json['branches'] as List?)
-            ?.map((branch) => (branch as List)
-                .map((m) => ChatMessage(
-                      role: MessageRole.values.firstWhere(
-                        (v) => v.apiName == m['role'],
-                        orElse: () => MessageRole.user,
-                      ),
-                      text: m['text']?.toString() ?? '',
-                      isError: m['isError'] as bool? ?? false,
-                      reasoning: m['reasoning']?.toString() ?? '',
-                      images: (m['images'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-                      files: (m['files'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
-                    ))
-                .toList())
-            .toList();
+                  images:
+                      (m['images'] as List?)
+                          ?.map((e) => e.toString())
+                          .toList() ??
+                      const [],
+                  files:
+                      (m['files'] as List?)
+                          ?.map(
+                            (e) => AttachedFile.fromJson(
+                              Map<String, dynamic>.from(e as Map),
+                            ),
+                          )
+                          .toList() ??
+                      const [],
+                ),
+              )
+              .toList(),
+        )
+        .toList();
     return ChatSession(
       id: json['id']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
@@ -7882,8 +10090,19 @@ class ChatSession {
       providerId: json['providerId']?.toString() ?? providerCatalog.first.id,
       model: json['model']?.toString() ?? '',
       maxTokens: json['maxTokens'] as int?,
-      attachedImagesBase64: (json['attachedImagesBase64'] as List?)?.map((e) => e.toString()).toList() ?? const [],
-      attachedFiles: (json['attachedFiles'] as List?)?.map((e) => AttachedFile.fromJson(Map<String, dynamic>.from(e as Map))).toList() ?? const [],
+      attachedImagesBase64:
+          (json['attachedImagesBase64'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
+      attachedFiles:
+          (json['attachedFiles'] as List?)
+              ?.map(
+                (e) =>
+                    AttachedFile.fromJson(Map<String, dynamic>.from(e as Map)),
+              )
+              .toList() ??
+          const [],
       isPinned: json['isPinned'] as bool? ?? false,
       branches: branchesList,
       activeBranchIndex: json['activeBranchIndex'] as int?,
@@ -7898,11 +10117,7 @@ const providerCatalog = <ProviderDefinition>[
     shortName: 'NX',
     keyLabel: 'NEXON_MANAGED_KEY',
     baseUrl: 'https://nexon-jyp1.onrender.com',
-    models: [
-      'deepseek-v4-flash',
-      'llama-4-maverick',
-      'glm-5.2',
-    ],
+    models: ['deepseek-v4-flash', 'llama-4-maverick', 'glm-5.2'],
     defaultMaxTokens: 8192,
   ),
   ProviderDefinition(
@@ -7966,7 +10181,10 @@ const providerCatalog = <ProviderDefinition>[
     shortName: 'TG',
     keyLabel: 'TOGETHER_API_KEY',
     baseUrl: 'https://api.together.xyz/v1',
-    models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'deepseek-ai/DeepSeek-R1'],
+    models: [
+      'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+      'deepseek-ai/DeepSeek-R1',
+    ],
   ),
   ProviderDefinition(
     id: 'fireworks',
@@ -7982,7 +10200,10 @@ const providerCatalog = <ProviderDefinition>[
     shortName: 'DI',
     keyLabel: 'DEEPINFRA_API_KEY',
     baseUrl: 'https://api.deepinfra.com/v1/openai',
-    models: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'deepseek-ai/DeepSeek-R1'],
+    models: [
+      'meta-llama/Meta-Llama-3.1-70B-Instruct',
+      'deepseek-ai/DeepSeek-R1',
+    ],
   ),
   ProviderDefinition(
     id: 'mistral',
@@ -8054,7 +10275,10 @@ const providerCatalog = <ProviderDefinition>[
     shortName: 'HB',
     keyLabel: 'HYPERBOLIC_API_KEY',
     baseUrl: 'https://api.hyperbolic.xyz/v1',
-    models: ['meta-llama/Meta-Llama-3.1-405B-Instruct', 'deepseek-ai/DeepSeek-R1'],
+    models: [
+      'meta-llama/Meta-Llama-3.1-405B-Instruct',
+      'deepseek-ai/DeepSeek-R1',
+    ],
   ),
   ProviderDefinition(
     id: 'aimlapi',
@@ -8062,7 +10286,11 @@ const providerCatalog = <ProviderDefinition>[
     shortName: 'AI',
     keyLabel: 'AIMLAPI_KEY',
     baseUrl: 'https://api.aimlapi.com/v1',
-    models: ['gpt-4o', 'claude-3-5-sonnet', 'meta-llama/Meta-Llama-3.1-70B-Instruct'],
+    models: [
+      'gpt-4o',
+      'claude-3-5-sonnet',
+      'meta-llama/Meta-Llama-3.1-70B-Instruct',
+    ],
   ),
   ProviderDefinition(
     id: 'nebius',
@@ -8070,7 +10298,10 @@ const providerCatalog = <ProviderDefinition>[
     shortName: 'NB',
     keyLabel: 'NEBIUS_API_KEY',
     baseUrl: 'https://api.studio.nebius.com/v1',
-    models: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'deepseek-ai/DeepSeek-R1'],
+    models: [
+      'meta-llama/Meta-Llama-3.1-70B-Instruct',
+      'deepseek-ai/DeepSeek-R1',
+    ],
   ),
   ProviderDefinition(
     id: 'moonshot',
@@ -8196,8 +10427,15 @@ const providerCatalog = <ProviderDefinition>[
     models: ['custom-model'],
   ),
 ];
+
 class ResearchPlanWidget extends StatefulWidget {
-  const ResearchPlanWidget({required this.stateMap, required this.workspaceDir, required this.fileName, this.onStartResearch, super.key});
+  const ResearchPlanWidget({
+    required this.stateMap,
+    required this.workspaceDir,
+    required this.fileName,
+    this.onStartResearch,
+    super.key,
+  });
   final Map<String, dynamic> stateMap;
   final String workspaceDir;
   final String fileName;
@@ -8228,8 +10466,6 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   }
 
   Future<void> _downloadFile() async {
-
-
     String contentToSave = widget.stateMap['final_report'] as String? ?? '';
     if (contentToSave.isEmpty) {
       final steps = widget.stateMap['steps'] as List? ?? [];
@@ -8240,27 +10476,28 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
 
     if (contentToSave.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No research content to save.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No research content to save.')),
+        );
       }
       return;
     }
 
     try {
-      
       final bytes = Uint8List.fromList(utf8.encode(contentToSave));
       final String? path = await FilePicker.platform.saveFile(
         dialogTitle: 'Save Research Report',
         fileName: widget.fileName,
         bytes: bytes,
       );
-      
+
       if (path == null) {
         return; // User cancelled
       }
-      
+
       final file = File(path);
       await file.writeAsBytes(bytes);
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -8307,37 +10544,65 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.science, size: 18, color: Color(0xFF2C5282)),
+                    const Icon(
+                      Icons.science,
+                      size: 18,
+                      color: Color(0xFF2C5282),
+                    ),
                     const SizedBox(width: 8),
                     Text(
-                      status == 'completed' 
-                          ? 'Deep Research Complete' 
-                          : status == 'pending' 
-                              ? 'Research Plan Ready' 
-                              : 'Deep Research in Progress...',
-                      style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C5282)),
+                      status == 'completed'
+                          ? 'Deep Research Complete'
+                          : status == 'pending'
+                          ? 'Research Plan Ready'
+                          : 'Deep Research in Progress...',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2C5282),
+                      ),
                     ),
                   ],
                 ),
                 if (status == 'pending' && widget.onStartResearch != null)
                   ElevatedButton.icon(
                     onPressed: widget.onStartResearch,
-                    icon: const Icon(Icons.play_arrow, size: 16, color: Colors.white),
-                    label: const Text('Start', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                    icon: const Icon(
+                      Icons.play_arrow,
+                      size: 16,
+                      color: Colors.white,
+                    ),
+                    label: const Text(
+                      'Start',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF2C5282),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
                       minimumSize: const Size(0, 32),
                     ),
                   ),
                 if (status == 'running')
                   Text(
                     '${_stopwatch.elapsed.inMinutes.toString().padLeft(2, '0')}:${(_stopwatch.elapsed.inSeconds % 60).toString().padLeft(2, '0')}',
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2C5282)),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2C5282),
+                    ),
                   ),
                 if (status == 'completed')
                   IconButton(
-                    icon: const Icon(Icons.download, size: 20, color: Color(0xFF2C5282)),
+                    icon: const Icon(
+                      Icons.download,
+                      size: 20,
+                      color: Color(0xFF2C5282),
+                    ),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     onPressed: _downloadFile,
@@ -8366,12 +10631,17 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                 InkWell(
                   onTap: () {
                     setState(() {
-                      if (isExpanded) _expandedSteps.remove(idx);
-                      else _expandedSteps.add(idx);
+                      if (isExpanded)
+                        _expandedSteps.remove(idx);
+                      else
+                        _expandedSteps.add(idx);
                     });
                   },
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
                     child: Row(
                       children: [
                         Icon(statusIcon, size: 18, color: statusColor),
@@ -8380,13 +10650,25 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                           child: Text(
                             step['title'] ?? 'Step ${idx + 1}',
                             style: TextStyle(
-                              decoration: stepStatus == 'completed' ? TextDecoration.lineThrough : null,
-                              color: stepStatus == 'completed' ? Colors.grey : Colors.black87,
-                              fontWeight: stepStatus == 'running' ? FontWeight.bold : FontWeight.normal,
+                              decoration: stepStatus == 'completed'
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                              color: stepStatus == 'completed'
+                                  ? Colors.grey
+                                  : Colors.black87,
+                              fontWeight: stepStatus == 'running'
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                             ),
                           ),
                         ),
-                        Icon(isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down, size: 18, color: Colors.grey),
+                        Icon(
+                          isExpanded
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          size: 18,
+                          color: Colors.grey,
+                        ),
                       ],
                     ),
                   ),
@@ -8400,51 +10682,87 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                       children: [
                         Text(
                           'Prompt: ${step['prompt']}',
-                          style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: Colors.black54,
+                          ),
                         ),
-                        if (step['content'] != null && step['content'].toString().isNotEmpty)
-                          ...step['content'].toString().split('\n\n').where((s) => s.trim().isNotEmpty).map((s) {
-                            if (s.contains('<mcp_request>')) {
-                              final jsonStr = s.substring(s.indexOf('<mcp_request>') + 13, s.indexOf('</mcp_request>')).trim();
-                              return McpToolBlock(mcpJson: jsonStr);
-                            } else if (s.contains('<search_request>')) {
-                              final query = s.substring(s.indexOf('<search_request>') + 16, s.indexOf('</search_request>')).trim();
-                              return Container(
-                                margin: const EdgeInsets.symmetric(vertical: 8),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF0F5FA),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: const Color(0xFFD0E0F0)),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.search, color: Color(0xFF2B6CB0), size: 16),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        'Searched the web for "$query"',
-                                        style: const TextStyle(
-                                          fontSize: 12.5,
-                                          fontWeight: FontWeight.bold,
-                                          color: Color(0xFF2B6CB0),
-                                        ),
+                        if (step['content'] != null &&
+                            step['content'].toString().isNotEmpty)
+                          ...step['content']
+                              .toString()
+                              .split('\n\n')
+                              .where((s) => s.trim().isNotEmpty)
+                              .map((s) {
+                                if (s.contains('<mcp_request>')) {
+                                  final jsonStr = s
+                                      .substring(
+                                        s.indexOf('<mcp_request>') + 13,
+                                        s.indexOf('</mcp_request>'),
+                                      )
+                                      .trim();
+                                  return McpToolBlock(mcpJson: jsonStr);
+                                } else if (s.contains('<search_request>')) {
+                                  final query = s
+                                      .substring(
+                                        s.indexOf('<search_request>') + 16,
+                                        s.indexOf('</search_request>'),
+                                      )
+                                      .trim();
+                                  return Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      vertical: 8,
+                                    ),
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF0F5FA),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xFFD0E0F0),
                                       ),
                                     ),
-                                  ],
-                                ),
-                              );
-                            }
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 8.0),
-                              child: Text(s, style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
-                            );
-                          }),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.search,
+                                          color: Color(0xFF2B6CB0),
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Searched the web for "$query"',
+                                            style: const TextStyle(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF2B6CB0),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(
+                                    s,
+                                    style: const TextStyle(
+                                      fontSize: 12.5,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                );
+                              }),
                       ],
                     ),
                   ),
                 if (idx < steps.length - 1)
-                  const Divider(height: 1, indent: 40, color: Color(0xFFE2ECF5)),
+                  const Divider(
+                    height: 1,
+                    indent: 40,
+                    color: Color(0xFFE2ECF5),
+                  ),
               ],
             );
           }).toList(),
@@ -8484,7 +10802,10 @@ class HtmlArtifactWidget extends StatelessWidget {
                 Expanded(
                   child: Text(
                     getHtmlTitle(htmlContent),
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -8493,17 +10814,24 @@ class HtmlArtifactWidget extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => FullScreenHtmlViewer(htmlContent: htmlContent),
+                        builder: (context) =>
+                            FullScreenHtmlViewer(htmlContent: htmlContent),
                       ),
                     );
                   },
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.white,
                     backgroundColor: const Color(0xFF7B4E2E),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
                     minimumSize: const Size(0, 32),
                   ),
-                  child: const Text('View File', style: TextStyle(fontSize: 12)),
+                  child: const Text(
+                    'View File',
+                    style: TextStyle(fontSize: 12),
+                  ),
                 ),
               ],
             ),
@@ -8515,7 +10843,11 @@ class HtmlArtifactWidget extends StatelessWidget {
               physics: const NeverScrollableScrollPhysics(),
               child: Text(
                 htmlContent,
-                style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 12),
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Color(0xFFD4D4D4),
+                  fontSize: 12,
+                ),
                 maxLines: 8,
                 overflow: TextOverflow.fade,
               ),
@@ -8544,7 +10876,9 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
   void initState() {
     super.initState();
     final html = widget.htmlContent;
-    final wrappedHtml = html.contains('<html') ? html : '''
+    final wrappedHtml = html.contains('<html')
+        ? html
+        : '''
 <!DOCTYPE html>
 <html>
 <head>
@@ -8572,10 +10906,7 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
   }
 
   Future<void> _downloadFile() async {
-
-
     try {
-      
       final filename = 'page_${DateTime.now().millisecondsSinceEpoch}.html';
       final bytes = Uint8List.fromList(utf8.encode(widget.htmlContent));
       final String? path = await FilePicker.platform.saveFile(
@@ -8583,14 +10914,14 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
         fileName: filename,
         bytes: bytes,
       );
-      
+
       if (path == null) {
         return; // User cancelled
       }
-      
+
       final file = File(path);
       await file.writeAsBytes(bytes);
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -8624,7 +10955,9 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
             onSelected: (value) {
               if (value == 'copy') {
                 Clipboard.setData(ClipboardData(text: widget.htmlContent));
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Copied to clipboard')),
+                );
               } else if (value == 'preview') {
                 setState(() => _showPreview = !_showPreview);
               } else if (value == 'download') {
@@ -8633,7 +10966,10 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'copy', child: Text('Copy')),
-              PopupMenuItem(value: 'preview', child: Text(_showPreview ? 'Show Code' : 'Preview')),
+              PopupMenuItem(
+                value: 'preview',
+                child: Text(_showPreview ? 'Show Code' : 'Preview'),
+              ),
               const PopupMenuItem(value: 'download', child: Text('Download')),
             ],
           ),
@@ -8643,7 +10979,8 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
           ? Stack(
               children: [
                 WebViewWidget(controller: _controller),
-                if (_isLoading) const Center(child: CircularProgressIndicator()),
+                if (_isLoading)
+                  const Center(child: CircularProgressIndicator()),
               ],
             )
           : Container(
@@ -8655,7 +10992,11 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
                   padding: const EdgeInsets.all(16.0),
                   child: SelectableText(
                     widget.htmlContent,
-                    style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 13),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      color: Color(0xFFD4D4D4),
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ),
@@ -8663,7 +11004,6 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
     );
   }
 }
-
 
 class SvgDiagramWidget extends StatefulWidget {
   final String svgString;
@@ -8715,11 +11055,17 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
 
     // Remove fixed pixel width/height so we control sizing via LayoutBuilder
     s = s.replaceFirstMapped(
-      RegExp(r'''(<svg[^>]*?)\s+width=["']?[\d.%]+["']?''', caseSensitive: false),
+      RegExp(
+        r'''(<svg[^>]*?)\s+width=["']?[\d.%]+["']?''',
+        caseSensitive: false,
+      ),
       (m) => m.group(1)!,
     );
     s = s.replaceFirstMapped(
-      RegExp(r'''(<svg[^>]*?)\s+height=["']?[\d.%]+["']?''', caseSensitive: false),
+      RegExp(
+        r'''(<svg[^>]*?)\s+height=["']?[\d.%]+["']?''',
+        caseSensitive: false,
+      ),
       (m) => m.group(1)!,
     );
     return s;
@@ -8742,15 +11088,22 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             SizedBox(
-              width: 15, height: 15,
+              width: 15,
+              height: 15,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
                 valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6366F1)),
               ),
             ),
             SizedBox(width: 10),
-            Text('Generating visual…',
-                style: TextStyle(color: Color(0xFF64748B), fontSize: 12, letterSpacing: 0.3)),
+            Text(
+              'Generating visual…',
+              style: TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 12,
+                letterSpacing: 0.3,
+              ),
+            ),
           ],
         ),
       );
@@ -8786,7 +11139,8 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => FullScreenSvgViewer(svgString: _cachedSvg),
+                    builder: (context) =>
+                        FullScreenSvgViewer(svgString: _cachedSvg),
                   ),
                 );
               },
@@ -8800,9 +11154,11 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
                   height: renderHeight,
                   placeholderBuilder: (_) => const Center(
                     child: SizedBox(
-                      width: 24, height: 24,
+                      width: 24,
+                      height: 24,
                       child: CircularProgressIndicator(
-                        color: Color(0xFF6366F1), strokeWidth: 2,
+                        color: Color(0xFF6366F1),
+                        strokeWidth: 2,
                       ),
                     ),
                   ),
@@ -8865,12 +11221,13 @@ class FullScreenSvgViewer extends StatelessWidget {
   }
 }
 
-
-
 // ── Document Artifacts & File Permission Helpers ──────────────────────────
 
 String getHtmlTitle(String content) {
-  final match = RegExp(r'<title>(.*?)</title>', caseSensitive: false).firstMatch(content);
+  final match = RegExp(
+    r'<title>(.*?)</title>',
+    caseSensitive: false,
+  ).firstMatch(content);
   if (match != null) {
     final title = match.group(1)?.trim() ?? '';
     if (title.isNotEmpty) return title;
@@ -8879,7 +11236,11 @@ String getHtmlTitle(String content) {
 }
 
 String getDocxTitle(String content) {
-  final titleMatch = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(content);
+  final titleMatch = RegExp(
+    r'^title:\s*(.*)$',
+    multiLine: true,
+    caseSensitive: false,
+  ).firstMatch(content);
   if (titleMatch != null) {
     final title = titleMatch.group(1)?.trim() ?? '';
     if (title.isNotEmpty) return title;
@@ -8893,7 +11254,11 @@ String getDocxTitle(String content) {
 }
 
 String getMdTitle(String content) {
-  final titleMatch = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(content);
+  final titleMatch = RegExp(
+    r'^title:\s*(.*)$',
+    multiLine: true,
+    caseSensitive: false,
+  ).firstMatch(content);
   if (titleMatch != null) {
     final title = titleMatch.group(1)?.trim() ?? '';
     if (title.isNotEmpty) return title;
@@ -8906,14 +11271,16 @@ String getMdTitle(String content) {
   return 'Markdown Document';
 }
 
-
-
 // ── Docx Artifact Widget ──
 
 class DocxArtifactWidget extends StatelessWidget {
   final String docxContent;
   final String workspacePath;
-  const DocxArtifactWidget({super.key, required this.docxContent, required this.workspacePath});
+  const DocxArtifactWidget({
+    super.key,
+    required this.docxContent,
+    required this.workspacePath,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -8941,7 +11308,10 @@ class DocxArtifactWidget extends StatelessWidget {
                 Expanded(
                   child: Text(
                     getDocxTitle(docxContent),
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -8950,17 +11320,26 @@ class DocxArtifactWidget extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => FullScreenDocxViewer(docxContent: docxContent, workspacePath: workspacePath),
+                        builder: (context) => FullScreenDocxViewer(
+                          docxContent: docxContent,
+                          workspacePath: workspacePath,
+                        ),
                       ),
                     );
                   },
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.white,
                     backgroundColor: const Color(0xFF7B4E2E),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
                     minimumSize: const Size(0, 32),
                   ),
-                  child: const Text('View File', style: TextStyle(fontSize: 12)),
+                  child: const Text(
+                    'View File',
+                    style: TextStyle(fontSize: 12),
+                  ),
                 ),
               ],
             ),
@@ -8972,7 +11351,11 @@ class DocxArtifactWidget extends StatelessWidget {
               physics: const NeverScrollableScrollPhysics(),
               child: Text(
                 docxContent,
-                style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 12),
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Color(0xFFD4D4D4),
+                  fontSize: 12,
+                ),
                 maxLines: 8,
               ),
             ),
@@ -8988,7 +11371,11 @@ class DocxArtifactWidget extends StatelessWidget {
 class FullScreenDocxViewer extends StatefulWidget {
   final String docxContent;
   final String workspacePath;
-  const FullScreenDocxViewer({super.key, required this.docxContent, required this.workspacePath});
+  const FullScreenDocxViewer({
+    super.key,
+    required this.docxContent,
+    required this.workspacePath,
+  });
 
   @override
   State<FullScreenDocxViewer> createState() => _FullScreenDocxViewerState();
@@ -8999,78 +11386,86 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
   bool _exporting = false;
 
   Future<void> _exportDocx() async {
-
-
     setState(() => _exporting = true);
-    
+
     try {
       final docxDir = Directory('${widget.workspacePath}/.termux_forge');
       if (!docxDir.existsSync()) {
         docxDir.createSync(recursive: true);
       }
-      
+
       final tempMdFile = File('${docxDir.path}/temp_doc.md');
       await tempMdFile.writeAsString(widget.docxContent);
-      
+
       final tempDocxPath = '${docxDir.path}/temp_compiled.docx';
-      
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 45);
-      final request = await client.postUrl(Uri.parse('http://127.0.0.1:8390/mcp'));
+
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 45);
+      final request = await client.postUrl(
+        Uri.parse('http://127.0.0.1:8390/mcp'),
+      );
       request.headers.contentType = ContentType.json;
-      
+
       final jsonString = jsonEncode({
         'method': 'run_command',
         'params': {
-          'command': 'python3 /data/data/com.termux/files/home/projects/termux_forge/python_bridge/generate_docx.py "${tempMdFile.path}" "$tempDocxPath"',
-          'cwd': widget.workspacePath
-        }
+          'command':
+              'python3 /data/data/com.termux/files/home/projects/termux_forge/python_bridge/generate_docx.py "${tempMdFile.path}" "$tempDocxPath"',
+          'cwd': widget.workspacePath,
+        },
       });
-      
+
       final bytes = utf8.encode(jsonString);
       request.headers.contentLength = bytes.length;
       request.add(bytes);
-      
+
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
-      
+
       if (!body.contains('Success: Saved document')) {
         throw Exception(body);
       }
-      
+
       final tempDocxFile = File(tempDocxPath);
       if (!tempDocxFile.existsSync()) {
         throw Exception('Compiled document not found.');
       }
-      
+
       final docxBytes = await tempDocxFile.readAsBytes();
-      
+
       try {
         await tempMdFile.delete();
         await tempDocxFile.delete();
       } catch (_) {}
 
       String filename = 'document.docx';
-      final match = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(widget.docxContent);
+      final match = RegExp(
+        r'^title:\s*(.*)$',
+        multiLine: true,
+        caseSensitive: false,
+      ).firstMatch(widget.docxContent);
       if (match != null) {
-        final title = match.group(1)?.replaceAll(RegExp(r'[^a-zA-Z0-9\s-]'), '').trim() ?? '';
+        final title =
+            match.group(1)?.replaceAll(RegExp(r'[^a-zA-Z0-9\s-]'), '').trim() ??
+            '';
         if (title.isNotEmpty) {
           filename = '${title.toLowerCase().replaceAll(' ', '_')}.docx';
         }
       }
-      
+
       final String? savePath = await FilePicker.platform.saveFile(
         dialogTitle: 'Save Word Document',
         fileName: filename,
         bytes: docxBytes,
       );
-      
+
       if (savePath == null) {
         return;
       }
-      
+
       final file = File(savePath);
       await file.writeAsBytes(docxBytes);
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -9108,7 +11503,10 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                 child: SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7B4E2E)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF7B4E2E),
+                  ),
                 ),
               ),
             )
@@ -9118,7 +11516,9 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
               onSelected: (value) {
                 if (value == 'copy') {
                   Clipboard.setData(ClipboardData(text: widget.docxContent));
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Copied to clipboard')),
+                  );
                 } else if (value == 'preview') {
                   setState(() => _showPreview = !_showPreview);
                 } else if (value == 'download') {
@@ -9127,8 +11527,14 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(value: 'copy', child: Text('Copy')),
-                PopupMenuItem(value: 'preview', child: Text(_showPreview ? 'Show Code' : 'Preview')),
-                const PopupMenuItem(value: 'download', child: Text('Download (.docx)')),
+                PopupMenuItem(
+                  value: 'preview',
+                  child: Text(_showPreview ? 'Show Code' : 'Preview'),
+                ),
+                const PopupMenuItem(
+                  value: 'download',
+                  child: Text('Download (.docx)'),
+                ),
               ],
             ),
         ],
@@ -9155,38 +11561,52 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                   child: MarkdownBody(
                     data: widget.docxContent,
                     selectable: true,
-                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                      h1: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF7B4E2E),
-                        fontFamily: 'serif',
-                      ),
-                      h2: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF7B4E2E),
-                        fontFamily: 'serif',
-                      ),
-                      h3: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF6C5946),
-                      ),
-                      p: const TextStyle(
-                        fontSize: 13.5,
-                        height: 1.4,
-                        color: Color(0xFF2D241C),
-                      ),
-                      blockquoteDecoration: BoxDecoration(
-                        color: const Color(0xFFFAF5EE),
-                        border: const Border(left: BorderSide(color: Color(0xFF7B4E2E), width: 4.0)),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      tableBorder: TableBorder.all(color: const Color(0xFFE5DDD3)),
-                      tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      tableHead: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7B4E2E)),
-                    ),
+                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                        .copyWith(
+                          h1: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFF7B4E2E),
+                            fontFamily: 'serif',
+                          ),
+                          h2: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF7B4E2E),
+                            fontFamily: 'serif',
+                          ),
+                          h3: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF6C5946),
+                          ),
+                          p: const TextStyle(
+                            fontSize: 13.5,
+                            height: 1.4,
+                            color: Color(0xFF2D241C),
+                          ),
+                          blockquoteDecoration: BoxDecoration(
+                            color: const Color(0xFFFAF5EE),
+                            border: const Border(
+                              left: BorderSide(
+                                color: Color(0xFF7B4E2E),
+                                width: 4.0,
+                              ),
+                            ),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          tableBorder: TableBorder.all(
+                            color: const Color(0xFFE5DDD3),
+                          ),
+                          tableCellsPadding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          tableHead: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF7B4E2E),
+                          ),
+                        ),
                   ),
                 ),
               ),
@@ -9200,7 +11620,11 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                   padding: const EdgeInsets.all(16.0),
                   child: SelectableText(
                     widget.docxContent,
-                    style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 13),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      color: Color(0xFFD4D4D4),
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ),
@@ -9214,7 +11638,11 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
 class MdArtifactWidget extends StatelessWidget {
   final String mdContent;
   final String workspacePath;
-  const MdArtifactWidget({super.key, required this.mdContent, required this.workspacePath});
+  const MdArtifactWidget({
+    super.key,
+    required this.mdContent,
+    required this.workspacePath,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -9242,7 +11670,10 @@ class MdArtifactWidget extends StatelessWidget {
                 Expanded(
                   child: Text(
                     getMdTitle(mdContent),
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -9251,17 +11682,26 @@ class MdArtifactWidget extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => FullScreenMdViewer(mdContent: mdContent, workspacePath: workspacePath),
+                        builder: (context) => FullScreenMdViewer(
+                          mdContent: mdContent,
+                          workspacePath: workspacePath,
+                        ),
                       ),
                     );
                   },
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.white,
                     backgroundColor: const Color(0xFF7B4E2E),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
                     minimumSize: const Size(0, 32),
                   ),
-                  child: const Text('View File', style: TextStyle(fontSize: 12)),
+                  child: const Text(
+                    'View File',
+                    style: TextStyle(fontSize: 12),
+                  ),
                 ),
               ],
             ),
@@ -9273,7 +11713,11 @@ class MdArtifactWidget extends StatelessWidget {
               physics: const NeverScrollableScrollPhysics(),
               child: Text(
                 mdContent,
-                style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 12),
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  color: Color(0xFFD4D4D4),
+                  fontSize: 12,
+                ),
                 maxLines: 8,
               ),
             ),
@@ -9289,7 +11733,11 @@ class MdArtifactWidget extends StatelessWidget {
 class FullScreenMdViewer extends StatefulWidget {
   final String mdContent;
   final String workspacePath;
-  const FullScreenMdViewer({super.key, required this.mdContent, required this.workspacePath});
+  const FullScreenMdViewer({
+    super.key,
+    required this.mdContent,
+    required this.workspacePath,
+  });
 
   @override
   State<FullScreenMdViewer> createState() => _FullScreenMdViewerState();
@@ -9300,16 +11748,19 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
   bool _saving = false;
 
   Future<void> _saveMdFile() async {
-
-
     setState(() => _saving = true);
-    
+
     try {
-      
       String filename = 'document.md';
-      final match = RegExp(r'^title:\s*(.*)$', multiLine: true, caseSensitive: false).firstMatch(widget.mdContent);
+      final match = RegExp(
+        r'^title:\s*(.*)$',
+        multiLine: true,
+        caseSensitive: false,
+      ).firstMatch(widget.mdContent);
       if (match != null) {
-        final title = match.group(1)?.replaceAll(RegExp(r'[^a-zA-Z0-9\s-]'), '').trim() ?? '';
+        final title =
+            match.group(1)?.replaceAll(RegExp(r'[^a-zA-Z0-9\s-]'), '').trim() ??
+            '';
         if (title.isNotEmpty) {
           filename = '${title.toLowerCase().replaceAll(' ', '_')}.md';
         }
@@ -9321,14 +11772,14 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
         fileName: filename,
         bytes: bytes,
       );
-      
+
       if (path == null) {
         return;
       }
-      
+
       final file = File(path);
       await file.writeAsBytes(bytes);
-      
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -9366,7 +11817,10 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                 child: SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7B4E2E)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF7B4E2E),
+                  ),
                 ),
               ),
             )
@@ -9376,7 +11830,9 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
               onSelected: (value) {
                 if (value == 'copy') {
                   Clipboard.setData(ClipboardData(text: widget.mdContent));
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Copied to clipboard')),
+                  );
                 } else if (value == 'preview') {
                   setState(() => _showPreview = !_showPreview);
                 } else if (value == 'download') {
@@ -9385,8 +11841,14 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
               },
               itemBuilder: (context) => [
                 const PopupMenuItem(value: 'copy', child: Text('Copy')),
-                PopupMenuItem(value: 'preview', child: Text(_showPreview ? 'Show Code' : 'Preview')),
-                const PopupMenuItem(value: 'download', child: Text('Download (.md)')),
+                PopupMenuItem(
+                  value: 'preview',
+                  child: Text(_showPreview ? 'Show Code' : 'Preview'),
+                ),
+                const PopupMenuItem(
+                  value: 'download',
+                  child: Text('Download (.md)'),
+                ),
               ],
             ),
         ],
@@ -9403,10 +11865,7 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: const Color(0xFFE7D8C4)),
                   ),
-                  child: MarkdownBody(
-                    data: widget.mdContent,
-                    selectable: true,
-                  ),
+                  child: MarkdownBody(data: widget.mdContent, selectable: true),
                 ),
               ),
             )
@@ -9419,7 +11878,11 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                   padding: const EdgeInsets.all(16.0),
                   child: SelectableText(
                     widget.mdContent,
-                    style: const TextStyle(fontFamily: 'monospace', color: Color(0xFFD4D4D4), fontSize: 13),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      color: Color(0xFFD4D4D4),
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ),
@@ -9428,27 +11891,55 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
   }
 }
 
+String _resolvePath(String p, String workspace) {
+  if (p.startsWith('/') || p.startsWith('~') || p.startsWith('http')) return p;
+  final ws = workspace.endsWith('/') ? workspace : '$workspace/';
+  return '$ws$p';
+}
 
-  String _resolvePath(String p, String workspace) {
-    if (p.startsWith('/') || p.startsWith('~') || p.startsWith('http')) return p;
-    final ws = workspace.endsWith('/') ? workspace : '$workspace/';
-    return '$ws$p';
+dynamic _resolveToolPathValue(dynamic value, String workspace, [String? key]) {
+  const pathKeys = {
+    'path',
+    'file',
+    'directory',
+    'dir',
+    'dir_path',
+    'src',
+    'dest',
+    'path_a',
+    'path_b',
+    'target',
+    'output_dir',
+  };
+  if (value is Map<String, dynamic>) {
+    return value.map(
+      (k, v) => MapEntry(k, _resolveToolPathValue(v, workspace, k)),
+    );
   }
+  if (value is List) {
+    return value
+        .map((item) => _resolveToolPathValue(item, workspace, key))
+        .toList();
+  }
+  if (value is String && key != null && pathKeys.contains(key)) {
+    return _resolvePath(value, workspace);
+  }
+  return value;
+}
 
-  void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
-    final keys = ['path', 'file', 'directory', 'src', 'dest', 'path_a', 'path_b', 'target'];
-    for (final key in keys) {
-      if (params.containsKey(key) && params[key] is String) {
-        params[key] = _resolvePath(params[key] as String, workspace);
-      }
-    }
-  }
+void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
+  final resolved =
+      _resolveToolPathValue(params, workspace) as Map<String, dynamic>;
+  params
+    ..clear()
+    ..addAll(resolved);
+}
 
 Future<String> _handleMemoryTool(String action, String content) async {
   try {
     final docDir = await getApplicationDocumentsDirectory();
     final memoryFile = File('${docDir.path}/nexon_memory.json');
-    
+
     String currentMemory = '';
     if (await memoryFile.exists()) {
       currentMemory = await memoryFile.readAsString();
@@ -9457,7 +11948,9 @@ Future<String> _handleMemoryTool(String action, String content) async {
     if (action == 'read') {
       return currentMemory.isEmpty ? 'Memory is empty.' : currentMemory;
     } else if (action == 'append') {
-      final newMemory = currentMemory.isEmpty ? content.trim() : '$currentMemory\n${content.trim()}';
+      final newMemory = currentMemory.isEmpty
+          ? content.trim()
+          : '$currentMemory\n${content.trim()}';
       if (utf8.encode(newMemory).length > 10240) {
         return 'Error: Appending this would exceed the 10KB memory limit. Use replace action instead.';
       }

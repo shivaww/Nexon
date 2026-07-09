@@ -78,24 +78,22 @@ class ToolParameter {
 
   /// Converts to a JSON-serializable map (for MCP / LLM tool schemas).
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'description': description,
-        'type': type,
-        'required': required,
-        if (defaultValue != null) 'default': defaultValue,
-      };
+    'name': name,
+    'description': description,
+    'type': type,
+    'required': required,
+    if (defaultValue != null) 'default': defaultValue,
+  };
 }
 
 /// The handler signature for tool execution.
 ///
 /// Receives a map of parameter name → value and returns a [ToolResult].
-typedef ToolHandler = Future<ToolResult> Function(
-  Map<String, dynamic> params,
-);
+typedef ToolHandler = Future<ToolResult> Function(Map<String, dynamic> params);
 
 /// Full definition of a tool that can be registered and invoked.
 class ToolDefinition {
-  /// Unique tool identifier (e.g., 'read_file').
+  /// Unique tool identifier (e.g., 'read_file_rich').
   final String id;
 
   /// Human-readable display name.
@@ -144,14 +142,14 @@ class ToolDefinition {
   ///
   /// Useful for exposing tool schemas to LLMs or MCP clients.
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'description': description,
-        'category': category.name,
-        'permissionLevel': permissionLevel,
-        'parameters': parameters.map((p) => p.toJson()).toList(),
-        'supportsStreaming': supportsStreaming,
-      };
+    'id': id,
+    'name': name,
+    'description': description,
+    'category': category.name,
+    'permissionLevel': permissionLevel,
+    'parameters': parameters.map((p) => p.toJson()).toList(),
+    'supportsStreaming': supportsStreaming,
+  };
 }
 
 /// The result returned by a tool invocation.
@@ -185,32 +183,26 @@ class ToolResult {
     dynamic data,
     Duration duration = Duration.zero,
   }) =>
-      ToolResult(
-        success: true,
-        data: data,
-        duration: duration,
-        toolId: toolId,
-      );
+      ToolResult(success: true, data: data, duration: duration, toolId: toolId);
 
   /// Creates a failed result.
   factory ToolResult.fail({
     required String toolId,
     required String error,
     Duration duration = Duration.zero,
-  }) =>
-      ToolResult(
-        success: false,
-        error: error,
-        duration: duration,
-        toolId: toolId,
-      );
+  }) => ToolResult(
+    success: false,
+    error: error,
+    duration: duration,
+    toolId: toolId,
+  );
 
   /// Converts to a JSON-serializable map.
   Map<String, dynamic> toJson() => {
-        'success': success,
-        'data': data,
-        'error': error,
-        'durationMs': duration.inMilliseconds,
-        'toolId': toolId,
-      };
+    'success': success,
+    'data': data,
+    'error': error,
+    'durationMs': duration.inMilliseconds,
+    'toolId': toolId,
+  };
 }

@@ -8,7 +8,8 @@ import '../services/drive_sync_service.dart';
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onComplete;
 
-  const OnboardingScreen({Key? key, required this.onComplete}) : super(key: key);
+  const OnboardingScreen({Key? key, required this.onComplete})
+    : super(key: key);
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -43,21 +44,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   void initState() {
     super.initState();
-    _authStateSubscription = Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
-      final session = data.session;
-      if (session != null && _isSigningIn) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Checking for existing backup on Google Drive...')),
-          );
-        }
-        await DriveSyncService.restoreFromDrive();
-        if (mounted) {
-          setState(() => _isSigningIn = false);
-          _nextPage();
-        }
-      }
-    });
+    _authStateSubscription = Supabase.instance.client.auth.onAuthStateChange
+        .listen((data) async {
+          final session = data.session;
+          if (session != null && _isSigningIn) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Checking for existing backup on Google Drive...',
+                  ),
+                ),
+              );
+            }
+            await DriveSyncService.restoreFromDriveDetailed();
+            if (mounted) {
+              setState(() => _isSigningIn = false);
+              _nextPage();
+            }
+          }
+        });
   }
 
   @override
@@ -74,10 +80,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (session != null && session.providerToken != null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Checking for existing backup on Google Drive...')),
+          const SnackBar(
+            content: Text('Checking for existing backup on Google Drive...'),
+          ),
         );
       }
-      await DriveSyncService.restoreFromDrive();
+      await DriveSyncService.restoreFromDriveDetailed();
       if (mounted) {
         setState(() => _isSigningIn = false);
         _nextPage();
@@ -89,14 +97,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await Supabase.instance.client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: 'io.supabase.nexon://login-callback',
-        scopes: 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file',
+        scopes:
+            'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.file',
+        queryParams: const {
+          'access_type': 'offline',
+          'prompt': 'consent',
+          'include_granted_scopes': 'true',
+        },
       );
     } catch (e) {
       if (mounted) {
         setState(() => _isSigningIn = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sign in failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Sign in failed: $e')));
       }
     }
   }
@@ -147,7 +161,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           const SizedBox(height: 24),
           const Text(
             'Before we begin, please review our core architectural principles:',
-            style: TextStyle(fontSize: 16, color: Color(0xFF2D241C), fontWeight: FontWeight.bold),
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF2D241C),
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 16),
           Expanded(
@@ -155,18 +173,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               children: const [
                 ListTile(
                   leading: Icon(Icons.security, color: Color(0xFF7B4E2E)),
-                  title: Text('Absolute Privacy via Google Drive', style: TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('We do not store your chats on central servers. All your conversations, API keys, and memory are stored entirely on your local device and securely backed up to your personal Google Drive.'),
+                  title: Text(
+                    'Absolute Privacy via Google Drive',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    'We do not store your chats on central servers. All your conversations, API keys, and memory are stored entirely on your local device and securely backed up to your personal Google Drive.',
+                  ),
                 ),
                 ListTile(
                   leading: Icon(Icons.terminal, color: Color(0xFF7B4E2E)),
-                  title: Text('Local Agentic Execution', style: TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('Nexon requires Termux to run Python scripts and execute shell commands locally. This gives the AI the ability to act as a fully autonomous agent on your device without sending data externally.'),
+                  title: Text(
+                    'Local Agentic Execution',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    'Nexon requires Termux to run Python scripts and execute shell commands locally. This gives the AI the ability to act as a fully autonomous agent on your device without sending data externally.',
+                  ),
                 ),
                 ListTile(
                   leading: Icon(Icons.storage, color: Color(0xFF7B4E2E)),
-                  title: Text('Data Ownership', style: TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('Because everything lives in your Google Drive and Termux environment, you own 100% of your data. We cannot read your chats or access your files.'),
+                  title: Text(
+                    'Data Ownership',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    'Because everything lives in your Google Drive and Termux environment, you own 100% of your data. We cannot read your chats or access your files.',
+                  ),
                 ),
               ],
             ),
@@ -179,9 +212,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF7B4E2E),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: const Text('I Agree & Proceed', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'I Agree & Proceed',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         ],
@@ -210,7 +248,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           const Text(
             'Sign in with Google to securely authenticate and link your Google Drive for zero-cost, private cloud backups.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 16, color: Color(0xFF2D241C), height: 1.5),
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF2D241C),
+              height: 1.5,
+            ),
           ),
           const SizedBox(height: 48),
           _isSigningIn
@@ -221,11 +263,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   child: ElevatedButton.icon(
                     onPressed: _signInWithGoogle,
                     icon: const Icon(Icons.login),
-                    label: const Text('Sign in with Google', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    label: const Text(
+                      'Sign in with Google',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF7B4E2E),
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
@@ -253,11 +303,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           const SizedBox(height: 24),
           const Text(
             'WARNING: If you do not enable backups, you WILL lose all your chats, API keys, AI memory, artifacts, and SVGs if you uninstall the app or lose your device.',
-            style: TextStyle(fontSize: 16, color: Colors.red, fontWeight: FontWeight.bold, height: 1.5),
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.red,
+              fontWeight: FontWeight.bold,
+              height: 1.5,
+            ),
           ),
           const SizedBox(height: 32),
           SwitchListTile(
-            title: const Text('Enable Auto-Sync to Google Drive', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF7B4E2E))),
+            title: const Text(
+              'Enable Auto-Sync to Google Drive',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF7B4E2E),
+              ),
+            ),
             subtitle: const Text('You can change this later in settings.'),
             value: _backupEnabled,
             activeColor: const Color(0xFF7B4E2E),
@@ -272,9 +333,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF7B4E2E),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: const Text('Continue', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Continue',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         ],
@@ -283,7 +349,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _buildTermuxSetup() {
-    const setupCommand = 'curl -O https://raw.githubusercontent.com/shivaww/Nexon/main/python_bridge/termux_forge_bridge.py && python termux_forge_bridge.py';
+    const setupCommand =
+        'curl -O https://raw.githubusercontent.com/shivaww/Nexon/main/python_bridge/termux_forge_bridge.py && python termux_forge_bridge.py';
     return Padding(
       padding: const EdgeInsets.all(32.0),
       child: Column(
@@ -302,7 +369,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           const SizedBox(height: 24),
           const Text(
             'To give the AI file access and terminal capabilities, you must install and run the Python bridge inside Termux.',
-            style: TextStyle(fontSize: 16, color: Color(0xFF2D241C), height: 1.5),
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF2D241C),
+              height: 1.5,
+            ),
           ),
           const SizedBox(height: 24),
           Container(
@@ -316,7 +387,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const Expanded(
                   child: Text(
                     setupCommand,
-                    style: TextStyle(fontFamily: 'monospace', color: Colors.greenAccent),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      color: Colors.greenAccent,
+                    ),
                   ),
                 ),
                 IconButton(
@@ -334,7 +408,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           const SizedBox(height: 24),
           const Text(
             '1. Open Termux\n2. Paste and run the command above\n3. Return to this app',
-            style: TextStyle(fontSize: 16, color: Color(0xFF2D241C), fontWeight: FontWeight.bold, height: 1.5),
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF2D241C),
+              fontWeight: FontWeight.bold,
+              height: 1.5,
+            ),
           ),
           const Spacer(),
           SizedBox(
@@ -345,9 +424,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF7B4E2E),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: const Text('Finish Setup', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Finish Setup',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         ],
@@ -367,7 +451,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             height: 8,
             width: _currentPage == index ? 24 : 8,
             decoration: BoxDecoration(
-              color: _currentPage == index ? const Color(0xFF7B4E2E) : Colors.grey.withOpacity(0.3),
+              color: _currentPage == index
+                  ? const Color(0xFF7B4E2E)
+                  : Colors.grey.withOpacity(0.3),
               borderRadius: BorderRadius.circular(4),
             ),
           );
