@@ -12,6 +12,7 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:nexon/widgets/scrollable_table_builder.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:nexon/widgets/diff_viewer_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
@@ -867,6 +868,13 @@ You have full shell access AND a suite of structured file tools via the Python b
 Emit ONE tool call per turn, then STOP. Wait for result. Then decide the next step.
 NEVER chain multiple tool calls in one response.
 
+━━ CODE NAVIGATION PROTOCOL (STRICT EXECUTION) ━━
+NEVER read an entire file blindly. You must follow this workflow:
+1. GET THE MAP: Use `<tool_request><method>file_outline</method><path>path/to/file.dart</path></tool_request>` first. This returns a structured list of all classes, functions, and their exact line numbers.
+2. READ SPECIFIC LINES: Using the line numbers from the outline, use `<tool_request><method>read_file_rich</method><path>path/to/file.dart</path><start_line>45</start_line><end_line>80</end_line></tool_request>` to read ONLY that specific function.
+3. SEARCH: To find specific code across the project, use `<tool_request><method>search_rich</method><query>RegExp('TODO.*')</query><path>lib/</path><context_lines>2</context_lines></tool_request>`.
+4. EDIT: NEVER rewrite a whole file. Use `<tool_request><method>patch_file</method><path>path/to/file.dart</path><patches>[{"search": "old code", "replace": "new code"}]</patches></tool_request>` for atomic search-and-replace.
+
 ━━ STRUCTURED FILE TOOLS (ALWAYS PREFER OVER SHELL FOR FILE OPS) ━━
 Use XML format: <tool_request><method>NAME</method><param>value</param>...</tool_request>
 CRITICAL: Always use direct tag format like <path>/foo</path>. Do NOT use <PARAM name="path">/foo</PARAM> to maximize parser cleanliness.
@@ -1413,7 +1421,23 @@ For every project, maintain a README.md at the project root.
               
               final response = await request.close();
               final body = await response.transform(utf8.decoder).join();
-              mcpResult = body;
+              String cleanResult = body;
+              try {
+                final parsed = jsonDecode(body) as Map<String, dynamic>;
+                final resultData = parsed['result'] as Map<String, dynamic>? ?? parsed;
+                
+                if (resultData.containsKey('stdout')) {
+                  cleanResult = resultData['stdout'].toString();
+                  if (resultData.containsKey('diff') && resultData['diff'].toString().isNotEmpty) {
+                    cleanResult += '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                  }
+                } else if (resultData.containsKey('error')) {
+                  cleanResult = 'Error: ' + resultData['error'].toString();
+                }
+              } catch (_) {
+                // Fallback to raw body if not JSON
+              }
+              mcpResult = cleanResult;
               if (mcpResult.length > 32000) {
                 mcpResult = mcpResult.substring(0, 16000) + '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' + mcpResult.substring(mcpResult.length - 6000);
               }
@@ -4261,6 +4285,33 @@ class MessageBubble extends StatelessWidget {
   }
 
   List<Widget> _buildBlocks(BuildContext context, String text) {
+    if (text.startsWith("Tool Result [") && text.contains("\n\n")) {
+      final resultContent = text.substring(text.indexOf("\n\n") + 2);
+      if (resultContent.contains("--- DIFF ---")) {
+        final parts = resultContent.split("--- DIFF ---");
+        return [
+          ...parseContentBlocks(parts[0].trim()).map((block) {
+            return _buildSingleBlock(context, block);
+          }).toList(),
+          if (parts.length > 1 && parts[1].trim().isNotEmpty)
+            DiffViewerWidget(content: parts[1].trim()),
+        ];
+      }
+      return [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1E1E),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey.shade800),
+          ),
+          child: SelectableText(
+            resultContent,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: Color(0xFFD4D4D4)),
+          ),
+        )
+      ];
+    }
     return parseContentBlocks(text).map((block) {
       if (block.isCode) {
         if (block.language.toLowerCase() == 'math') {
