@@ -4806,6 +4806,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late final TextEditingController _agenticWorkspaceController;
   late final TextEditingController _customMcpUrlController;
   bool _driveBackupEnabled = false;
+  bool _isBackingUp = false;
   String _activePlanTier = '';
   int? _liveDailyPool;
   int? _liveSubscriptionCredits;
@@ -5685,6 +5686,50 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                 ],
               ),
+              if (_driveBackupEnabled)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: _isBackingUp ? null : () async {
+                        setState(() => _isBackingUp = true);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Starting Google Drive backup...')),
+                        );
+                        try {
+                          final success = await DriveSyncService.syncToDrive(_sessions);
+                          if (success && mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('✅ Backup Successful!'), backgroundColor: Colors.green),
+                            );
+                          } else if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('❌ Backup Failed. Try re-logging into Supabase.'), backgroundColor: Colors.red),
+                            );
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+                            );
+                          }
+                        } finally {
+                          if (mounted) setState(() => _isBackingUp = false);
+                        }
+                      },
+                      icon: _isBackingUp 
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) 
+                          : const Icon(Icons.cloud_upload, size: 16),
+                      label: Text(_isBackingUp ? 'Backing up...' : 'Force Backup Now'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF7B4E2E),
+                        backgroundColor: const Color(0xFFF5EFE6),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      ),
+                    ),
+                  ),
+                ),
               const Divider(height: 32, color: Color(0xFFE5DDD3)),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
