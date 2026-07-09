@@ -26,8 +26,8 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY) if SUPABASE_URL and SUPABASE_SERVICE_KEY else None
 
 # --- LOAD SHEDDER (Firewall & Compute Maximizer) ---
-# Limits concurrent heavy requests to Kaggle's capacity (default 1 to prevent hanging/OOM)
-MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1"))
+# Limits concurrent heavy requests to Kaggle's capacity (default 100 for parallel batching)
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "100"))
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 # --- MODEL MULTIPLIERS ---
