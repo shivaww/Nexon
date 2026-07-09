@@ -1495,7 +1495,7 @@ class _MindMapPainter extends CustomPainter {
       final currLvl = levels[curr]!;
       if (currLvl > maxLevel) maxLevel = currLvl;
 
-      for (var child in (outEdges[curr] ?? [])) {
+      for (final child in (outEdges[curr] ?? <String>[])) {
         if (!levels.containsKey(child)) {
           levels[child] = currLvl + 1;
           queue.add(child);
