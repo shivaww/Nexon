@@ -5777,8 +5777,91 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 24),
-        _buildSubscriptionPlans(),
+        const SizedBox(height: 16),
+        // Subscription Settings Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Nexon Pro Subscription',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _managedSubscriptionEnabled 
+                          ? 'Active Plan: ${_activePlanTier.toUpperCase()}' 
+                          : 'Switch to a Managed API key and skip the hassle.',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              ElevatedButton(
+                onPressed: () {
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.white,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                    ),
+                    builder: (sheetContext) {
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          left: 20,
+                          right: 20,
+                          top: 24,
+                          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
+                        ),
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'Manage Subscription',
+                                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Color(0xFF2D241C)),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () => Navigator.pop(sheetContext),
+                                  )
+                                ],
+                              ),
+                              const SizedBox(height: 24),
+                              _buildSubscriptionPlans(),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D241C),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+                child: const Text('Manage', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 32),
       ],
     );
@@ -5788,20 +5871,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Nexon Pro Subscriptions',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w900,
-            color: Color(0xFF2D241C),
-          ),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Switch to a Managed API key and skip the hassle.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
-        ),
-        const SizedBox(height: 16),
         _buildPlanCard(
           title: 'GO',
           subtitle: 'The Student / Hobbyist Tier',
