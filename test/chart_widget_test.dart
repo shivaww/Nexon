@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nexon/main.dart'; // or whatever the package name is
 import 'package:nexon/widgets/nexon_chart.dart';
-import 'dart:convert';
 
 void main() {
   testWidgets('Test NexonChartWidget with line chart', (WidgetTester tester) async {
