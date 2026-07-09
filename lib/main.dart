@@ -7153,7 +7153,18 @@ class ChatClient {
             if (response.statusCode < 200 || response.statusCode >= 300) {
               throw HttpException('HTTP ${response.statusCode}: $body');
             }
-            responseText = _extractAnswer(jsonDecode(body));
+            final decoded = jsonDecode(body);
+            if (decoded is Map<String, dynamic> && decoded.containsKey('credits_status')) {
+              final status = decoded['credits_status'];
+              if (mounted) {
+                setState(() {
+                  _liveDailyPool = status['daily'] as int?;
+                  _liveSubscriptionCredits = status['subscription'] as int?;
+                  _liveTopupCredits = status['topup'] as int?;
+                });
+              }
+            }
+            responseText = _extractAnswer(decoded);
             success = true;
             break;
           } catch (e) {
@@ -7312,6 +7323,17 @@ class ChatClient {
           try {
             final decoded = jsonDecode(dataStr);
             if (decoded is Map<String, dynamic>) {
+              if (decoded.containsKey('credits_status')) {
+                final status = decoded['credits_status'];
+                if (mounted) {
+                  setState(() {
+                    _liveDailyPool = status['daily'] as int?;
+                    _liveSubscriptionCredits = status['subscription'] as int?;
+                    _liveTopupCredits = status['topup'] as int?;
+                  });
+                }
+                continue;
+              }
               final choices = decoded['choices'];
               if (choices is List && choices.isNotEmpty) {
                 final first = choices.first;

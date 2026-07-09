@@ -54,6 +54,14 @@ async def verify_jwt(request: Request):
     except Exception:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
+def _get_user_wallet(user_id: str) -> dict:
+    try:
+        response = supabase.table("user_wallets").select("current_daily_pool, subscription_credits, topup_credits").eq("user_id", user_id).maybe_single().execute()
+        return response.data or {}
+    except Exception as e:
+        print(f"Failed to fetch user wallet: {e}")
+        return {}
+
 # --- PROXY ENDPOINT ---
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, user_id: str = Depends(verify_jwt)):
@@ -195,6 +203,16 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                                 }).execute()
                             except Exception as e:
                                 print(f"Failed to issue refund: {e}")
+
+                        # Send realtime credit status
+                        wallet = _get_user_wallet(user_id)
+                        if wallet:
+                            credits_status = {
+                                "daily": wallet.get("current_daily_pool", 0),
+                                "subscription": wallet.get("subscription_credits", 0),
+                                "topup": wallet.get("topup_credits", 0),
+                            }
+                            yield f"data: {json.dumps({'credits_status': credits_status})}\n\n".encode("utf-8")
                         
                 return StreamingResponse(stream_generator(), media_type="text/event-stream")
             else:
@@ -241,6 +259,13 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                     except Exception as e:
                         print(f"Failed to issue refund: {e}")
 
+                wallet = _get_user_wallet(user_id)
+                if wallet:
+                    resp_json["credits_status"] = {
+                        "daily": wallet.get("current_daily_pool", 0),
+                        "subscription": wallet.get("subscription_credits", 0),
+                        "topup": wallet.get("topup_credits", 0),
+                    }
                 return JSONResponse(status_code=200, content=resp_json)
 
     return await proxy_request()
