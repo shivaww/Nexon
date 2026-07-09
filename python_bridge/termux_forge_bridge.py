@@ -1408,11 +1408,16 @@ class TermuxForgeBridge:
         try:
             return int(target)
         except ValueError:
-            # Try to resolve by name or command substring
+            # Try to resolve by name or command substring, prioritizing running processes
+            candidates = []
             for pid, rec in self.services._registry.items():
                 if target == rec.name or target in rec.command:
-                    return pid
-            raise JsonRpcError(ErrorCode.INVALID_PARAMS, f"Could not find service matching '{target}'")
+                    candidates.append(rec)
+            if not candidates:
+                raise JsonRpcError(ErrorCode.INVALID_PARAMS, f"Could not find service matching '{target}'")
+            # Sort: running first (1 > 0), then started_at descending (most recent first)
+            candidates.sort(key=lambda r: (1 if r.status == "running" else 0, r.started_at), reverse=True)
+            return candidates[0].pid
 
     async def _service_status(self, pid: int = None, id: int = None) -> dict:
         """Get detailed status for a specific background service PID."""
@@ -1553,7 +1558,8 @@ class TermuxForgeBridge:
             rpc_resp = await self.router.dispatch(rpc_req)
             
             if rpc_resp.error:
-                return web.json_response({"error": rpc_resp.error.message}, status=500)
+                error_msg = rpc_resp.error.get("message", "Unknown RPC error") if isinstance(rpc_resp.error, dict) else str(rpc_resp.error)
+                return web.json_response({"error": error_msg}, status=500)
                 
             # Keep legacy response format {"result": ...}
             return web.json_response({"result": rpc_resp.result})

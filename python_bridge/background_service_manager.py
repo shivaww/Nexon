@@ -216,11 +216,21 @@ class ServiceRecord:
             return False
         try:
             os.kill(self.pid, 0)  # signal 0 = probe
-            return True
-        except ProcessLookupError:
+            # Verify it belongs to this service by checking /proc cmdline
+            cmdline_path = f"/proc/{self.pid}/cmdline"
+            if not os.path.exists(cmdline_path):
+                return False
+            with open(cmdline_path, "r") as f:
+                cmdline = f.read().replace("\x00", " ").strip()
+            if not cmdline:
+                return False
+            expected_base = self.command.split()[0].split("/")[-1]
+            actual_base = cmdline.split()[0].split("/")[-1]
+            if expected_base == actual_base:
+                return True
+            return expected_base in cmdline
+        except (ProcessLookupError, PermissionError, FileNotFoundError):
             return False
-        except PermissionError:
-            return True  # exists but we can't signal it
 
     def ai_status_line(self) -> str:
         alive = self.is_alive()
@@ -300,12 +310,18 @@ class BackgroundServiceManager:
         if REGISTRY_FILE.exists():
             try:
                 data = json.loads(REGISTRY_FILE.read_text())
+                dirty = False
                 for item in data:
                     try:
                         rec = ServiceRecord.from_dict(item)
+                        if rec.status == "running" and not rec.is_alive():
+                            rec.status = "stopped"
+                            dirty = True
                         self._registry[rec.pid] = rec
                     except Exception as e:
                         logger.warning("Skipping corrupt registry entry: %s", e)
+                if dirty:
+                    self._save_registry()
             except Exception as e:
                 logger.warning("Could not load service registry: %s", e)
 
@@ -838,10 +854,11 @@ class BackgroundServiceManager:
         }
 
     def _pid_exists(self, pid: int) -> bool:
+        rec = self._registry.get(pid)
+        if rec:
+            return rec.is_alive()
         try:
             os.kill(pid, 0)
             return True
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             return False
-        except PermissionError:
-            return True
