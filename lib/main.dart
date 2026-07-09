@@ -4312,95 +4312,97 @@ class MessageBubble extends StatelessWidget {
         )
       ];
     }
-    return parseContentBlocks(text).map((block) {
-      if (block.isCode) {
-        if (block.language.toLowerCase() == 'math') {
-          return Container(
-            width: double.infinity,
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            padding: const EdgeInsets.all(12),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFFCF6),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFE7D8C4)),
-            ),
-            child: SelectableText(
-              convertLatexToUnicode(block.content),
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF2D241C),
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          );
-        }
-        if (block.language.toLowerCase() == 'svg') {
-          return SvgDiagramWidget(svgString: block.content);
-        }
-        if (block.language.toLowerCase() == 'chart' ||
-            block.language.toLowerCase() == 'json-chart') {
-          return NexonChartWidget(chartBlock: block.content);
-        }
-        final lang = block.language.toLowerCase();
-        final contentLower = block.content.toLowerCase();
-        final isCompleteWebpage = contentLower.contains('<html') || contentLower.contains('<!doctype');
-        final isArtifact = lang == 'artifact' || ((lang == 'html' || lang == 'react' || lang == 'javascript') && isCompleteWebpage);
-        if (isArtifact) {
-          return HtmlArtifactWidget(htmlContent: block.content);
-        }
-        if (block.language.toLowerCase() == 'docx') {
-          return DocxArtifactWidget(docxContent: block.content, workspacePath: agenticWorkspace);
-        }
-        if (block.language.toLowerCase() == 'md' || block.language.toLowerCase() == 'markdown') {
-          return MdArtifactWidget(mdContent: block.content, workspacePath: agenticWorkspace);
-        }
-        return CodeBlockWidget(
-          code: block.content,
-          language: block.language,
-          onSave: () => _saveCodeBlock(context, block.content, block.language),
-        );
-      } else {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6.0),
-          child: MarkdownBody(
-            data: block.content
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
-                .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
-                .replaceAll(r'\boldsymbol', r'\mathbf'),            selectable: true,
-            builders: {
-              'latex': LatexElementBuilder(
-                textStyle: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 15.5, fontWeight: FontWeight.w400),
-                textScaleFactor: 1.15,
-              ),
-              'table': ScrollableTableBuilder(),
-            },
-            extensionSet: md.ExtensionSet(
-              [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
-              [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
-            ),
-            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-              p: const TextStyle(
-                height: 1.48,
-                color: Color(0xFF1E1E1E),
-                fontSize: 15.5,
-                fontWeight: FontWeight.w400,
-              ),
-              h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
-              h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
-              h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
-              listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
-              tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
-              tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
-              tableHead: const TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold, fontSize: 14),
+    return parseContentBlocks(text).map((block) => _buildSingleBlock(context, block)).toList();
+  }
+
+  Widget _buildSingleBlock(BuildContext context, ContentBlock block) {
+    if (block.isCode) {
+      if (block.language.toLowerCase() == 'math') {
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.all(12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFCF6),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE7D8C4)),
+          ),
+          child: SelectableText(
+            convertLatexToUnicode(block.content),
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF2D241C),
+              fontStyle: FontStyle.italic,
             ),
           ),
         );
       }
-    }).toList();
+      if (block.language.toLowerCase() == 'svg') {
+        return SvgDiagramWidget(svgString: block.content);
+      }
+      if (block.language.toLowerCase() == 'chart' ||
+          block.language.toLowerCase() == 'json-chart') {
+        return NexonChartWidget(chartBlock: block.content);
+      }
+      final lang = block.language.toLowerCase();
+      final contentLower = block.content.toLowerCase();
+      final isCompleteWebpage = contentLower.contains('<html') || contentLower.contains('<!doctype');
+      final isArtifact = lang == 'artifact' || ((lang == 'html' || lang == 'react' || lang == 'javascript') && isCompleteWebpage);
+      if (isArtifact) {
+        return HtmlArtifactWidget(htmlContent: block.content);
+      }
+      if (block.language.toLowerCase() == 'docx') {
+        return DocxArtifactWidget(docxContent: block.content, workspacePath: agenticWorkspace);
+      }
+      if (block.language.toLowerCase() == 'md' || block.language.toLowerCase() == 'markdown') {
+        return MdArtifactWidget(mdContent: block.content, workspacePath: agenticWorkspace);
+      }
+      return CodeBlockWidget(
+        code: block.content,
+        language: block.language,
+        onSave: () => _saveCodeBlock(context, block.content, block.language),
+      );
+    } else {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6.0),
+        child: MarkdownBody(
+          data: block.content
+              .replaceAll('<', '&lt;')
+              .replaceAll('>', '&gt;')
+              .replaceAllMapped(RegExp(r'\\\[([\s\S]*?)\\\]'), (m) => '\$\$' + (m.group(1) ?? '') + '\$\$')
+              .replaceAllMapped(RegExp(r'\\\(([\s\S]*?)\\\)'), (m) => '\$' + (m.group(1) ?? '') + '\$')
+              .replaceAll(r'\boldsymbol', r'\mathbf'),            selectable: true,
+          builders: {
+            'latex': LatexElementBuilder(
+              textStyle: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 15.5, fontWeight: FontWeight.w400),
+              textScaleFactor: 1.15,
+            ),
+            'table': ScrollableTableBuilder(),
+          },
+          extensionSet: md.ExtensionSet(
+            [LatexBlockSyntax(), ...md.ExtensionSet.gitHubFlavored.blockSyntaxes],
+            [LatexInlineSyntax(), ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes],
+          ),
+          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+            p: const TextStyle(
+              height: 1.48,
+              color: Color(0xFF1E1E1E),
+              fontSize: 15.5,
+              fontWeight: FontWeight.w400,
+            ),
+            h1: const TextStyle(color: Color(0xFF2D241C), fontSize: 20, fontWeight: FontWeight.bold),
+            h2: const TextStyle(color: Color(0xFF2D241C), fontSize: 18, fontWeight: FontWeight.bold),
+            h3: const TextStyle(color: Color(0xFF2D241C), fontSize: 16, fontWeight: FontWeight.bold),
+            listBullet: const TextStyle(color: Color(0xFF7B4E2E), fontSize: 15.5),
+            tableBorder: TableBorder.all(color: const Color(0xFFDCCBB8), width: 1),
+            tableBody: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
+            tableHead: const TextStyle(color: Color(0xFF2D241C), fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+        ),
+      );
+    }
   }
 }
 
