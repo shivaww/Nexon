@@ -16,11 +16,11 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
               return TableRow(
                 children: row.children!.whereType<md.Element>().map((cell) {
                   return Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Text(
-                      cell.textContent,
-                      style: preferredStyle?.copyWith(
-                        fontWeight: cell.tag == 'th' ? FontWeight.bold : FontWeight.normal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+                    child: RichText(
+                      softWrap: false,
+                      text: TextSpan(
+                        children: cell.children?.map((node) => _parseNode(node, preferredStyle, cell.tag == 'th')).toList() ?? [],
                       ),
                     ),
                   );
@@ -32,5 +32,29 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
         }).toList(),
       ),
     );
+  }
+
+  InlineSpan _parseNode(md.Node node, TextStyle? style, bool isHeader) {
+    TextStyle baseStyle = style ?? const TextStyle(color: Colors.black);
+    if (isHeader) {
+      baseStyle = baseStyle.copyWith(fontWeight: FontWeight.bold, color: const Color(0xFF2D241C));
+    } else {
+      baseStyle = baseStyle.copyWith(color: const Color(0xFF1E1E1E), fontSize: 14);
+    }
+
+    if (node is md.Text) {
+      return TextSpan(text: node.text, style: baseStyle);
+    } else if (node is md.Element) {
+      TextStyle currentStyle = baseStyle;
+      if (node.tag == 'strong') currentStyle = baseStyle.copyWith(fontWeight: FontWeight.bold);
+      if (node.tag == 'em') currentStyle = baseStyle.copyWith(fontStyle: FontStyle.italic);
+      if (node.tag == 'code') currentStyle = baseStyle.copyWith(fontFamily: 'monospace', backgroundColor: Colors.grey.shade200, color: Colors.black87);
+      
+      return TextSpan(
+        children: node.children?.map((child) => _parseNode(child, currentStyle, false)).toList() ?? [],
+        style: currentStyle,
+      );
+    }
+    return const TextSpan();
   }
 }

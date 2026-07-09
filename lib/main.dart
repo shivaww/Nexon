@@ -4763,7 +4763,6 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onReasoningEnabledChanged,
     required this.onFetchModels,
     required this.onConfigureKey,
-    super.key,
   });
 
   final ProviderDefinition provider;
