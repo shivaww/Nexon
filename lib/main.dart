@@ -2361,6 +2361,8 @@ For every project, maintain a README.md at the project root.
       backgroundColor: Colors.transparent,
       builder: (context) {
         return MediaAndModelSheet(
+          sessions: _sessions,
+          onRestoreCompleted: _loadSessions,
           provider: provider,
           settings: settings,
           cachedModels: models,
@@ -4736,6 +4738,9 @@ bool modelHasVision(String modelName) {
 
 class MediaAndModelSheet extends StatefulWidget {
   const MediaAndModelSheet({
+    super.key,
+    required this.sessions,
+    required this.onRestoreCompleted,
     required this.provider,
     required this.settings,
     required this.cachedModels,
@@ -4769,6 +4774,8 @@ class MediaAndModelSheet extends StatefulWidget {
   final bool deepResearchEnabled;
   final String agenticWorkspace;
   final String customMcpUrl;
+  final List<ChatSession> sessions;
+  final Future<void> Function() onRestoreCompleted;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
   final ValueChanged<bool> onAgenticEnabledChanged;
   final ValueChanged<bool> onDeepResearchEnabledChanged;
@@ -5736,7 +5743,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             try {
                               final success = await DriveSyncService.restoreFromDrive();
                               if (success && mounted) {
-                                await _loadSessions();
+                                await widget.onRestoreCompleted();
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('✅ Restore Successful!'), backgroundColor: Colors.green),
                                 );
@@ -5773,7 +5780,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                               const SnackBar(content: Text('Starting Google Drive backup...')),
                             );
                             try {
-                              final success = await DriveSyncService.syncToDrive(_sessions);
+                              final success = await DriveSyncService.syncToDrive(widget.sessions);
                               if (success && mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('✅ Backup Successful!'), backgroundColor: Colors.green),
