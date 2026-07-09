@@ -793,7 +793,10 @@ class BackgroundServiceManager:
             # Kill the entire process group (catches child processes too)
             try:
                 pgid = os.getpgid(pid)
-                os.killpg(pgid, sig)
+                if pgid != os.getpgrp():
+                    os.killpg(pgid, sig)
+                else:
+                    os.kill(pid, sig)
             except (ProcessLookupError, PermissionError):
                 os.kill(pid, sig)
         except ProcessLookupError:

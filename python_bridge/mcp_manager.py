@@ -101,6 +101,7 @@ class McpServerState:
     last_health: float = 0.0
     error_message: str = ""
     start_time: float = 0.0
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         uptime = time.time() - self.start_time if self.start_time else 0
@@ -470,19 +471,20 @@ class McpManager:
         if not state.process or not state.process.stdin or not state.process.stdout:
             return {"error": "Server process not available"}
 
-        payload = json.dumps(request) + "\n"
-        state.process.stdin.write(payload.encode())
-        await state.process.stdin.drain()
+        async with state.lock:
+            payload = json.dumps(request) + "\n"
+            state.process.stdin.write(payload.encode())
+            await state.process.stdin.drain()
 
-        try:
-            line = await asyncio.wait_for(
-                state.process.stdout.readline(), timeout=30,
-            )
-            return json.loads(line.decode())
-        except asyncio.TimeoutError:
-            return {"error": "Stdio request timed out"}
-        except json.JSONDecodeError:
-            return {"error": "Invalid JSON response from server"}
+            try:
+                line = await asyncio.wait_for(
+                    state.process.stdout.readline(), timeout=30,
+                )
+                return json.loads(line.decode())
+            except asyncio.TimeoutError:
+                return {"error": "Stdio request timed out"}
+            except json.JSONDecodeError:
+                return {"error": "Invalid JSON response from server"}
 
     async def _stdio_tools_list(self, state: McpServerState) -> list[dict]:
         """Request tool list from a stdio server."""

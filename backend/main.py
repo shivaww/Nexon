@@ -67,8 +67,16 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
             content={"error": {"message": "Server is at its highest work please try again later."}}
         )
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
     model_id = body.get("model")
+    is_stream = body.get("stream", False)
     
     # 2. Calculate Exact Input Tokens (Approximation: 1 token = 4 chars)
     messages_str = str(body.get("messages", []))
@@ -115,56 +123,124 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
             }
             
             client = httpx.AsyncClient(timeout=120.0)
-            req = client.build_request("POST", target_url, headers=headers, json=body)
             
-            try:
-                upstream_response = await client.send(req, stream=True)
-            except httpx.RequestError:
-                await client.aclose()
-                # Refund everything if the server is unreachable
-                supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
-                raise HTTPException(status_code=503, detail="Upstream AI provider unreachable.")
-
-            if upstream_response.status_code != 200:
-                error_body = await upstream_response.aread()
-                await upstream_response.aclose()
-                await client.aclose()
-                
-                # Refund everything if upstream failed
-                supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
-                
-                error_text = error_body.decode('utf-8', errors='ignore')
+            if is_stream:
+                req = client.build_request("POST", target_url, headers=headers, json=body)
                 try:
-                    err_json = json.loads(error_text)
-                except:
-                    err_json = {"detail": f"Upstream returned {upstream_response.status_code}: {error_text[:200]}"}
-                return JSONResponse(status_code=upstream_response.status_code, content=err_json)
+                    upstream_response = await client.send(req, stream=True)
+                except httpx.RequestError:
+                    await client.aclose()
+                    # Refund everything if the server is unreachable
+                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    raise HTTPException(status_code=503, detail="Upstream AI provider unreachable.")
 
-            async def stream_generator():
-                output_chars = 0
-                try:
-                    async for chunk in upstream_response.aiter_bytes():
-                        output_chars += len(chunk)
-                        yield chunk
-                finally:
+                if upstream_response.status_code != 200:
+                    error_body = await upstream_response.aread()
                     await upstream_response.aclose()
                     await client.aclose()
                     
-                    # Post-flight Refund Calculation
-                    actual_output_tokens = output_chars // 4
-                    credits_used = int((actual_input_tokens * mult["in"]) + (actual_output_tokens * mult["out"]))
+                    # Refund everything if upstream failed
+                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
                     
-                    refund_amount = est_credits_needed - credits_used
-                    if refund_amount != 0:
-                        try:
-                            # Passing a negative number adds the credits back!
-                            supabase.rpc('deduct_user_credits', {
-                                'p_user_id': user_id,
-                                'p_credits_needed': -refund_amount
-                            }).execute()
-                        except Exception as e:
-                            print(f"Failed to issue refund: {e}")
-                    
-            return StreamingResponse(stream_generator(), media_type="text/event-stream")
+                    error_text = error_body.decode('utf-8', errors='ignore')
+                    try:
+                        err_json = json.loads(error_text)
+                    except:
+                        err_json = {"detail": f"Upstream returned {upstream_response.status_code}: {error_text[:200]}"}
+                    return JSONResponse(status_code=upstream_response.status_code, content=err_json)
+
+                async def stream_generator():
+                    output_chars = 0
+                    actual_output_tokens = None
+                    buffer = ""
+                    try:
+                        async for chunk in upstream_response.aiter_bytes():
+                            yield chunk
+                            buffer += chunk.decode('utf-8', errors='ignore')
+                            while "\n" in buffer:
+                                line, buffer = buffer.split("\n", 1)
+                                line = line.strip()
+                                if line.startswith("data: "):
+                                    data_str = line[6:].strip()
+                                    if data_str == "[DONE]":
+                                        continue
+                                    try:
+                                        data_json = json.loads(data_str)
+                                        choices = data_json.get("choices", [])
+                                        if choices:
+                                            delta = choices[0].get("delta", {})
+                                            content = delta.get("content", "")
+                                            if content:
+                                                output_chars += len(content)
+                                        usage = data_json.get("usage")
+                                        if usage and "completion_tokens" in usage:
+                                            actual_output_tokens = usage["completion_tokens"]
+                                    except Exception:
+                                        pass
+                    finally:
+                        await upstream_response.aclose()
+                        await client.aclose()
+                        
+                        # Post-flight Refund Calculation
+                        if actual_output_tokens is None:
+                            actual_output_tokens = output_chars // 4
+                        
+                        credits_used = int((actual_input_tokens * mult["in"]) + (actual_output_tokens * mult["out"]))
+                        refund_amount = est_credits_needed - credits_used
+                        if refund_amount != 0:
+                            try:
+                                supabase.rpc('deduct_user_credits', {
+                                    'p_user_id': user_id,
+                                    'p_credits_needed': -refund_amount
+                                }).execute()
+                            except Exception as e:
+                                print(f"Failed to issue refund: {e}")
+                        
+                return StreamingResponse(stream_generator(), media_type="text/event-stream")
+            else:
+                # Non-streaming path
+                try:
+                    upstream_response = await client.post(target_url, headers=headers, json=body)
+                except httpx.RequestError:
+                    await client.aclose()
+                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    raise HTTPException(status_code=503, detail="Upstream AI provider unreachable.")
+
+                if upstream_response.status_code != 200:
+                    error_text = upstream_response.text
+                    await client.aclose()
+                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    try:
+                        err_json = json.loads(error_text)
+                    except:
+                        err_json = {"detail": f"Upstream returned {upstream_response.status_code}: {error_text[:200]}"}
+                    return JSONResponse(status_code=upstream_response.status_code, content=err_json)
+
+                resp_json = upstream_response.json()
+                await client.aclose()
+
+                usage = resp_json.get("usage", {})
+                actual_input = usage.get("prompt_tokens", actual_input_tokens)
+                actual_output = usage.get("completion_tokens", 0)
+
+                if not actual_output:
+                    choices = resp_json.get("choices", [])
+                    if choices:
+                        message = choices[0].get("message", {})
+                        content = message.get("content", "")
+                        actual_output = len(content) // 4
+
+                credits_used = int((actual_input * mult["in"]) + (actual_output * mult["out"]))
+                refund_amount = est_credits_needed - credits_used
+                if refund_amount != 0:
+                    try:
+                        supabase.rpc('deduct_user_credits', {
+                            'p_user_id': user_id,
+                            'p_credits_needed': -refund_amount
+                        }).execute()
+                    except Exception as e:
+                        print(f"Failed to issue refund: {e}")
+
+                return JSONResponse(status_code=200, content=resp_json)
 
     return await proxy_request()

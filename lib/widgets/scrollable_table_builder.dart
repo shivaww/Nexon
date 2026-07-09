@@ -17,10 +17,16 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
                 children: row.children!.whereType<md.Element>().map((cell) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-                    child: RichText(
-                      softWrap: false,
-                      text: TextSpan(
-                        children: cell.children?.map((node) => _parseNode(node, preferredStyle, cell.tag == 'th')).toList() ?? [],
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        minWidth: 120, // Prevents narrow tower-like columns
+                        maxWidth: 300, // Wraps long text nicely at a max boundary
+                      ),
+                      child: RichText(
+                        softWrap: true,
+                        text: TextSpan(
+                          children: cell.children?.map((node) => _parseNode(node, preferredStyle, cell.tag == 'th')).toList() ?? [],
+                        ),
                       ),
                     ),
                   );

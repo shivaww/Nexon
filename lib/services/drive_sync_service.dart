@@ -30,9 +30,14 @@ class DriveSyncService {
     }
 
     final session = Supabase.instance.client.auth.currentSession;
-    final providerToken = session?.providerToken;
+    var providerToken = session?.providerToken;
+    if (providerToken != null) {
+      await prefs.setString('google_provider_token', providerToken);
+    } else {
+      providerToken = prefs.getString('google_provider_token');
+    }
 
-    if (providerToken == null) {
+    if (providerToken == null || providerToken.isEmpty) {
       print('No Google Provider Token available. Cannot sync to Drive.');
       return false;
     }
@@ -124,9 +129,14 @@ class DriveSyncService {
   static Future<bool> restoreFromDrive() async {
     final prefs = await SharedPreferences.getInstance();
     final session = Supabase.instance.client.auth.currentSession;
-    final providerToken = session?.providerToken;
+    var providerToken = session?.providerToken;
+    if (providerToken != null) {
+      await prefs.setString('google_provider_token', providerToken);
+    } else {
+      providerToken = prefs.getString('google_provider_token');
+    }
 
-    if (providerToken == null) {
+    if (providerToken == null || providerToken.isEmpty) {
       print('No Google Provider Token available. Cannot restore from Drive.');
       return false;
     }

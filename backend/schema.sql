@@ -55,7 +55,9 @@ BEGIN
             new_pool BIGINT;
         BEGIN
             leftover := GREATEST(0, wallet_record.current_daily_pool);
-            new_pool := LEAST(wallet_record.daily_base_cap + leftover, wallet_record.subscription_credits);
+            -- Capped at total available balance (subscription + topup) instead of subscription_credits only,
+            -- preventing top-up users from being blocked when subscription reaches 0.
+            new_pool := LEAST(wallet_record.daily_base_cap + leftover, wallet_record.subscription_credits + wallet_record.topup_credits);
             
             UPDATE user_wallets SET 
                 current_daily_pool = new_pool,
@@ -66,8 +68,8 @@ BEGIN
         END;
     END IF;
 
-    -- 2. Circuit Breaker Check
-    IF wallet_record.current_daily_pool < p_credits_needed THEN
+    -- 2. Circuit Breaker Check (Only check when deducting credits, not during refunds)
+    IF p_credits_needed > 0 AND wallet_record.current_daily_pool < p_credits_needed THEN
         RAISE EXCEPTION 'Daily Circuit Breaker Reached. Unused balance preserved for tomorrow.';
     END IF;
 
