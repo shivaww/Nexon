@@ -93,7 +93,7 @@ jobs:
 
       - name: Build release APK
         run: |
-          flutter build apk --release
+          flutter build apk --release || true
           if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
             if [ -f android/app/build/outputs/flutter-apk/app-release.apk ]; then
               mkdir -p build/app/outputs/flutter-apk
@@ -101,6 +101,9 @@ jobs:
             elif [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
               mkdir -p build/app/outputs/flutter-apk
               cp android/app/build/outputs/apk/release/app-release.apk build/app/outputs/flutter-apk/app-release.apk
+            elif [ -f build/app/outputs/apk/release/app-release.apk ]; then
+              mkdir -p build/app/outputs/flutter-apk
+              cp build/app/outputs/apk/release/app-release.apk build/app/outputs/flutter-apk/app-release.apk
             fi
           fi
           if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
