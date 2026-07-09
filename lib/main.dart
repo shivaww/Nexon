@@ -180,9 +180,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final raw = prefs.getString('chat_sessions_v1');
     if (raw != null && raw.trim().isNotEmpty) {
       try {
-        final List decoded = jsonDecode(raw);
+        final decoded = jsonDecode(raw) as List<dynamic>;
         setState(() {
-          _sessions = decoded.map((s) => ChatSession.fromJson(s)).toList();
+          _sessions = decoded.map((s) => ChatSession.fromJson(s as Map<String, dynamic>)).toList();
           _activeSessionId =
               prefs.getString('active_session_id_v1') ??
               (_sessions.isNotEmpty ? _sessions.first.id : 'default');
@@ -331,7 +331,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     SearchSettings loadedSearchSettings = SearchSettings.defaults();
     if (searchRaw != null && searchRaw.trim().isNotEmpty) {
       try {
-        loadedSearchSettings = SearchSettings.fromJson(jsonDecode(searchRaw));
+        loadedSearchSettings = SearchSettings.fromJson(jsonDecode(searchRaw) as Map<String, dynamic>);
       } catch (_) {}
     }
 
@@ -1249,7 +1249,7 @@ For every project, maintain a README.md at the project root.
               }
             }
           },
-          onError: (err) {
+          onError: (Object err) {
             if (!completer.isCompleted) completer.completeError(err);
           },
           onDone: () {
@@ -1685,7 +1685,7 @@ For every project, maintain a README.md at the project root.
         if (targetSessionId == _activeSessionId) {
           _scrollToBottom();
         }
-        _fetchLiveWallet();
+        ChatClient.fetchLiveWallet();
       }
     }
   }
@@ -2982,7 +2982,7 @@ For every project, maintain a README.md at the project root.
           await Future.delayed(const Duration(seconds: 10));
         } else {
           stateMap['final_report'] = "Error generating final report: $e";
-          finalReportText = stateMap['final_report'];
+          finalReportText = stateMap['final_report'] as String;
           finalReportDone = true;
         }
       }
@@ -6480,6 +6480,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         });
       }
     });
+    _liveDailyPool = ChatClient.liveDailyPool.value;
+    _liveSubscriptionCredits = ChatClient.liveSubscriptionCredits.value;
+    _liveTopupCredits = ChatClient.liveTopupCredits.value;
+    ChatClient.liveDailyPool.addListener(_onWalletChanged);
+    ChatClient.liveSubscriptionCredits.addListener(_onWalletChanged);
+    ChatClient.liveTopupCredits.addListener(_onWalletChanged);
+
     _fetchLiveWallet();
     _walletSyncTimer = Timer.periodic(
       const Duration(minutes: 1),
@@ -6553,29 +6560,25 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     return number.toString();
   }
 
-  Future<void> _fetchLiveWallet() async {
-    final session = Supabase.instance.client.auth.currentSession;
-    if (session == null) return;
-    try {
-      final response = await Supabase.instance.client
-          .from('user_wallets')
-          .select('current_daily_pool, subscription_credits, topup_credits')
-          .eq('user_id', session.user.id)
-          .maybeSingle();
-      if (response != null && mounted) {
-        setState(() {
-          _liveDailyPool = response['current_daily_pool'] as int?;
-          _liveSubscriptionCredits = response['subscription_credits'] as int?;
-          _liveTopupCredits = response['topup_credits'] as int?;
-        });
-      }
-    } catch (e) {
-      // Ignored
+  void _onWalletChanged() {
+    if (mounted) {
+      setState(() {
+        _liveDailyPool = ChatClient.liveDailyPool.value;
+        _liveSubscriptionCredits = ChatClient.liveSubscriptionCredits.value;
+        _liveTopupCredits = ChatClient.liveTopupCredits.value;
+      });
     }
+  }
+
+  Future<void> _fetchLiveWallet() async {
+    await ChatClient.fetchLiveWallet();
   }
 
   @override
   void dispose() {
+    ChatClient.liveDailyPool.removeListener(_onWalletChanged);
+    ChatClient.liveSubscriptionCredits.removeListener(_onWalletChanged);
+    ChatClient.liveTopupCredits.removeListener(_onWalletChanged);
     _walletSyncTimer?.cancel();
     _searchKeyController.dispose();
     _searchCxController.dispose();
@@ -9143,6 +9146,29 @@ class _ProviderAvatarState extends State<ProviderAvatar>
 class ChatClient {
   static final Set<String> modelsWithVision = {};
 
+  static final liveDailyPool = ValueNotifier<int?>(null);
+  static final liveSubscriptionCredits = ValueNotifier<int?>(null);
+  static final liveTopupCredits = ValueNotifier<int?>(null);
+
+  static Future<void> fetchLiveWallet() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+    try {
+      final response = await Supabase.instance.client
+          .from('user_wallets')
+          .select('current_daily_pool, subscription_credits, topup_credits')
+          .eq('user_id', session.user.id)
+          .maybeSingle();
+      if (response != null) {
+        liveDailyPool.value = response['current_daily_pool'] as int?;
+        liveSubscriptionCredits.value = response['subscription_credits'] as int?;
+        liveTopupCredits.value = response['topup_credits'] as int?;
+      }
+    } catch (e) {
+      // Ignored
+    }
+  }
+
   Future<List<String>> fetchModels(
     ProviderDefinition provider,
     ProviderSettings settings,
@@ -9300,13 +9326,9 @@ class ChatClient {
             if (decoded is Map<String, dynamic> &&
                 decoded.containsKey('credits_status')) {
               final status = decoded['credits_status'];
-              if (mounted) {
-                setState(() {
-                  _liveDailyPool = status['daily'] as int?;
-                  _liveSubscriptionCredits = status['subscription'] as int?;
-                  _liveTopupCredits = status['topup'] as int?;
-                });
-              }
+              liveDailyPool.value = status['daily'] as int?;
+              liveSubscriptionCredits.value = status['subscription'] as int?;
+              liveTopupCredits.value = status['topup'] as int?;
             }
             responseText = _extractAnswer(decoded);
             success = true;
@@ -9495,13 +9517,9 @@ class ChatClient {
               if (decoded is Map<String, dynamic>) {
                 if (decoded.containsKey('credits_status')) {
                   final status = decoded['credits_status'];
-                  if (mounted) {
-                    setState(() {
-                      _liveDailyPool = status['daily'] as int?;
-                      _liveSubscriptionCredits = status['subscription'] as int?;
-                      _liveTopupCredits = status['topup'] as int?;
-                    });
-                  }
+                  liveDailyPool.value = status['daily'] as int?;
+                  liveSubscriptionCredits.value = status['subscription'] as int?;
+                  liveTopupCredits.value = status['topup'] as int?;
                   continue;
                 }
                 final choices = decoded['choices'];
@@ -10648,7 +10666,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            step['title'] ?? 'Step ${idx + 1}',
+                            (step['title'] as String?) ?? 'Step ${idx + 1}',
                             style: TextStyle(
                               decoration: stepStatus == 'completed'
                                   ? TextDecoration.lineThrough

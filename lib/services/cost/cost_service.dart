@@ -347,7 +347,9 @@ class CostService {
 
   /// Removes a threshold by [label].
   bool removeThreshold(String label) {
-    return _thresholds.removeWhere((t) => t.label == label) > 0;
+    final initialLength = _thresholds.length;
+    _thresholds.removeWhere((t) => t.label == label);
+    return _thresholds.length < initialLength;
   }
 
   /// Returns all registered thresholds.

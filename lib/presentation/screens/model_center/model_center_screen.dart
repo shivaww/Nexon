@@ -231,9 +231,9 @@ class _ModelCenterScreenState extends State<ModelCenterScreen> {
   Future<void> _openProviderSheet({Map<String, dynamic>? existing}) async {
     final isEdit = existing != null;
 
-    final nameCtrl = TextEditingController(text: existing?['name'] ?? '');
+    final nameCtrl = TextEditingController(text: (existing?['name'] as String?) ?? '');
     final keyCtrl = TextEditingController();
-    final urlCtrl = TextEditingController(text: existing?['baseUrl'] ?? '');
+    final urlCtrl = TextEditingController(text: (existing?['baseUrl'] as String?) ?? '');
     final modelCtrl = TextEditingController(
       text: existing == null ? '' : AppStorage.providerModelName(existing),
     );

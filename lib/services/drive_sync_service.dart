@@ -286,10 +286,10 @@ class DriveSyncService {
       session = auth.currentSession ?? session;
     }
 
-    final token = session.providerToken;
+    final token = session?.providerToken;
     if (token != null && token.isNotEmpty) {
       await prefs.setString(_tokenKey, token);
-      final refreshToken = session.providerRefreshToken;
+      final refreshToken = session?.providerRefreshToken;
       if (refreshToken != null && refreshToken.isNotEmpty) {
         await prefs.setString(_refreshTokenKey, refreshToken);
       }
