@@ -6796,8 +6796,7 @@ class ChatClient {
     required List<ChatMessage> messages,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final managedEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
-    final isManagedMode = managedEnabled || provider.id == 'nexon';
+    final isManagedMode = provider.id == 'nexon';
     final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
     final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
@@ -6911,8 +6910,7 @@ class ChatClient {
     required List<ChatMessage> messages,
   }) async* {
     final prefs = await SharedPreferences.getInstance();
-    final managedEnabled = prefs.getBool('nexon_managed_subscription_enabled') ?? false;
-    final isManagedMode = managedEnabled || provider.id == 'nexon';
+    final isManagedMode = provider.id == 'nexon';
     final managedUrl = prefs.getString('nexon_managed_backend_url') ?? 'https://nexon-jyp1.onrender.com';
     final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
