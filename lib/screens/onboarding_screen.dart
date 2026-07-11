@@ -48,6 +48,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         .listen((data) async {
           final session = data.session;
           if (session != null && _isSigningIn) {
+            // Persist the Google provider token immediately — it's only
+            // available right after sign-in and disappears on session refresh.
+            await DriveSyncService.persistProviderToken();
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
@@ -78,6 +81,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
     final session = Supabase.instance.client.auth.currentSession;
     if (session != null && session.providerToken != null) {
+      // Persist immediately before it's lost
+      await DriveSyncService.persistProviderToken();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

@@ -130,6 +130,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
+  bool _artifactsEnabled = true;
+  bool _svgVisualsEnabled = true;
   // Shell command permission: 'ask', 'session', 'always', 'never'
   String _shellPermission = 'ask';
   // Per-session always-allow flag (reset when app restarts)
@@ -365,6 +367,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
 
     final agenticRaw = prefs.getBool('agentic_enabled_v1');
+    final artifactsRaw = prefs.getBool('artifacts_enabled_v1');
+    final svgVisualsRaw = prefs.getBool('svg_visuals_enabled_v1');
     final agenticWorkspaceRaw = prefs.getString('agentic_workspace_v1');
     final customMcpUrlRaw = prefs.getString('custom_mcp_url_v1');
     final deepResearchRaw = prefs.getBool('deep_research_enabled_v1');
@@ -375,6 +379,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _settings = nextSettings;
       _searchSettings = loadedSearchSettings;
       _agenticEnabled = agenticRaw ?? true;
+      _artifactsEnabled = artifactsRaw ?? true;
+      _svgVisualsEnabled = svgVisualsRaw ?? true;
       _shellPermission = prefs.getString('shell_permission_v1') ?? 'ask';
       _agenticWorkspace =
           agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
@@ -420,6 +426,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
       jsonEncode(_searchSettings.toJson()),
     );
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
+    await prefs.setBool('artifacts_enabled_v1', _artifactsEnabled);
+    await prefs.setBool('svg_visuals_enabled_v1', _svgVisualsEnabled);
     await prefs.setString('shell_permission_v1', _shellPermission);
     await prefs.setBool('deep_research_enabled_v1', false);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
@@ -777,11 +785,17 @@ jobs:
         String systemPromptText =
             "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
             "Render via markdown code blocks:\n"
-            "- LaTeX: \\[ ... \\] or \\( ... \\)\n"
-            "- SVG (ONLY for non-graph diagrams like flowcharts, architecture, illustrations): ```svg\n"
-            "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
-            "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
-            "  NEVER use SVG for charts, graphs, or mind maps. Use ```chart instead.\n\n"
+            "- LaTeX: \\[ ... \\] or \\( ... \\)\n";
+
+        if (_svgVisualsEnabled) {
+          systemPromptText +=
+              "- SVG (ONLY for non-graph diagrams like flowcharts, architecture, illustrations): ```svg\n"
+              "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
+              "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
+              "  NEVER use SVG for charts, graphs, or mind maps. Use ```chart instead.\n\n";
+        }
+
+        systemPromptText +=
             "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, cartesian, mindmap): ```chart\n"
             "  Simple line-based format. LLM passes only values. Examples:\n\n"
             "  BAR/GROUPED BAR:\n"
@@ -869,24 +883,35 @@ jobs:
             "  node: 3 = Branch B\n"
             "  edge: 1 -> 2\n"
             "  edge: 1 -> 3\n\n"
-            "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n"
-            "- Artifacts for complete/long outputs: use fenced blocks so the app renders them as files.\n"
-            "  Use ```html for complete HTML pages, ```markdown for essays/guides/reports, ```docx for Word-style documents, and language fences like ```python/```dart/```js for complete scripts or files.\n"
-            "  If the answer is long, a complete file, an essay, a guide, a report, or a full runnable script, put it in one artifact block instead of inline chat text. Use inline code only for small snippets.\n"
-            "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
-            "- Microsoft Word Document: ```docx\n"
-            "  title: Document Title\n"
-            "  subtitle: Optional Subtitle\n"
-            "  # Content in clean markdown\n"
-            "  ## Section Heading\n"
-            "  This is a paragraph.\n"
-            "  - Bullet item\n"
-            "  > Callout block\n"
-            "  | Table Header | Col |\n"
-            "  |---|---|\n"
-            "  | Cell | Cell |\n"
-            "  ```\n\n"
-            "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, mind maps, architecture, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
+            "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n";
+
+        if (_artifactsEnabled) {
+          systemPromptText +=
+              "- Artifacts for complete/long outputs: use fenced blocks so the app renders them as files.\n"
+              "  Use ```html for complete HTML pages, ```markdown for essays/guides/reports, ```docx for Word-style documents, and language fences like ```python/```dart/```js for complete scripts or files.\n"
+              "  If the answer is long, a complete file, an essay, a guide, a report, or a full runnable script, put it in one artifact block instead of inline chat text. Use inline code only for small snippets.\n"
+              "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
+              "- Microsoft Word Document: ```docx\n"
+              "  title: Document Title\n"
+              "  subtitle: Optional Subtitle\n"
+              "  # Content in clean markdown\n"
+              "  ## Section Heading\n"
+              "  This is a paragraph.\n"
+              "  - Bullet item\n"
+              "  > Callout block\n"
+              "  | Table Header | Col |\n"
+              "  |---|---|\n"
+              "  | Cell | Cell |\n"
+              "  ```\n\n";
+        }
+
+        if (_svgVisualsEnabled) {
+          systemPromptText +=
+              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, mind maps, architecture, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
+        } else {
+          systemPromptText +=
+              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. NEVER use SVG for charts.\n";
+        }
 
         if (_agenticEnabled) {
           systemPromptText += r"""
@@ -2061,125 +2086,112 @@ For every project, maintain a README.md at the project root.
   }
 
   Match? _findMcpMatch(String fullText) {
-    // 0. Try direct command format: <command>...</command>
-    final cmdStart = fullText.indexOf('<command>');
-    if (cmdStart != -1) {
-      final cmdEnd = fullText.indexOf('</command>', cmdStart);
-      if (cmdEnd != -1) {
-        final commandVal = fullText.substring(cmdStart + 9, cmdEnd).trim();
-        // cwd injected at dispatch time via _agenticWorkspace; embed it
-        // here as a placeholder — it gets overwritten by dispatch block anyway
-        final jsonStr = jsonEncode({
-          'method': 'run_command',
-          'params': {
-            'command': commandVal,
-            'cwd': '', // will be set to _agenticWorkspace in dispatch block
-          },
-        });
-        return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+    // 0. Try direct command format: <command>...</command> (case-insensitive with spacing support & unclosed fallback)
+    final cmdStartMatch = RegExp(r'<command\s*>', caseSensitive: false).firstMatch(fullText);
+    if (cmdStartMatch != null) {
+      final cmdEndMatch = RegExp(r'</command\s*>', caseSensitive: false).firstMatch(fullText);
+      final String commandVal;
+      if (cmdEndMatch != null) {
+        commandVal = fullText.substring(cmdStartMatch.end, cmdEndMatch.start).trim();
+      } else {
+        commandVal = fullText.substring(cmdStartMatch.end).trim();
+      }
+      final jsonStr = jsonEncode({
+        'method': 'run_command',
+        'params': {
+          'command': commandVal,
+          'cwd': '', // will be set to _agenticWorkspace in dispatch block
+        },
+      });
+      return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
+    }
+
+    // 1. Try XML format: <tool_request>...<method>x</method>...<param>val</param>...</tool_request> (case-insensitive & unclosed fallback)
+    final xmlStartMatch = RegExp(r'<tool_request\s*>', caseSensitive: false).firstMatch(fullText);
+    String? xmlContent;
+    if (xmlStartMatch != null) {
+      final xmlEndMatch = RegExp(r'</tool_request\s*>', caseSensitive: false).firstMatch(fullText);
+      if (xmlEndMatch != null) {
+        xmlContent = fullText.substring(xmlStartMatch.end, xmlEndMatch.start);
+      } else {
+        xmlContent = fullText.substring(xmlStartMatch.end);
+      }
+    } else {
+      // Robustness: If <tool_request> is missing but <method> is present, parse the whole text as XML content
+      final hasMethod = RegExp(r'<method\s*>', caseSensitive: false).hasMatch(fullText);
+      if (hasMethod) {
+        xmlContent = fullText;
       }
     }
 
-    // 1. Try pure XML format: <tool_request>...<method>x</method>...<param>val</param>...</tool_request>
-    final xmlStart = fullText.indexOf('<tool_request>');
-    if (xmlStart != -1) {
-      final xmlEnd = fullText.indexOf('</tool_request>', xmlStart);
-      if (xmlEnd != -1) {
-        final xmlContent = fullText.substring(xmlStart + 14, xmlEnd);
-        final Map<String, dynamic> result = {};
+    if (xmlContent != null) {
+      final Map<String, dynamic> result = {};
 
-        const preserveWhitespaceKeys = {
-          'content',
-          'new_content',
-          'patches',
-          'reads',
-        };
+      const preserveWhitespaceKeys = {
+        'content',
+        'new_content',
+        'patches',
+        'reads',
+      };
 
-        String cleanToolValue(String key, String value) {
-          if (preserveWhitespaceKeys.contains(key)) {
-            var result = value;
-            if (result.startsWith('\n')) result = result.substring(1);
-            if (result.endsWith('\n'))
-              result = result.substring(0, result.length - 1);
-            return result;
+      String cleanToolValue(String key, String value) {
+        if (preserveWhitespaceKeys.contains(key)) {
+          var result = value;
+          if (result.startsWith('\n')) result = result.substring(1);
+          if (result.endsWith('\n'))
+            result = result.substring(0, result.length - 1);
+          return result;
+        }
+        return value.trim();
+      }
+
+      // Primary: <tagname attr="...">value</tagname> case-insensitively with tag spacing
+      final regex = RegExp(
+        r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
+        caseSensitive: false,
+      );
+      for (final match in regex.allMatches(xmlContent)) {
+        final key = match.group(1)!.toLowerCase();
+        result[key] = cleanToolValue(key, match.group(2)!);
+      }
+
+      // Fallback: <PARAM name="key">value</PARAM>
+      final paramRegex = RegExp(
+        r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
+      );
+      for (final m in paramRegex.allMatches(xmlContent)) {
+        final key = m.group(1)!.toLowerCase();
+        result[key] = cleanToolValue(key, m.group(2)!);
+      }
+
+      // Also try <parameter name="key">value</parameter>
+      final paramRegex2 = RegExp(
+        r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
+        caseSensitive: false,
+      );
+      for (final m in paramRegex2.allMatches(xmlContent)) {
+        final key = m.group(1)!.toLowerCase();
+        result[key] = cleanToolValue(key, m.group(2)!);
+      }
+
+      if (result.containsKey('method')) {
+        for (final key in [
+          'method',
+          'path',
+          'query',
+          'start_line',
+          'end_line',
+          'pattern',
+          'command',
+        ]) {
+          if (result.containsKey(key) && result[key] is String) {
+            result[key] = (result[key] as String).trim();
           }
-          return value.trim();
         }
-
-        // Primary: <tagname>value</tagname>
-        final regex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
-        for (final match in regex.allMatches(xmlContent)) {
-          final key = match.group(1)!.toLowerCase();
-          result[key] = cleanToolValue(key, match.group(2)!);
-        }
-
-        // Fallback: <PARAM name="key">value</PARAM> — LLMs sometimes emit this
-        final paramRegex = RegExp(
-          r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
-        );
-        for (final m in paramRegex.allMatches(xmlContent)) {
-          final key = m.group(1)!.toLowerCase();
-          result[key] = cleanToolValue(key, m.group(2)!);
-        }
-        // Also try <parameter name="key">value</parameter>
-        final paramRegex2 = RegExp(
-          r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
-        );
-        for (final m in paramRegex2.allMatches(xmlContent)) {
-          final key = m.group(1)!.toLowerCase();
-          result[key] = cleanToolValue(key, m.group(2)!);
-        }
-
-        if (result.containsKey('method')) {
-          // Keys already lowercased above, trim all values
-          for (final key in [
-            'method',
-            'path',
-            'query',
-            'start_line',
-            'end_line',
-            'pattern',
-            'command',
-          ]) {
-            if (result.containsKey(key) && result[key] is String) {
-              result[key] = (result[key] as String).trim();
-            }
-          }
-          // TEMP: reuse old code path below via dummy match
-          final method = result['method'];
-          result.remove('method');
-          final jsonStr = jsonEncode({'method': method, 'params': result});
-          return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
-        }
-
-        // Legacy path (only reached if no method found via new path above)
-        final Map<String, dynamic> legacyResult = {};
-        for (final match in regex.allMatches(xmlContent)) {
-          final key = match.group(1)!;
-          var val = match.group(2)!;
-          if (key == 'method' ||
-              key == 'path' ||
-              key == 'query' ||
-              key == 'start_line' ||
-              key == 'end_line' ||
-              key == 'pattern' ||
-              key == 'command') {
-            val = val.trim();
-          } else {
-            if (val.startsWith('\n')) val = val.substring(1);
-            if (val.endsWith('\n')) val = val.substring(0, val.length - 1);
-          }
-          legacyResult[key] = val;
-        }
-        if (legacyResult.containsKey('method')) {
-          final method = legacyResult['method'];
-          legacyResult.remove('method');
-          final jsonStr = jsonEncode({
-            'method': method,
-            'params': legacyResult,
-          });
-          return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
-        }
+        final method = result['method'];
+        result.remove('method');
+        final jsonStr = jsonEncode({'method': method, 'params': result});
+        return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
       }
     }
 
@@ -3053,6 +3065,8 @@ For every project, maintain a README.md at the project root.
           cachedModels: models,
           searchSettings: _searchSettings,
           agenticEnabled: _agenticEnabled,
+          artifactsEnabled: _artifactsEnabled,
+          svgVisualsEnabled: _svgVisualsEnabled,
           deepResearchEnabled: false,
           agenticWorkspace: _agenticWorkspace,
           customMcpUrl: _customMcpUrl,
@@ -3065,6 +3079,18 @@ For every project, maintain a README.md at the project root.
           onAgenticEnabledChanged: (val) async {
             setState(() {
               _agenticEnabled = val;
+            });
+            await _saveSettings();
+          },
+          onArtifactsEnabledChanged: (val) async {
+            setState(() {
+              _artifactsEnabled = val;
+            });
+            await _saveSettings();
+          },
+          onSvgVisualsEnabledChanged: (val) async {
+            setState(() {
+              _svgVisualsEnabled = val;
             });
             await _saveSettings();
           },
@@ -4874,13 +4900,15 @@ Future<void> _saveCodeBlock(
       return; // User cancelled
     }
 
-    final file = File(path);
-    await file.writeAsBytes(bytes);
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      final file = File(path);
+      await file.writeAsBytes(bytes);
+    }
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('File saved: ${file.path.split('/').last}'),
+          content: Text('File saved: ${path.split('/').last}'),
           backgroundColor: const Color(0xFF36764D),
         ),
       );
@@ -6369,11 +6397,15 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.cachedModels,
     required this.searchSettings,
     required this.agenticEnabled,
+    required this.artifactsEnabled,
+    required this.svgVisualsEnabled,
     required this.deepResearchEnabled,
     required this.agenticWorkspace,
     required this.customMcpUrl,
     required this.onSearchSettingsChanged,
     required this.onAgenticEnabledChanged,
+    required this.onArtifactsEnabledChanged,
+    required this.onSvgVisualsEnabledChanged,
     required this.onDeepResearchEnabledChanged,
     required this.onAgenticWorkspaceChanged,
     required this.onCustomMcpUrlChanged,
@@ -6393,6 +6425,8 @@ class MediaAndModelSheet extends StatefulWidget {
   final List<String> cachedModels;
   final SearchSettings searchSettings;
   final bool agenticEnabled;
+  final bool artifactsEnabled;
+  final bool svgVisualsEnabled;
   final bool deepResearchEnabled;
   final String agenticWorkspace;
   final String customMcpUrl;
@@ -6400,6 +6434,8 @@ class MediaAndModelSheet extends StatefulWidget {
   final Future<void> Function() onRestoreCompleted;
   final ValueChanged<SearchSettings> onSearchSettingsChanged;
   final ValueChanged<bool> onAgenticEnabledChanged;
+  final ValueChanged<bool> onArtifactsEnabledChanged;
+  final ValueChanged<bool> onSvgVisualsEnabledChanged;
   final ValueChanged<bool> onDeepResearchEnabledChanged;
   final ValueChanged<String> onAgenticWorkspaceChanged;
   final ValueChanged<String> onCustomMcpUrlChanged;
@@ -6428,6 +6464,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late bool _reasoningEnabled;
   late bool _searchEnabled;
   late bool _agenticEnabled;
+  late bool _artifactsEnabled;
+  late bool _svgVisualsEnabled;
   late bool _deepResearchEnabled;
   late String _searchProvider;
   late final TextEditingController _searchKeyController;
@@ -6437,6 +6475,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   bool _driveBackupEnabled = false;
   bool _isBackingUp = false;
   bool _isRestoring = false;
+  String _syncProgressStatus = '';
   String _activePlanTier = '';
   int? _liveDailyPool;
   int? _liveSubscriptionCredits;
@@ -6454,6 +6493,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _reasoningEnabled = widget.settings.reasoningEnabled;
     _searchEnabled = widget.searchSettings.enabled;
     _agenticEnabled = widget.agenticEnabled;
+    _artifactsEnabled = widget.artifactsEnabled;
+    _svgVisualsEnabled = widget.svgVisualsEnabled;
     _deepResearchEnabled = widget.deepResearchEnabled;
     _searchProvider = widget.searchSettings.provider;
     final initialKeys = [
@@ -6515,6 +6556,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         _reasoningEnabled = widget.settings.reasoningEnabled;
         _searchEnabled = widget.searchSettings.enabled;
         _agenticEnabled = widget.agenticEnabled;
+        _artifactsEnabled = widget.artifactsEnabled;
+        _svgVisualsEnabled = widget.svgVisualsEnabled;
         _deepResearchEnabled = widget.deepResearchEnabled;
         _searchProvider = widget.searchSettings.provider;
       });
@@ -7538,6 +7581,96 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+
+        // Artifacts Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Markdown Artifacts',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Let models create structured markdown artifacts',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6C5946),
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _artifactsEnabled,
+                activeColor: const Color(0xFF7B4E2E),
+                onChanged: (val) {
+                  setState(() => _artifactsEnabled = val);
+                  widget.onArtifactsEnabledChanged(val);
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // SVG Visuals Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'SVG Visuals',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Let models render dynamic SVG diagrams',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6C5946),
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _svgVisualsEnabled,
+                activeColor: const Color(0xFF7B4E2E),
+                onChanged: (val) {
+                  setState(() => _svgVisualsEnabled = val);
+                  widget.onSvgVisualsEnabledChanged(val);
+                },
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -7594,160 +7727,189 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               if (_driveBackupEnabled)
                 Padding(
                   padding: const EdgeInsets.only(top: 8.0),
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextButton.icon(
-                          onPressed: _isRestoring || _isBackingUp
-                              ? null
-                              : () async {
-                                  setState(() => _isRestoring = true);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Restoring Google Drive backup...',
-                                      ),
-                                    ),
-                                  );
-                                  try {
-                                    final result =
-                                        await DriveSyncService.restoreFromDriveDetailed();
-                                    if (result.success && mounted) {
-                                      await widget.onRestoreCompleted();
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('✅ ${result.message}'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                    } else if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('❌ ${result.message}'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  } catch (e) {
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('Error: $e'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  } finally {
-                                    if (mounted)
-                                      setState(() => _isRestoring = false);
-                                  }
-                                },
-                          icon: _isRestoring
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      // Live progress status text
+                      if (_syncProgressStatus.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6.0),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  color: Color(0xFF7B4E2E),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  _syncProgressStatus,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF7B4E2E),
+                                    fontStyle: FontStyle.italic,
                                   ),
-                                )
-                              : const Icon(Icons.cloud_download, size: 16),
-                          label: Text(
-                            _isRestoring ? 'Restoring...' : 'Restore',
-                          ),
-                          style: TextButton.styleFrom(
-                            foregroundColor: const Color(0xFF7B4E2E),
-                            backgroundColor: const Color(0xFFF5EFE6),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        TextButton.icon(
-                          onPressed: _isBackingUp || _isRestoring
-                              ? null
-                              : () async {
-                                  setState(() => _isBackingUp = true);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Starting Google Drive backup...',
-                                      ),
-                                    ),
-                                  );
-                                  try {
-                                    final result =
-                                        await DriveSyncService.syncToDriveDetailed(
-                                          widget.sessions,
-                                          force: true,
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextButton.icon(
+                            onPressed: _isRestoring || _isBackingUp
+                                ? null
+                                : () async {
+                                    setState(() {
+                                      _isRestoring = true;
+                                      _syncProgressStatus = 'Starting restore…';
+                                    });
+                                    try {
+                                      final result =
+                                          await DriveSyncService.restoreFromDriveDetailed(
+                                            onProgress: (status) {
+                                              if (mounted) {
+                                                setState(() => _syncProgressStatus = status);
+                                              }
+                                            },
+                                          );
+                                      if (mounted) {
+                                        setState(() => _syncProgressStatus = '');
+                                        if (result.success) {
+                                          await widget.onRestoreCompleted();
+                                        }
+                                        _showSyncResultDialog(
+                                          context,
+                                          title: result.success ? 'Restore Complete' : 'Restore Failed',
+                                          message: result.message,
+                                          details: result.details,
+                                          success: result.success,
+                                          needsRelogin: result.needsRelogin,
                                         );
-                                    if (result.success && mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('✅ ${result.message}'),
-                                          backgroundColor: Colors.green,
-                                        ),
-                                      );
-                                    } else if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('❌ ${result.message}'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
+                                      }
+                                    } catch (e) {
+                                      if (mounted) {
+                                        setState(() => _syncProgressStatus = '');
+                                        _showSyncResultDialog(
+                                          context,
+                                          title: 'Restore Error',
+                                          message: 'Unexpected error: $e',
+                                          details: [],
+                                          success: false,
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() {
+                                          _isRestoring = false;
+                                          _syncProgressStatus = '';
+                                        });
+                                      }
                                     }
-                                  } catch (e) {
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text('Error: $e'),
-                                          backgroundColor: Colors.red,
-                                        ),
-                                      );
-                                    }
-                                  } finally {
-                                    if (mounted)
-                                      setState(() => _isBackingUp = false);
-                                  }
-                                },
-                          icon: _isBackingUp
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.cloud_upload, size: 16),
-                          label: Text(
-                            _isBackingUp ? 'Backing up...' : 'Force Backup',
-                          ),
-                          style: TextButton.styleFrom(
-                            foregroundColor: const Color(0xFF7B4E2E),
-                            backgroundColor: const Color(0xFFF5EFE6),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
+                                  },
+                            icon: _isRestoring
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.cloud_download, size: 16),
+                            label: Text(
+                              _isRestoring ? 'Restoring…' : 'Restore',
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFF7B4E2E),
+                              backgroundColor: const Color(0xFFF5EFE6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                          const SizedBox(width: 8),
+                          TextButton.icon(
+                            onPressed: _isBackingUp || _isRestoring
+                                ? null
+                                : () async {
+                                    setState(() {
+                                      _isBackingUp = true;
+                                      _syncProgressStatus = 'Starting backup…';
+                                    });
+                                    try {
+                                      final result =
+                                          await DriveSyncService.syncToDriveDetailed(
+                                            widget.sessions,
+                                            force: true,
+                                            onProgress: (status) {
+                                              if (mounted) {
+                                                setState(() => _syncProgressStatus = status);
+                                              }
+                                            },
+                                          );
+                                      if (mounted) {
+                                        setState(() => _syncProgressStatus = '');
+                                        _showSyncResultDialog(
+                                          context,
+                                          title: result.success ? 'Backup Complete' : 'Backup Failed',
+                                          message: result.message,
+                                          details: result.details,
+                                          success: result.success,
+                                          needsRelogin: result.needsRelogin,
+                                        );
+                                      }
+                                    } catch (e) {
+                                      if (mounted) {
+                                        setState(() => _syncProgressStatus = '');
+                                        _showSyncResultDialog(
+                                          context,
+                                          title: 'Backup Error',
+                                          message: 'Unexpected error: $e',
+                                          details: [],
+                                          success: false,
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() {
+                                          _isBackingUp = false;
+                                          _syncProgressStatus = '';
+                                        });
+                                      }
+                                    }
+                                  },
+                            icon: _isBackingUp
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.cloud_upload, size: 16),
+                            label: Text(
+                              _isBackingUp ? 'Backing up…' : 'Force Backup',
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFF7B4E2E),
+                              backgroundColor: const Color(0xFFF5EFE6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               const Divider(height: 32, color: Color(0xFFE5DDD3)),
@@ -8507,6 +8669,137 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Show a detailed result dialog after backup/restore with step-by-step log.
+  void _showSyncResultDialog(
+    BuildContext context, {
+    required String title,
+    required String message,
+    required List<String> details,
+    required bool success,
+    bool needsRelogin = false,
+  }) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFBF2),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(
+              success ? Icons.cloud_done : Icons.cloud_off,
+              color: success ? Colors.green : Colors.red,
+              size: 24,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D241C),
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: success
+                        ? const Color(0xFF3B7A3B)
+                        : const Color(0xFFB33A3A),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (needsRelogin) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF3CD),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.warning_amber, color: Color(0xFFD4A017), size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Sign out and sign in again with Google to re-authorize Drive access.',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF7B6B2E)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (details.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Details:',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF7B4E2E),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5EFE6),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: details.map((line) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2.0),
+                          child: Text(
+                            line,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontFamily: 'monospace',
+                              color: line.startsWith('❌')
+                                  ? const Color(0xFFB33A3A)
+                                  : line.startsWith('✅')
+                                      ? const Color(0xFF3B7A3B)
+                                      : line.startsWith('⚠️')
+                                          ? const Color(0xFFD4A017)
+                                          : const Color(0xFF5A4A3A),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              'OK',
+              style: TextStyle(color: Color(0xFF7B4E2E)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -10513,13 +10806,15 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
         return; // User cancelled
       }
 
-      final file = File(path);
-      await file.writeAsBytes(bytes);
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final file = File(path);
+        await file.writeAsBytes(bytes);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to ${file.path.split('/').last}'),
+            content: Text('Saved to ${path.split('/').last}'),
             backgroundColor: const Color(0xFF36764D),
           ),
         );
@@ -10937,13 +11232,15 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
         return; // User cancelled
       }
 
-      final file = File(path);
-      await file.writeAsBytes(bytes);
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final file = File(path);
+        await file.writeAsBytes(bytes);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to ${file.path.split('/').last}'),
+            content: Text('Saved to ${path.split('/').last}'),
             backgroundColor: const Color(0xFF36764D),
           ),
         );
@@ -11481,13 +11778,15 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
         return;
       }
 
-      final file = File(savePath);
-      await file.writeAsBytes(docxBytes);
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final file = File(savePath);
+        await file.writeAsBytes(docxBytes);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to ${file.path.split('/').last}'),
+            content: Text('Saved to ${savePath.split('/').last}'),
             backgroundColor: const Color(0xFF36764D),
           ),
         );
@@ -11795,13 +12094,15 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
         return;
       }
 
-      final file = File(path);
-      await file.writeAsBytes(bytes);
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        final file = File(path);
+        await file.writeAsBytes(bytes);
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved to ${file.path.split('/').last}'),
+            content: Text('Saved to ${path.split('/').last}'),
             backgroundColor: const Color(0xFF36764D),
           ),
         );

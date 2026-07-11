@@ -73,25 +73,46 @@ BEGIN
         RAISE EXCEPTION 'Daily Circuit Breaker Reached. Unused balance preserved for tomorrow.';
     END IF;
 
-    -- 3. Deduct from Monthly Pool
-    IF wallet_record.subscription_credits >= p_credits_needed THEN
-        UPDATE user_wallets SET 
-            subscription_credits = subscription_credits - p_credits_needed,
-            current_daily_pool = current_daily_pool - p_credits_needed
-        WHERE user_id = p_user_id;
-        source := 'subscription';
-    ELSE
-        -- 4. Dip into Top-Up Wallet
-        missing_credits := p_credits_needed - wallet_record.subscription_credits;
-        IF wallet_record.topup_credits >= missing_credits THEN
+    IF p_credits_needed < 0 THEN
+        -- Handle Refund
+        DECLARE
+            refund_amount BIGINT := -p_credits_needed;
+            space_in_sub BIGINT := wallet_record.monthly_cap - wallet_record.subscription_credits;
+            to_sub BIGINT;
+            to_topup BIGINT;
+        BEGIN
+            -- Add to subscription up to monthly cap, rest to topup
+            to_sub := LEAST(refund_amount, space_in_sub);
+            to_topup := refund_amount - to_sub;
+            
             UPDATE user_wallets SET 
-                subscription_credits = 0,
-                topup_credits = topup_credits - missing_credits,
+                subscription_credits = subscription_credits + to_sub,
+                topup_credits = topup_credits + to_topup,
+                current_daily_pool = current_daily_pool + refund_amount
+            WHERE user_id = p_user_id;
+            source := 'refund';
+        END;
+    ELSE
+        -- 3. Deduct from Monthly Pool
+        IF wallet_record.subscription_credits >= p_credits_needed THEN
+            UPDATE user_wallets SET 
+                subscription_credits = subscription_credits - p_credits_needed,
                 current_daily_pool = current_daily_pool - p_credits_needed
             WHERE user_id = p_user_id;
-            source := 'topup';
+            source := 'subscription';
         ELSE
-            RAISE EXCEPTION 'Insufficient credits. Please top up or upgrade.';
+            -- 4. Dip into Top-Up Wallet
+            missing_credits := p_credits_needed - wallet_record.subscription_credits;
+            IF wallet_record.topup_credits >= missing_credits THEN
+                UPDATE user_wallets SET 
+                    subscription_credits = 0,
+                    topup_credits = topup_credits - missing_credits,
+                    current_daily_pool = current_daily_pool - p_credits_needed
+                WHERE user_id = p_user_id;
+                source := 'topup';
+            ELSE
+                RAISE EXCEPTION 'Insufficient credits. Please top up or upgrade.';
+            END IF;
         END IF;
     END IF;
 

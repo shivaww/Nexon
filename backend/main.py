@@ -16,7 +16,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -29,6 +29,10 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY) if SUPABASE
 # Limits concurrent heavy requests to Kaggle's capacity (default 100 for parallel batching)
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "100"))
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+# --- PER-USER RATE LIMIT ---
+from collections import defaultdict
+user_semaphores = defaultdict(lambda: asyncio.Semaphore(5)) # Max 5 concurrent streams per user
 
 # --- MODEL MULTIPLIERS ---
 # In production, pull this from a DB table. For now, hardcoded from our math.
@@ -47,16 +51,18 @@ async def verify_jwt(request: Request):
     token = auth_header.split(" ")[1]
     try:
         # Verify token against Supabase
-        user_response = supabase.auth.get_user(token)
+        user_response = await asyncio.to_thread(supabase.auth.get_user, token)
         if not user_response.user:
             raise HTTPException(status_code=401, detail="Invalid token")
         return user_response.user.id
     except Exception:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
-def _get_user_wallet(user_id: str) -> dict:
+async def _get_user_wallet(user_id: str) -> dict:
     try:
-        response = supabase.table("user_wallets").select("current_daily_pool, subscription_credits, topup_credits").eq("user_id", user_id).maybe_single().execute()
+        def fetch():
+            return supabase.table("user_wallets").select("current_daily_pool, subscription_credits, topup_credits").eq("user_id", user_id).maybe_single().execute()
+        response = await asyncio.to_thread(fetch)
         return response.data or {}
     except Exception as e:
         print(f"Failed to fetch user wallet: {e}")
@@ -86,9 +92,31 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
     model_id = body.get("model")
     is_stream = body.get("stream", False)
     
-    # 2. Calculate Exact Input Tokens (Approximation: 1 token = 4 chars)
-    messages_str = str(body.get("messages", []))
-    actual_input_tokens = max(10, len(messages_str) // 4)
+    # Payload Size Check
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Payload too large (Max 10MB)")
+        
+    messages = body.get("messages", [])
+    if not isinstance(messages, list):
+        raise HTTPException(status_code=400, detail="'messages' must be a list")
+    total_len = 0
+    image_count = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            total_len += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    total_len += len(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    image_count += 1
+    actual_input_tokens = max(10, (total_len // 4) + (image_count * 1000))
     
     if model_id not in MODEL_MULTIPLIERS:
         # Fallback for unknown models
@@ -100,10 +128,12 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
 
     try:
         # 3. Atomic Database Deduction (Pre-flight)
-        deduct_response = supabase.rpc('deduct_user_credits', {
-            'p_user_id': user_id,
-            'p_credits_needed': est_credits_needed
-        }).execute()
+        def deduct_preflight():
+            return supabase.rpc('deduct_user_credits', {
+                'p_user_id': user_id,
+                'p_credits_needed': est_credits_needed
+            }).execute()
+        deduct_response = await asyncio.to_thread(deduct_preflight)
         
         if not deduct_response.data or deduct_response.data.get('status') != 'success':
             raise HTTPException(status_code=429, detail="Daily Circuit Breaker Reached or Insufficient Credits.")
@@ -117,8 +147,13 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
 
     # 4. Acquire Semaphore & Proxy Request to Upstream
     async def proxy_request():
-        async with semaphore:
-            target_url = os.getenv("KAGGLE_URL", "https://api.together.xyz/v1/chat/completions")
+        user_sem = user_semaphores[user_id]
+        if user_sem.locked():
+            return JSONResponse(status_code=429, content={"error": {"message": "Too many concurrent requests. Please wait for your previous tasks to finish."}})
+            
+        async with user_sem:
+            async with semaphore:
+                target_url = os.getenv("KAGGLE_URL", "https://api.together.xyz/v1/chat/completions")
             if not target_url.endswith("/chat/completions"):
                 if target_url.endswith("/"):
                     target_url += "v1/chat/completions" if "v1" not in target_url else "chat/completions"
@@ -139,7 +174,9 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                 except httpx.RequestError:
                     await client.aclose()
                     # Refund everything if the server is unreachable
-                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    def refund_unreachable():
+                        supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    await asyncio.to_thread(refund_unreachable)
                     raise HTTPException(status_code=503, detail="Upstream AI provider unreachable.")
 
                 if upstream_response.status_code != 200:
@@ -148,7 +185,9 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                     await client.aclose()
                     
                     # Refund everything if upstream failed
-                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    def refund_upstream_failed():
+                        supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    await asyncio.to_thread(refund_upstream_failed)
                     
                     error_text = error_body.decode('utf-8', errors='ignore')
                     try:
@@ -196,16 +235,18 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                         credits_used = int((actual_input_tokens * mult["in"]) + (actual_output_tokens * mult["out"]))
                         refund_amount = est_credits_needed - credits_used
                         if refund_amount != 0:
-                            try:
+                            def refund_postflight():
                                 supabase.rpc('deduct_user_credits', {
                                     'p_user_id': user_id,
                                     'p_credits_needed': -refund_amount
                                 }).execute()
+                            try:
+                                await asyncio.to_thread(refund_postflight)
                             except Exception as e:
                                 print(f"Failed to issue refund: {e}")
 
                         # Send realtime credit status
-                        wallet = _get_user_wallet(user_id)
+                        wallet = await _get_user_wallet(user_id)
                         if wallet:
                             credits_status = {
                                 "daily": wallet.get("current_daily_pool", 0),
@@ -221,13 +262,17 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                     upstream_response = await client.post(target_url, headers=headers, json=body)
                 except httpx.RequestError:
                     await client.aclose()
-                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    def refund_unreachable_nonstream():
+                        supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    await asyncio.to_thread(refund_unreachable_nonstream)
                     raise HTTPException(status_code=503, detail="Upstream AI provider unreachable.")
 
                 if upstream_response.status_code != 200:
                     error_text = upstream_response.text
                     await client.aclose()
-                    supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    def refund_upstream_failed_nonstream():
+                        supabase.rpc('deduct_user_credits', {'p_user_id': user_id, 'p_credits_needed': -est_credits_needed}).execute()
+                    await asyncio.to_thread(refund_upstream_failed_nonstream)
                     try:
                         err_json = json.loads(error_text)
                     except:
@@ -251,15 +296,17 @@ async def chat_completions(request: Request, user_id: str = Depends(verify_jwt))
                 credits_used = int((actual_input * mult["in"]) + (actual_output * mult["out"]))
                 refund_amount = est_credits_needed - credits_used
                 if refund_amount != 0:
-                    try:
+                    def refund_postflight_nonstream():
                         supabase.rpc('deduct_user_credits', {
                             'p_user_id': user_id,
                             'p_credits_needed': -refund_amount
                         }).execute()
+                    try:
+                        await asyncio.to_thread(refund_postflight_nonstream)
                     except Exception as e:
                         print(f"Failed to issue refund: {e}")
 
-                wallet = _get_user_wallet(user_id)
+                wallet = await _get_user_wallet(user_id)
                 if wallet:
                     resp_json["credits_status"] = {
                         "daily": wallet.get("current_daily_pool", 0),
