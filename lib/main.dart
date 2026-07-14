@@ -5477,19 +5477,23 @@ class _ChatMediaGrid extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         child: SizedBox(
           width: 260,
+          height: 180,
           child: tiles.first,
         ),
       );
     }
 
     if (total == 2) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(child: tiles[0]),
-          const SizedBox(width: 6),
-          Flexible(child: tiles[1]),
-        ],
+      return SizedBox(
+        height: 140,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(child: tiles[0]),
+            const SizedBox(width: 6),
+            Flexible(child: tiles[1]),
+          ],
+        ),
       );
     }
 
@@ -7330,6 +7334,9 @@ bool modelCanGenerateImages(String modelName) {
       lower.contains('dalle') ||
       lower.contains('flux') ||
       lower.contains('stable-diffusion') ||
+      lower.contains('stable diffusion') ||
+      lower.contains('qwen-image') ||
+      lower.contains('trellis') ||
       lower.contains('sdxl') ||
       lower.contains('imagen') ||
       lower.contains('midjourney') ||
@@ -7365,6 +7372,7 @@ bool modelCanGenerateVideos(String modelName) {
 
   // 2. Generic video-generation keywords
   if (lower.contains('video') ||
+      lower.contains('cosmos') ||
       lower.contains('sora') ||
       lower.contains('runway') ||
       lower.contains('kling') ||
@@ -7772,6 +7780,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Future<void> _pickImage() async {
+    final hasV = modelHasVision(_selectedModel);
+    if (!hasV) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Selected model ($_selectedModel) does not support image attachments.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     try {
       final source = await showDialog<ImageSource>(
         context: context,
@@ -7816,6 +7838,18 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       );
 
       if (source == null) return;
+
+      if (source == ImageSource.camera) {
+        final status = await Permission.camera.request();
+        if (status.isDenied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Camera permission denied')),
+            );
+          }
+          return;
+        }
+      }
 
       if (source == ImageSource.gallery) {
         final result = await FilePicker.platform.pickFiles(
@@ -8123,331 +8157,192 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Widget _buildModelTab(List<String> models) {
-    final counts = _ModelCounts.of(models);
-
-    // Apply category filter to produce the dropdown list.
-    final filteredModels = _modelCategoryFilter == 'all'
-        ? models
-        : models
-            .where((m) => modelCategoryOf(m) == _modelCategoryFilter)
-            .toList();
-
-    // Ensure the selected model is in the filtered list; if not, fall back.
-    final effectiveModel = filteredModels.contains(_selectedModel)
-        ? _selectedModel
-        : (filteredModels.isNotEmpty ? filteredModels.first : null);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Provider selector ──────────────────────────────────────────
+        // Dropdowns Group Card
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: const Color(0xFFFFF7EC),
             border: Border.all(color: const Color(0xFFEADCC9)),
             borderRadius: BorderRadius.circular(18),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  value: _selectedProviderId,
-                  dropdownColor: const Color(0xFFFFFBF2),
-                  decoration: const InputDecoration(
-                    labelText: 'AI Provider',
-                    labelStyle: TextStyle(
-                      color: Color(0xFF6C5946),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
-                    ),
-                    border: OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                    ),
-                    prefixIcon: Icon(
-                      Icons.hub_outlined,
-                      color: Color(0xFF7B4E2E),
-                      size: 20,
-                    ),
-                  ),
-                  items: providerCatalog.map((p) {
-                    return DropdownMenuItem<String>(
-                      value: p.id,
-                      child: Text(
-                        p.name,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: (val) {
-                    if (val != null) {
-                      final nextProvider = providerCatalog.firstWhere(
-                        (p) => p.id == val,
-                      );
-                      setState(() {
-                        _selectedProviderId = val;
-                        _selectedModel = nextProvider.models.first;
-                        _modelCategoryFilter = 'all';
-                      });
-                      widget.onProviderChanged(val);
-                    }
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                height: 50,
-                width: 50,
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFDCCBB8)),
-                    padding: EdgeInsets.zero,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    backgroundColor: Colors.white,
-                  ),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onConfigureKey(_selectedProviderId);
-                  },
-                  child: const Icon(
-                    Icons.key,
-                    color: Color(0xFF7B4E2E),
-                    size: 20,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // ── Model Category Stats Bar ───────────────────────────────────
-        // Shows how many models are available in each category.
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    '${counts.total} model${counts.total == 1 ? '' : 's'} available',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2D241C),
-                    ),
-                  ),
-                  if (models.isEmpty)
-                    const Text(
-                      'Tap ⟳ to load',
-                      style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
-                    ),
-                ],
-              ),
-              if (counts.total > 0) ...[
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    _buildCategoryStatTile(
-                      icon: Icons.chat_bubble_outline,
-                      label: 'Normal',
-                      count: counts.normal,
-                      color: const Color(0xFF6C5946),
-                      category: 'normal',
-                    ),
-                    const SizedBox(width: 8),
-                    _buildCategoryStatTile(
-                      icon: Icons.psychology_outlined,
-                      label: 'Reason',
-                      count: counts.reasoning,
-                      color: const Color(0xFF7B4E2E),
-                      category: 'reasoning',
-                    ),
-                    const SizedBox(width: 8),
-                    _buildCategoryStatTile(
-                      icon: Icons.remove_red_eye_outlined,
-                      label: 'Vision',
-                      count: counts.vision,
-                      color: const Color(0xFF4A90D9),
-                      category: 'vision',
-                    ),
-                    const SizedBox(width: 8),
-                    _buildCategoryStatTile(
-                      icon: Icons.image_outlined,
-                      label: 'Img Gen',
-                      count: counts.image,
-                      color: const Color(0xFF8B4DB8),
-                      category: 'image',
-                    ),
-                    const SizedBox(width: 8),
-                    _buildCategoryStatTile(
-                      icon: Icons.videocam_outlined,
-                      label: 'Vid Gen',
-                      count: counts.video,
-                      color: const Color(0xFF2E7D32),
-                      category: 'video',
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // ── Category Filter Chips ──────────────────────────────────────
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _buildFilterChip('all', Icons.apps, 'All (${counts.total})', const Color(0xFF6C5946)),
-              const SizedBox(width: 6),
-              _buildFilterChip('normal', Icons.chat_bubble_outline, 'Normal (${counts.normal})', const Color(0xFF6C5946)),
-              const SizedBox(width: 6),
-              _buildFilterChip('reasoning', Icons.psychology_outlined, 'Reasoning / Coding (${counts.reasoning})', const Color(0xFF7B4E2E)),
-              const SizedBox(width: 6),
-              _buildFilterChip('vision', Icons.remove_red_eye_outlined, 'Multimodal / Vision (${counts.vision})', const Color(0xFF4A90D9)),
-              const SizedBox(width: 6),
-              _buildFilterChip('image', Icons.image_outlined, 'Image Gen (${counts.image})', const Color(0xFF8B4DB8)),
-              const SizedBox(width: 6),
-              _buildFilterChip('video', Icons.videocam_outlined, 'Video Gen (${counts.video})', const Color(0xFF2E7D32)),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // ── Model Dropdown (filtered) ──────────────────────────────────
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF7EC),
-            border: Border.all(color: const Color(0xFFEADCC9)),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: filteredModels.isEmpty
-                    ? Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: const Color(0xFFDCCBB8)),
-                          borderRadius: BorderRadius.circular(8),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: _selectedProviderId,
+                      dropdownColor: const Color(0xFFFFFBF2),
+                      decoration: const InputDecoration(
+                        labelText: 'AI Provider',
+                        labelStyle: TextStyle(
+                          color: Color(0xFF6C5946),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
                         ),
-                        child: Text(
-                          _modelCategoryFilter == 'all'
-                              ? 'No models loaded. Tap ⟳ to fetch.'
-                              : 'No ${_modelCategoryFilter} models found in this provider.',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF6C5946),
-                            fontStyle: FontStyle.italic,
-                          ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
                         ),
-                      )
-                    : DropdownButtonFormField<String>(
-                        value: effectiveModel,
-                        dropdownColor: const Color(0xFFFFFBF2),
-                        decoration: InputDecoration(
-                          labelText: _modelCategoryFilter == 'all'
-                              ? 'Model Name'
-                              : '${_modelCategoryFilter[0].toUpperCase()}${_modelCategoryFilter.substring(1)} Models',
-                          labelStyle: const TextStyle(
-                            color: Color(0xFF6C5946),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 12,
-                          ),
-                          border: const OutlineInputBorder(
-                            borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                          ),
-                          enabledBorder: const OutlineInputBorder(
-                            borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                          ),
-                          focusedBorder: const OutlineInputBorder(
-                            borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                          ),
-                          prefixIcon: Icon(
-                            _categoryIcon(_modelCategoryFilter),
-                            color: const Color(0xFF7B4E2E),
-                            size: 20,
-                          ),
+                        border: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
                         ),
-                        items: filteredModels.map((m) {
-                          return DropdownMenuItem<String>(
-                            value: m,
-                            child: Text(
-                              m,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (val) {
-                          if (val != null) {
-                            setState(() => _selectedModel = val);
-                            widget.onModelChanged(val);
-                          }
-                        },
-                      ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                height: 50,
-                width: 50,
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFDCCBB8)),
-                    padding: EdgeInsets.zero,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    backgroundColor: Colors.white,
-                  ),
-                  onPressed: _fetching ? null : _fetch,
-                  child: _fetching
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Color(0xFF7B4E2E),
-                          ),
-                        )
-                      : const Icon(
-                          Icons.sync,
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                        ),
+                        prefixIcon: Icon(
+                          Icons.hub_outlined,
                           color: Color(0xFF7B4E2E),
                           size: 20,
                         ),
-                ),
+                      ),
+                      items: providerCatalog.map((p) {
+                        return DropdownMenuItem<String>(
+                          value: p.id,
+                          child: Text(
+                            p.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          final nextProvider = providerCatalog.firstWhere(
+                            (p) => p.id == val,
+                          );
+                          setState(() {
+                            _selectedProviderId = val as String;
+                            _selectedModel = nextProvider.models.isNotEmpty
+                                ? nextProvider.models.first
+                                : '';
+                          });
+                          widget.onProviderChanged(val as String);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    height: 50,
+                    width: 50,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFDCCBB8)),
+                        padding: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        backgroundColor: Colors.white,
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        widget.onConfigureKey(_selectedProviderId);
+                      },
+                      child: const Icon(
+                        Icons.key,
+                        color: Color(0xFF7B4E2E),
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: models.contains(_selectedModel)
+                          ? _selectedModel
+                          : (models.isNotEmpty ? models.first : null),
+                      dropdownColor: const Color(0xFFFFFBF2),
+                      decoration: const InputDecoration(
+                        labelText: 'Model Name',
+                        labelStyle: TextStyle(
+                          color: Color(0xFF6C5946),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                        ),
+                        prefixIcon: Icon(
+                          Icons.memory_outlined,
+                          color: Color(0xFF7B4E2E),
+                          size: 20,
+                        ),
+                      ),
+                      items: models.map((m) {
+                        return DropdownMenuItem<String>(
+                          value: m,
+                          child: Text(
+                            m,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => _selectedModel = val as String);
+                          widget.onModelChanged(val as String);
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    height: 50,
+                    width: 50,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFDCCBB8)),
+                        padding: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        backgroundColor: Colors.white,
+                      ),
+                      onPressed: _fetching ? null : _fetch,
+                      child: _fetching
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF7B4E2E),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.sync,
+                              color: Color(0xFF7B4E2E),
+                              size: 20,
+                            ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -8602,8 +8497,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 activeColor: const Color(0xFF7B4E2E),
                 inactiveColor: const Color(0xFFE7D8C4),
                 onChanged: (val) {
-                  setState(() => _maxTokens = val.round());
-                  widget.onMaxTokensChanged(val.round());
+                  setState(() => _maxTokens = (val as double).round());
+                  widget.onMaxTokensChanged((val as double).round());
                 },
               ),
               SingleChildScrollView(
@@ -8636,7 +8531,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                               : const Color(0xFFE5DDD3),
                         ),
                         onSelected: (sel) {
-                          if (sel) {
+                          if (sel == true) {
                             setState(() => _maxTokens = preset);
                             widget.onMaxTokensChanged(preset);
                           }
@@ -9790,39 +9685,15 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     Icons.image_outlined,
                     'Photos',
                     'Gallery images',
-                    isEnabled: visionEnabled,
-                    onTap: () {
-                      if (visionEnabled) {
-                        _pickImage();
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Selected model does not support vision (image input).',
-                            ),
-                          ),
-                        );
-                      }
-                    },
+                    isEnabled: true,
+                    onTap: _pickImage,
                   ),
                   _buildAttachTile(
                     Icons.camera_alt_outlined,
                     'Camera',
                     'Capture photo',
-                    isEnabled: visionEnabled,
-                    onTap: () {
-                      if (visionEnabled) {
-                        _pickImage();
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Selected model does not support vision (image input).',
-                            ),
-                          ),
-                        );
-                      }
-                    },
+                    isEnabled: true,
+                    onTap: _pickImage,
                   ),
                   _buildAttachTile(
                     Icons.insert_drive_file_outlined,
@@ -10519,6 +10390,7 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
   final _manualController = TextEditingController();
   late List<String> _models;
   var _fetching = false;
+  String _modelCategoryFilter = 'all';
 
   @override
   void initState() {
@@ -10549,11 +10421,112 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
     }
   }
 
+  IconData _categoryIcon(String category) => switch (category) {
+        'normal' => Icons.chat_bubble_outline,
+        'reasoning' => Icons.psychology_outlined,
+        'vision' => Icons.remove_red_eye_outlined,
+        'image' => Icons.image_outlined,
+        'video' => Icons.videocam_outlined,
+        _ => Icons.memory_outlined,
+      };
+
+  Widget _buildCategoryStatTile({
+    required IconData icon,
+    required String label,
+    required int count,
+    required Color color,
+    required String category,
+  }) {
+    final isActive = _modelCategoryFilter == category;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() {
+          _modelCategoryFilter = isActive ? 'all' : category;
+        }),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          decoration: BoxDecoration(
+            color: isActive ? color.withOpacity(0.15) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isActive ? color.withOpacity(0.5) : Colors.transparent,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(height: 3),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                ),
+              ),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: color.withOpacity(0.75),
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip(String category, IconData icon, String label, Color color) {
+    final isActive = _modelCategoryFilter == category;
+    return GestureDetector(
+      onTap: () => setState(() => _modelCategoryFilter = category),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isActive ? color.withOpacity(0.14) : const Color(0xFFF3EBE0),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isActive ? color.withOpacity(0.5) : const Color(0xFFDCCBB8),
+            width: isActive ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: isActive ? color : const Color(0xFF6C5946)),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
+                color: isActive ? color : const Color(0xFF6C5946),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final counts = _ModelCounts.of(_models);
     final query = _searchController.text.trim().toLowerCase();
     final filtered = _models.where((model) {
-      return query.isEmpty || model.toLowerCase().contains(query);
+      final matchesQuery = query.isEmpty || model.toLowerCase().contains(query);
+      if (!matchesQuery) return false;
+      if (_modelCategoryFilter == 'all') return true;
+      return modelCategoryOf(model) == _modelCategoryFilter;
     }).toList();
 
     return SheetFrame(
@@ -10586,6 +10559,108 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
             ],
           ),
           const SizedBox(height: 12),
+
+          // ── Model Category Stats Bar ───────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFBF9F4),
+              border: Border.all(color: const Color(0xFFE5DDD3)),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '${counts.total} model${counts.total == 1 ? '' : 's'} available',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D241C),
+                      ),
+                    ),
+                    if (_models.isEmpty)
+                      const Text(
+                        'Tap Fetch to load',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                      ),
+                  ],
+                ),
+                if (counts.total > 0) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      _buildCategoryStatTile(
+                        icon: Icons.chat_bubble_outline,
+                        label: 'Normal',
+                        count: counts.normal,
+                        color: const Color(0xFF6C5946),
+                        category: 'normal',
+                      ),
+                      const SizedBox(width: 8),
+                      _buildCategoryStatTile(
+                        icon: Icons.psychology_outlined,
+                        label: 'Reason',
+                        count: counts.reasoning,
+                        color: const Color(0xFF7B4E2E),
+                        category: 'reasoning',
+                      ),
+                      const SizedBox(width: 8),
+                      _buildCategoryStatTile(
+                        icon: Icons.remove_red_eye_outlined,
+                        label: 'Vision',
+                        count: counts.vision,
+                        color: const Color(0xFF4A90D9),
+                        category: 'vision',
+                      ),
+                      const SizedBox(width: 8),
+                      _buildCategoryStatTile(
+                        icon: Icons.image_outlined,
+                        label: 'Img Gen',
+                        count: counts.image,
+                        color: const Color(0xFF8B4DB8),
+                        category: 'image',
+                      ),
+                      const SizedBox(width: 8),
+                      _buildCategoryStatTile(
+                        icon: Icons.videocam_outlined,
+                        label: 'Vid Gen',
+                        count: counts.video,
+                        color: const Color(0xFF2E7D32),
+                        category: 'video',
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Category Filter Chips ──────────────────────────────────────
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildFilterChip('all', Icons.apps, 'All (${counts.total})', const Color(0xFF6C5946)),
+                const SizedBox(width: 6),
+                _buildFilterChip('normal', Icons.chat_bubble_outline, 'Normal (${counts.normal})', const Color(0xFF6C5946)),
+                const SizedBox(width: 6),
+                _buildFilterChip('reasoning', Icons.psychology_outlined, 'Reasoning / Coding (${counts.reasoning})', const Color(0xFF7B4E2E)),
+                const SizedBox(width: 6),
+                _buildFilterChip('vision', Icons.remove_red_eye_outlined, 'Multimodal / Vision (${counts.vision})', const Color(0xFF4A90D9)),
+                const SizedBox(width: 6),
+                _buildFilterChip('image', Icons.image_outlined, 'Image Gen (${counts.image})', const Color(0xFF8B4DB8)),
+                const SizedBox(width: 6),
+                _buildFilterChip('video', Icons.videocam_outlined, 'Video Gen (${counts.video})', const Color(0xFF2E7D32)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
           TextField(
             controller: _manualController,
             decoration: const InputDecoration(
@@ -10595,24 +10670,48 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
           ),
           const SizedBox(height: 12),
           SizedBox(
-            height: 260,
-            child: ListView.builder(
-              itemCount: filtered.length,
-              itemBuilder: (context, index) {
-                final model = filtered[index];
-                final selected = model == widget.selectedModel;
-                return ListTile(
-                  dense: true,
-                  leading: Icon(
-                    selected
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
+            height: 220,
+            child: filtered.isEmpty
+                ? Center(
+                    child: Text(
+                      _modelCategoryFilter == 'all'
+                          ? 'No models found matching query.'
+                          : 'No ${_modelCategoryFilter} models match query/filters.',
+                      style: const TextStyle(
+                        fontStyle: FontStyle.italic,
+                        color: Color(0xFF6C5946),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: filtered.length,
+                    itemBuilder: (context, index) {
+                      final model = filtered[index];
+                      final selected = model == widget.selectedModel;
+                      final cat = modelCategoryOf(model);
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(
+                          selected
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          color: selected ? const Color(0xFF7B4E2E) : const Color(0xFF6C5946),
+                        ),
+                        title: Text(
+                          model,
+                          style: TextStyle(
+                            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                        trailing: Icon(
+                          _categoryIcon(cat),
+                          size: 16,
+                          color: const Color(0xFF6C5946).withOpacity(0.6),
+                        ),
+                        onTap: () => Navigator.of(context).pop(model),
+                      );
+                    },
                   ),
-                  title: Text(model),
-                  onTap: () => Navigator.of(context).pop(model),
-                );
-              },
-            ),
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -11988,6 +12087,26 @@ const providerCatalog = <ProviderDefinition>[
       'meta/llama-3.1-405b-instruct',
       'nvidia/llama-3.1-nemotron-ultra-253b-v1',
       'deepseek-ai/deepseek-r1',
+      // Free image models
+      'nvidia/FLUX.1-schnell',
+      'nvidia/Qwen-Image',
+      'nvidia/Qwen-Image-Edit',
+      'nvidia/FLUX.2-klein-4B',
+      'nvidia/FLUX.1-dev',
+      'nvidia/Stable Diffusion 3.5 Large',
+      'nvidia/FLUX.1-Kontext-dev',
+      'nvidia/TRELLIS',
+      'FLUX.1-schnell',
+      'Qwen-Image',
+      'Qwen-Image-Edit',
+      'FLUX.2-klein-4B',
+      'FLUX.1-dev',
+      'Stable Diffusion 3.5 Large',
+      'FLUX.1-Kontext-dev',
+      'TRELLIS',
+      // Free video models
+      'nvidia/cosmos3-nano',
+      'cosmos3-nano',
     ],
     defaultMaxTokens: 8192,
   ),
