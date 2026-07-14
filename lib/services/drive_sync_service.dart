@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
@@ -226,6 +227,21 @@ class DriveSyncService {
       log.add(existing?.id != null
           ? '✅ Found existing backup — updating'
           : '✅ No existing backup — creating new file');
+
+      // Check if backup is already identical (up to date)
+      if (existing?.id != null && existing?.md5Checksum != null) {
+        final localMd5 = md5.convert(bytes).toString().toLowerCase();
+        final remoteMd5 = existing!.md5Checksum!.toLowerCase();
+        if (localMd5 == remoteMd5) {
+          log.add('ℹ️ Backup on Drive is already up to date (MD5: $localMd5). Skipping upload.');
+          onProgress?.call('Backup is already up to date ✅');
+          return DriveSyncResult(
+            success: true,
+            message: 'Backup is already up to date (no changes detected).',
+            details: log,
+          );
+        }
+      }
 
       // ── Step 5: upload ──
       onProgress?.call('Uploading ${sizeKB} KB to Google Drive…');
@@ -699,7 +715,7 @@ class DriveSyncService {
     final files = await driveApi.files.list(
       spaces: 'drive',
       q: "name = '$_backupFileName' and '$folderId' in parents and trashed = false",
-      $fields: 'files(id,name,modifiedTime,size)',
+      $fields: 'files(id,name,modifiedTime,size,md5Checksum)',
       pageSize: 1,
     );
     return files.files?.isNotEmpty == true ? files.files!.first : null;
