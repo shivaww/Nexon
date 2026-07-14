@@ -1211,51 +1211,7 @@ For every project, maintain a README.md at the project root.
         final subscription = stream.listen(
           (chunk) {
             if (!mounted) return;
-            if (chunk.startsWith('[IMAGE_DATA]')) {
-              final startIdx = chunk.indexOf('[IMAGE_DATA]') + 12;
-              final endIdx = chunk.indexOf('[/IMAGE_DATA]');
-              if (endIdx != -1) {
-                final base64String = chunk.substring(startIdx, endIdx);
-                setState(() {
-                  final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
-                  if (idx != -1) {
-                    final msgs = List<ChatMessage>.from(_sessions[idx].messages);
-                    if (assistantMessageIndex < msgs.length) {
-                      final currentImages = List<String>.from(msgs[assistantMessageIndex].images);
-                      currentImages.add(base64String);
-                      
-                      msgs[assistantMessageIndex] = msgs[assistantMessageIndex].copyWith(
-                        images: currentImages,
-                        text: 'Generated image successfully.',
-                      );
-                      _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
-                    }
-                  }
-                });
-              }
-            } else if (chunk.startsWith('[VIDEO_DATA]')) {
-              final startIdx = chunk.indexOf('[VIDEO_DATA]') + 12;
-              final endIdx = chunk.indexOf('[/VIDEO_DATA]');
-              if (endIdx != -1) {
-                final base64String = chunk.substring(startIdx, endIdx);
-                setState(() {
-                  final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
-                  if (idx != -1) {
-                    final msgs = List<ChatMessage>.from(_sessions[idx].messages);
-                    if (assistantMessageIndex < msgs.length) {
-                      final currentVideos = List<String>.from(msgs[assistantMessageIndex].videos);
-                      currentVideos.add(base64String);
-                      
-                      msgs[assistantMessageIndex] = msgs[assistantMessageIndex].copyWith(
-                        videos: currentVideos,
-                        text: 'Generated video successfully.',
-                      );
-                      _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
-                    }
-                  }
-                });
-              }
-            } else if (chunk.startsWith('[REASONING]')) {
+            if (chunk.startsWith('[REASONING]')) {
               reasoningText += chunk.substring(11);
             } else {
               var textChunk = chunk;
@@ -1754,13 +1710,38 @@ For every project, maintain a README.md at the project root.
             _sessions[idx].messages,
           );
           if (currentMessages.isNotEmpty) {
+            // Find the last user message to see if it had attachments
+            ChatMessage? lastUserMsg;
+            for (int i = currentMessages.length - 1; i >= 0; i--) {
+              if (currentMessages[i].role == MessageRole.user) {
+                lastUserMsg = currentMessages[i];
+                break;
+              }
+            }
+            String attachmentInfo = '';
+            if (lastUserMsg != null) {
+              if (lastUserMsg.images.isNotEmpty) {
+                attachmentInfo = 'image';
+              } else if (lastUserMsg.videos.isNotEmpty) {
+                attachmentInfo = 'video';
+              } else if (lastUserMsg.files.isNotEmpty) {
+                attachmentInfo = 'file';
+              }
+            }
+
             final lastIdx = currentMessages.length - 1;
             final currentText = currentMessages[lastIdx].text;
+
+            String errorMsg = error.toString();
+            if (attachmentInfo.isNotEmpty) {
+              errorMsg = 'This model does not support $attachmentInfo attachments. ($error)';
+            }
+
             currentMessages[lastIdx] = ChatMessage(
               role: MessageRole.assistant,
               text: currentText.isNotEmpty
-                  ? '$currentText\n\n[Error: $error]'
-                  : 'Request failed: $error',
+                  ? '$currentText\n\n[Error: $errorMsg]'
+                  : 'Request failed: $errorMsg',
               isError: true,
             );
             _sessions[idx] = _sessions[idx].copyWith(messages: currentMessages);
@@ -7636,8 +7617,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   int? _liveSubscriptionCredits;
   int? _liveTopupCredits;
   Timer? _walletSyncTimer;
-  /// Current category filter in the model picker: 'all', 'normal', 'reasoning', 'vision', 'image', 'video'
-  String _modelCategoryFilter = 'all';
 
   @override
   void initState() {
@@ -7824,20 +7803,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Future<void> _pickImage() async {
-    final hasV = modelHasVision(_selectedModel);
-    if (!hasV) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Selected model ($_selectedModel) does not support image attachments.',
-            ),
-          ),
-        );
-      }
-      return;
-    }
-
     try {
       final source = await showDialog<ImageSource>(
         context: context,
@@ -8391,55 +8356,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 10),
-
-        // ── Selected Model Capability Badges ──────────────────────────
-        Builder(
-          builder: (context) {
-            final cat = modelCategoryOf(_selectedModel);
-            final hasVision = modelHasVision(_selectedModel);
-            final canImage = modelCanGenerateImages(_selectedModel);
-            final canVideo = modelCanGenerateVideos(_selectedModel);
-            final isReason = modelIsReasoningOrCoding(_selectedModel);
-
-            final badges = <Widget>[];
-            if (hasVision) badges.add(_buildCapabilityChip(Icons.remove_red_eye_outlined, 'Vision Input', const Color(0xFF4A90D9)));
-            if (isReason && cat != 'image' && cat != 'video') badges.add(_buildCapabilityChip(Icons.psychology_outlined, 'Reasoning / Coding', const Color(0xFF7B4E2E)));
-            if (canImage) badges.add(_buildCapabilityChip(Icons.image_outlined, 'Image Generation', const Color(0xFF8B4DB8)));
-            if (canVideo) badges.add(_buildCapabilityChip(Icons.videocam_outlined, 'Video Generation', const Color(0xFF2E7D32)));
-            if (badges.isEmpty) badges.add(_buildCapabilityChip(Icons.chat_bubble_outline, 'Text Chat', const Color(0xFF6C5946)));
-
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8F3ED),
-                border: Border.all(color: const Color(0xFFE5DDD3)),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 3),
-                    child: Text(
-                      'Selected:',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF6C5946),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Wrap(spacing: 6, runSpacing: 4, children: badges),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-
         const SizedBox(height: 8),
 
         // Token Slider Section
@@ -9768,134 +9684,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     );
   }
 
-  /// Returns the icon for a given model category.
-  IconData _categoryIcon(String category) => switch (category) {
-        'normal' => Icons.chat_bubble_outline,
-        'reasoning' => Icons.psychology_outlined,
-        'vision' => Icons.remove_red_eye_outlined,
-        'image' => Icons.image_outlined,
-        'video' => Icons.videocam_outlined,
-        _ => Icons.memory_outlined,
-      };
-
-  /// Builds a tappable stat tile showing a category count.
-  /// Tapping it activates that category filter.
-  Widget _buildCategoryStatTile({
-    required IconData icon,
-    required String label,
-    required int count,
-    required Color color,
-    required String category,
-  }) {
-    final isActive = _modelCategoryFilter == category;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() {
-          _modelCategoryFilter = isActive ? 'all' : category;
-        }),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          decoration: BoxDecoration(
-            color: isActive ? color.withOpacity(0.15) : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isActive ? color.withOpacity(0.5) : Colors.transparent,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(height: 3),
-              Text(
-                '$count',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                  color: color,
-                ),
-              ),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  color: color.withOpacity(0.75),
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Builds a horizontally-scrollable filter chip.
-  Widget _buildFilterChip(String category, IconData icon, String label, Color color) {
-    final isActive = _modelCategoryFilter == category;
-    return GestureDetector(
-      onTap: () => setState(() => _modelCategoryFilter = category),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: isActive ? color.withOpacity(0.14) : const Color(0xFFF3EBE0),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isActive ? color.withOpacity(0.5) : const Color(0xFFDCCBB8),
-            width: isActive ? 1.5 : 1.0,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: isActive ? color : const Color(0xFF6C5946)),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
-                color: isActive ? color : const Color(0xFF6C5946),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Builds a small capability chip with an icon and label.
-  Widget _buildCapabilityChip(IconData icon, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.35)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildAttachTile(
     IconData icon,
     String title,
@@ -10434,7 +10222,6 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
   final _manualController = TextEditingController();
   late List<String> _models;
   var _fetching = false;
-  String _modelCategoryFilter = 'all';
 
   @override
   void initState() {
@@ -10465,112 +10252,11 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
     }
   }
 
-  IconData _categoryIcon(String category) => switch (category) {
-        'normal' => Icons.chat_bubble_outline,
-        'reasoning' => Icons.psychology_outlined,
-        'vision' => Icons.remove_red_eye_outlined,
-        'image' => Icons.image_outlined,
-        'video' => Icons.videocam_outlined,
-        _ => Icons.memory_outlined,
-      };
-
-  Widget _buildCategoryStatTile({
-    required IconData icon,
-    required String label,
-    required int count,
-    required Color color,
-    required String category,
-  }) {
-    final isActive = _modelCategoryFilter == category;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() {
-          _modelCategoryFilter = isActive ? 'all' : category;
-        }),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          decoration: BoxDecoration(
-            color: isActive ? color.withOpacity(0.15) : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isActive ? color.withOpacity(0.5) : Colors.transparent,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(height: 3),
-              Text(
-                '$count',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                  color: color,
-                ),
-              ),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  color: color.withOpacity(0.75),
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFilterChip(String category, IconData icon, String label, Color color) {
-    final isActive = _modelCategoryFilter == category;
-    return GestureDetector(
-      onTap: () => setState(() => _modelCategoryFilter = category),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: isActive ? color.withOpacity(0.14) : const Color(0xFFF3EBE0),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isActive ? color.withOpacity(0.5) : const Color(0xFFDCCBB8),
-            width: isActive ? 1.5 : 1.0,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: isActive ? color : const Color(0xFF6C5946)),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
-                color: isActive ? color : const Color(0xFF6C5946),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final counts = _ModelCounts.of(_models);
     final query = _searchController.text.trim().toLowerCase();
     final filtered = _models.where((model) {
-      final matchesQuery = query.isEmpty || model.toLowerCase().contains(query);
-      if (!matchesQuery) return false;
-      if (_modelCategoryFilter == 'all') return true;
-      return modelCategoryOf(model) == _modelCategoryFilter;
+      return query.isEmpty || model.toLowerCase().contains(query);
     }).toList();
 
     return SheetFrame(
@@ -10603,108 +10289,6 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
             ],
           ),
           const SizedBox(height: 12),
-
-          // ── Model Category Stats Bar ───────────────────────────────────
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFBF9F4),
-              border: Border.all(color: const Color(0xFFE5DDD3)),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '${counts.total} model${counts.total == 1 ? '' : 's'} available',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    if (_models.isEmpty)
-                      const Text(
-                        'Tap Fetch to load',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
-                      ),
-                  ],
-                ),
-                if (counts.total > 0) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      _buildCategoryStatTile(
-                        icon: Icons.chat_bubble_outline,
-                        label: 'Normal',
-                        count: counts.normal,
-                        color: const Color(0xFF6C5946),
-                        category: 'normal',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildCategoryStatTile(
-                        icon: Icons.psychology_outlined,
-                        label: 'Reason',
-                        count: counts.reasoning,
-                        color: const Color(0xFF7B4E2E),
-                        category: 'reasoning',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildCategoryStatTile(
-                        icon: Icons.remove_red_eye_outlined,
-                        label: 'Vision',
-                        count: counts.vision,
-                        color: const Color(0xFF4A90D9),
-                        category: 'vision',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildCategoryStatTile(
-                        icon: Icons.image_outlined,
-                        label: 'Img Gen',
-                        count: counts.image,
-                        color: const Color(0xFF8B4DB8),
-                        category: 'image',
-                      ),
-                      const SizedBox(width: 8),
-                      _buildCategoryStatTile(
-                        icon: Icons.videocam_outlined,
-                        label: 'Vid Gen',
-                        count: counts.video,
-                        color: const Color(0xFF2E7D32),
-                        category: 'video',
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          // ── Category Filter Chips ──────────────────────────────────────
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _buildFilterChip('all', Icons.apps, 'All (${counts.total})', const Color(0xFF6C5946)),
-                const SizedBox(width: 6),
-                _buildFilterChip('normal', Icons.chat_bubble_outline, 'Normal (${counts.normal})', const Color(0xFF6C5946)),
-                const SizedBox(width: 6),
-                _buildFilterChip('reasoning', Icons.psychology_outlined, 'Reasoning / Coding (${counts.reasoning})', const Color(0xFF7B4E2E)),
-                const SizedBox(width: 6),
-                _buildFilterChip('vision', Icons.remove_red_eye_outlined, 'Multimodal / Vision (${counts.vision})', const Color(0xFF4A90D9)),
-                const SizedBox(width: 6),
-                _buildFilterChip('image', Icons.image_outlined, 'Image Gen (${counts.image})', const Color(0xFF8B4DB8)),
-                const SizedBox(width: 6),
-                _buildFilterChip('video', Icons.videocam_outlined, 'Video Gen (${counts.video})', const Color(0xFF2E7D32)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-
           TextField(
             controller: _manualController,
             decoration: const InputDecoration(
@@ -10714,14 +10298,12 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
           ),
           const SizedBox(height: 12),
           SizedBox(
-            height: 220,
+            height: 260,
             child: filtered.isEmpty
-                ? Center(
+                ? const Center(
                     child: Text(
-                      _modelCategoryFilter == 'all'
-                          ? 'No models found matching query.'
-                          : 'No ${_modelCategoryFilter} models match query/filters.',
-                      style: const TextStyle(
+                      'No models found matching query.',
+                      style: TextStyle(
                         fontStyle: FontStyle.italic,
                         color: Color(0xFF6C5946),
                       ),
@@ -10732,7 +10314,6 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
                     itemBuilder: (context, index) {
                       final model = filtered[index];
                       final selected = model == widget.selectedModel;
-                      final cat = modelCategoryOf(model);
                       return ListTile(
                         dense: true,
                         leading: Icon(
@@ -10746,11 +10327,6 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
                           style: TextStyle(
                             fontWeight: selected ? FontWeight.bold : FontWeight.normal,
                           ),
-                        ),
-                        trailing: Icon(
-                          _categoryIcon(cat),
-                          size: 16,
-                          color: const Color(0xFF6C5946).withOpacity(0.6),
                         ),
                         onTap: () => Navigator.of(context).pop(model),
                       );
@@ -11375,19 +10951,9 @@ class ChatClient {
             final baseUrl = isManagedMode
                 ? managedUrl
                 : _baseUrl(provider, settings);
-            
-            final isImageGen = modelCanGenerateImages(model);
-            final isVideoGen = modelCanGenerateVideos(model);
-            final isMediaGen = isImageGen || isVideoGen;
-
-            final urlString = isMediaGen
-                ? (baseUrl.endsWith('/v1')
-                    ? '$baseUrl/images/generations'
-                    : '$baseUrl/v1/images/generations')
-                : (baseUrl.endsWith('/v1')
-                    ? '$baseUrl/chat/completions'
-                    : '$baseUrl/v1/chat/completions');
-
+            final urlString = baseUrl.endsWith('/v1')
+                ? '$baseUrl/chat/completions'
+                : '$baseUrl/v1/chat/completions';
             final uri = Uri.parse(urlString);
             final request = await client.postUrl(uri);
             _setHeaders(
@@ -11395,59 +10961,46 @@ class ChatClient {
               provider,
               settings,
               currentKey,
-              stream: !isMediaGen,
+              stream: true,
               isManaged: isManagedMode,
             );
             request.headers.contentType = ContentType.json;
 
-            final Map<String, dynamic> payload;
-            if (isMediaGen) {
-              final prompt = messages.lastWhere(
-                (m) => m.role == MessageRole.user,
-                orElse: () => const ChatMessage(role: MessageRole.user, text: 'A clean background'),
-              ).text;
-              payload = {
-                'model': model,
-                'prompt': prompt,
-                'response_format': 'b64_json',
-              };
-            } else {
-              payload = <String, dynamic>{
-                'model': model,
-                'messages': messages.map((message) {
-                  String finalText = message.text;
-                  if (message.files.isNotEmpty) {
-                    finalText += '\n\n';
-                    for (final file in message.files) {
-                      finalText +=
-                          '--- File: ${file.name} ---\n${file.content}\n\n';
-                    }
+            final payload = <String, dynamic>{
+              'model': model,
+              'messages': messages.map((message) {
+                String finalText = message.text;
+                if (message.files.isNotEmpty) {
+                  finalText += '\n\n';
+                  for (final file in message.files) {
+                    finalText +=
+                        '--- File: ${file.name} ---\n${file.content}\n\n';
                   }
+                }
 
-                  if (message.images.isNotEmpty) {
-                    return {
-                      'role': message.role.apiName,
-                      'content': [
-                        {'type': 'text', 'text': finalText},
-                        ...message.images.map(
-                          (img) => {
-                            'type': 'image_url',
-                            'image_url': {'url': 'data:image/jpeg;base64,$img'},
-                          },
-                        ),
-                      ],
-                    };
-                  }
-                  return {'role': message.role.apiName, 'content': finalText};
-                }).toList(),
-                'max_tokens': settings.maxTokens,
-                'temperature': 1.0,
-                'top_p': 0.95,
-                'stream': true,
-                if (provider.id == 'openrouter')
-                  'include_reasoning': settings.reasoningEnabled,
-              };
-            }
+                if (message.images.isNotEmpty) {
+                  return {
+                    'role': message.role.apiName,
+                    'content': [
+                      {'type': 'text', 'text': finalText},
+                      ...message.images.map(
+                        (img) => {
+                          'type': 'image_url',
+                          'image_url': {'url': 'data:image/jpeg;base64,$img'},
+                        },
+                      ),
+                    ],
+                  };
+                }
+                return {'role': message.role.apiName, 'content': finalText};
+              }).toList(),
+              'max_tokens': settings.maxTokens,
+              'temperature': 1.0,
+              'top_p': 0.95,
+              'stream': true,
+              if (provider.id == 'openrouter')
+                'include_reasoning': settings.reasoningEnabled,
+            };
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
@@ -11458,28 +11011,6 @@ class ChatClient {
               final body = await response.transform(utf8.decoder).join();
               throw HttpException('HTTP ${response.statusCode}: $body');
             }
-
-            if (isMediaGen) {
-              final body = await response.transform(utf8.decoder).join();
-              final decoded = jsonDecode(body);
-              final dataList = decoded['data'] as List?;
-              if (dataList == null || dataList.isEmpty) {
-                throw HttpException('Failed to generate media: Response data is empty');
-              }
-              final first = dataList.first as Map;
-              final b64 = first['b64_json']?.toString() ?? '';
-              if (b64.isEmpty) {
-                throw HttpException('Failed to generate media: b64_json is empty');
-              }
-              if (isImageGen) {
-                yield '[IMAGE_DATA]$b64[/IMAGE_DATA]';
-              } else {
-                yield '[VIDEO_DATA]$b64[/VIDEO_DATA]';
-              }
-              success = true;
-              return;
-            }
-
             success = true;
             break;
           } catch (e) {
@@ -12196,26 +11727,6 @@ const providerCatalog = <ProviderDefinition>[
       'meta/llama-3.1-405b-instruct',
       'nvidia/llama-3.1-nemotron-ultra-253b-v1',
       'deepseek-ai/deepseek-r1',
-      // Free image models
-      'nvidia/FLUX.1-schnell',
-      'nvidia/Qwen-Image',
-      'nvidia/Qwen-Image-Edit',
-      'nvidia/FLUX.2-klein-4B',
-      'nvidia/FLUX.1-dev',
-      'nvidia/Stable Diffusion 3.5 Large',
-      'nvidia/FLUX.1-Kontext-dev',
-      'nvidia/TRELLIS',
-      'FLUX.1-schnell',
-      'Qwen-Image',
-      'Qwen-Image-Edit',
-      'FLUX.2-klein-4B',
-      'FLUX.1-dev',
-      'Stable Diffusion 3.5 Large',
-      'FLUX.1-Kontext-dev',
-      'TRELLIS',
-      // Free video models
-      'nvidia/cosmos3-nano',
-      'cosmos3-nano',
     ],
     defaultMaxTokens: 8192,
   ),
