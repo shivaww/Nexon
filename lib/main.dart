@@ -21,7 +21,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:docx_creator/docx_creator.dart';
+import 'package:docx_creator/docx_creator.dart' hide PdfDocument;
 
 import 'package:nexon/widgets/nexon_chart.dart';
 import 'package:nexon/services/drive_sync_service.dart';
@@ -11869,7 +11869,7 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
       // Use docx_creator to generate the DOCX natively in Dart
       final elements = await MarkdownParser.parse(widget.docxContent);
       final doc = DocxBuiltDocument(elements: elements);
-      final docxBytes = DocxExporter().exportToBytes(doc);
+      final docxBytes = await DocxExporter().exportToBytes(doc);
 
       // Determine filename from content
       String filename = 'document.docx';
