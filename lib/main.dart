@@ -1211,7 +1211,51 @@ For every project, maintain a README.md at the project root.
         final subscription = stream.listen(
           (chunk) {
             if (!mounted) return;
-            if (chunk.startsWith('[REASONING]')) {
+            if (chunk.startsWith('[IMAGE_DATA]')) {
+              final startIdx = chunk.indexOf('[IMAGE_DATA]') + 12;
+              final endIdx = chunk.indexOf('[/IMAGE_DATA]');
+              if (endIdx != -1) {
+                final base64String = chunk.substring(startIdx, endIdx);
+                setState(() {
+                  final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+                  if (idx != -1) {
+                    final msgs = List<ChatMessage>.from(_sessions[idx].messages);
+                    if (assistantMessageIndex < msgs.length) {
+                      final currentImages = List<String>.from(msgs[assistantMessageIndex].images);
+                      currentImages.add(base64String);
+                      
+                      msgs[assistantMessageIndex] = msgs[assistantMessageIndex].copyWith(
+                        images: currentImages,
+                        text: 'Generated image successfully.',
+                      );
+                      _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
+                    }
+                  }
+                });
+              }
+            } else if (chunk.startsWith('[VIDEO_DATA]')) {
+              final startIdx = chunk.indexOf('[VIDEO_DATA]') + 12;
+              final endIdx = chunk.indexOf('[/VIDEO_DATA]');
+              if (endIdx != -1) {
+                final base64String = chunk.substring(startIdx, endIdx);
+                setState(() {
+                  final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+                  if (idx != -1) {
+                    final msgs = List<ChatMessage>.from(_sessions[idx].messages);
+                    if (assistantMessageIndex < msgs.length) {
+                      final currentVideos = List<String>.from(msgs[assistantMessageIndex].videos);
+                      currentVideos.add(base64String);
+                      
+                      msgs[assistantMessageIndex] = msgs[assistantMessageIndex].copyWith(
+                        videos: currentVideos,
+                        text: 'Generated video successfully.',
+                      );
+                      _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
+                    }
+                  }
+                });
+              }
+            } else if (chunk.startsWith('[REASONING]')) {
               reasoningText += chunk.substring(11);
             } else {
               var textChunk = chunk;
@@ -11331,9 +11375,19 @@ class ChatClient {
             final baseUrl = isManagedMode
                 ? managedUrl
                 : _baseUrl(provider, settings);
-            final urlString = baseUrl.endsWith('/v1')
-                ? '$baseUrl/chat/completions'
-                : '$baseUrl/v1/chat/completions';
+            
+            final isImageGen = modelCanGenerateImages(model);
+            final isVideoGen = modelCanGenerateVideos(model);
+            final isMediaGen = isImageGen || isVideoGen;
+
+            final urlString = isMediaGen
+                ? (baseUrl.endsWith('/v1')
+                    ? '$baseUrl/images/generations'
+                    : '$baseUrl/v1/images/generations')
+                : (baseUrl.endsWith('/v1')
+                    ? '$baseUrl/chat/completions'
+                    : '$baseUrl/v1/chat/completions');
+
             final uri = Uri.parse(urlString);
             final request = await client.postUrl(uri);
             _setHeaders(
@@ -11341,46 +11395,59 @@ class ChatClient {
               provider,
               settings,
               currentKey,
-              stream: true,
+              stream: !isMediaGen,
               isManaged: isManagedMode,
             );
             request.headers.contentType = ContentType.json;
 
-            final payload = <String, dynamic>{
-              'model': model,
-              'messages': messages.map((message) {
-                String finalText = message.text;
-                if (message.files.isNotEmpty) {
-                  finalText += '\n\n';
-                  for (final file in message.files) {
-                    finalText +=
-                        '--- File: ${file.name} ---\n${file.content}\n\n';
+            final Map<String, dynamic> payload;
+            if (isMediaGen) {
+              final prompt = messages.lastWhere(
+                (m) => m.role == MessageRole.user,
+                orElse: () => const ChatMessage(role: MessageRole.user, text: 'A clean background'),
+              ).text;
+              payload = {
+                'model': model,
+                'prompt': prompt,
+                'response_format': 'b64_json',
+              };
+            } else {
+              payload = <String, dynamic>{
+                'model': model,
+                'messages': messages.map((message) {
+                  String finalText = message.text;
+                  if (message.files.isNotEmpty) {
+                    finalText += '\n\n';
+                    for (final file in message.files) {
+                      finalText +=
+                          '--- File: ${file.name} ---\n${file.content}\n\n';
+                    }
                   }
-                }
 
-                if (message.images.isNotEmpty) {
-                  return {
-                    'role': message.role.apiName,
-                    'content': [
-                      {'type': 'text', 'text': finalText},
-                      ...message.images.map(
-                        (img) => {
-                          'type': 'image_url',
-                          'image_url': {'url': 'data:image/jpeg;base64,$img'},
-                        },
-                      ),
-                    ],
-                  };
-                }
-                return {'role': message.role.apiName, 'content': finalText};
-              }).toList(),
-              'max_tokens': settings.maxTokens,
-              'temperature': 1.0,
-              'top_p': 0.95,
-              'stream': true,
-              if (provider.id == 'openrouter')
-                'include_reasoning': settings.reasoningEnabled,
-            };
+                  if (message.images.isNotEmpty) {
+                    return {
+                      'role': message.role.apiName,
+                      'content': [
+                        {'type': 'text', 'text': finalText},
+                        ...message.images.map(
+                          (img) => {
+                            'type': 'image_url',
+                            'image_url': {'url': 'data:image/jpeg;base64,$img'},
+                          },
+                        ),
+                      ],
+                    };
+                  }
+                  return {'role': message.role.apiName, 'content': finalText};
+                }).toList(),
+                'max_tokens': settings.maxTokens,
+                'temperature': 1.0,
+                'top_p': 0.95,
+                'stream': true,
+                if (provider.id == 'openrouter')
+                  'include_reasoning': settings.reasoningEnabled,
+              };
+            }
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
@@ -11391,6 +11458,28 @@ class ChatClient {
               final body = await response.transform(utf8.decoder).join();
               throw HttpException('HTTP ${response.statusCode}: $body');
             }
+
+            if (isMediaGen) {
+              final body = await response.transform(utf8.decoder).join();
+              final decoded = jsonDecode(body);
+              final dataList = decoded['data'] as List?;
+              if (dataList == null || dataList.isEmpty) {
+                throw HttpException('Failed to generate media: Response data is empty');
+              }
+              final first = dataList.first as Map;
+              final b64 = first['b64_json']?.toString() ?? '';
+              if (b64.isEmpty) {
+                throw HttpException('Failed to generate media: b64_json is empty');
+              }
+              if (isImageGen) {
+                yield '[IMAGE_DATA]$b64[/IMAGE_DATA]';
+              } else {
+                yield '[VIDEO_DATA]$b64[/VIDEO_DATA]';
+              }
+              success = true;
+              return;
+            }
+
             success = true;
             break;
           } catch (e) {
@@ -11857,6 +11946,26 @@ class ChatMessage {
   /// Base64-encoded video data attached to this message.
   final List<String> videos;
   final List<AttachedFile> files;
+
+  ChatMessage copyWith({
+    MessageRole? role,
+    String? text,
+    bool? isError,
+    String? reasoning,
+    List<String>? images,
+    List<String>? videos,
+    List<AttachedFile>? files,
+  }) {
+    return ChatMessage(
+      role: role ?? this.role,
+      text: text ?? this.text,
+      isError: isError ?? this.isError,
+      reasoning: reasoning ?? this.reasoning,
+      images: images ?? this.images,
+      videos: videos ?? this.videos,
+      files: files ?? this.files,
+    );
+  }
 }
 
 class ChatSession {
