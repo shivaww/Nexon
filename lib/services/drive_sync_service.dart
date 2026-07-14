@@ -70,6 +70,26 @@ class DriveSyncService {
     '.log',
   };
 
+  /// Image and video file extensions to include in backups as base64.
+  static const _mediaExtensions = {
+    // Images
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.ico',
+    // Videos
+    '.mp4',
+    '.webm',
+    '.mov',
+    '.avi',
+    '.mkv',
+    '.m4v',
+    '.3gp',
+  };
+
   // ──────────────────────────────────────────────────────────────────
   // Public: persist the provider token right after a successful OAuth
   // sign-in so that subsequent Drive calls work even after the
@@ -179,7 +199,7 @@ class DriveSyncService {
       final driveApi = drive.DriveApi(client);
 
       // ── Step 2: build backup payload ──
-      onProgress?.call('Collecting chats, settings, keys & artifacts…');
+      onProgress?.call('Collecting chats, settings, keys, artifacts & media…');
       log.add('⏳ Building backup payload…');
       final Map<String, dynamic> backupData;
       try {
@@ -830,6 +850,11 @@ class DriveSyncService {
           final relPath = _relativePath(entity.path, root.path);
           final ext = _extension(entity.path).toLowerCase();
           final isText = _textExtensions.contains(ext);
+          final isMedia = _mediaExtensions.contains(ext);
+
+          // Skip unknown binary formats to keep backup size reasonable.
+          if (!isText && !isMedia && ext.isNotEmpty) continue;
+
           out['${_basename(root.path)}/$relPath'] = {
             'encoding': isText ? 'text' : 'base64',
             'content': isText

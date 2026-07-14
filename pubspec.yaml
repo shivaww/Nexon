@@ -52,7 +52,9 @@ dependencies:
   flutter_fancy_tree_view: ^1.6.0
   file_picker: ^8.1.7
   image_picker: ^1.1.2
+  video_player: ^2.9.2
   syncfusion_flutter_pdf: any
+
   
   # MCP
   # mcp_dart: ^2.2.0  # Will uncomment when available

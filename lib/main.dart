@@ -19,7 +19,9 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:video_player/video_player.dart';
 import 'package:permission_handler/permission_handler.dart';
+
 import 'package:path_provider/path_provider.dart';
 import 'package:docx_creator/docx_creator.dart' hide PdfDocument;
 
@@ -1792,6 +1794,7 @@ For every project, maintain a README.md at the project root.
           isError: msg.isError,
           reasoning: msg.reasoning,
           images: msg.images,
+          videos: msg.videos,
           files: const [], // Strip files from intermediate system messages
         ));
       } else if (msg.role == MessageRole.assistant) {
@@ -1818,6 +1821,7 @@ For every project, maintain a README.md at the project root.
           isError: msg.isError,
           reasoning: msg.reasoning,
           images: msg.images,
+          videos: msg.videos,
           files: const [],
         ));
       } else if (msg.role == MessageRole.user) {
@@ -1827,6 +1831,7 @@ For every project, maintain a README.md at the project root.
           isError: msg.isError,
           reasoning: msg.reasoning,
           images: msg.images,
+          videos: msg.videos,
           files: const [], // Strip attached files from intermediate user messages to avoid re-sending large base64 contents
         ));
       }
@@ -5376,7 +5381,727 @@ String convertLatexToUnicode(String text) {
   return formatted;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Rich chat media display system
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Animated shimmer placeholder — shown while media decodes or loads.
+class _ShimmerBox extends StatefulWidget {
+  const _ShimmerBox({required this.width, required this.height, this.radius = 12});
+  final double width;
+  final double height;
+  final double radius;
+
+  @override
+  State<_ShimmerBox> createState() => _ShimmerBoxState();
+}
+
+class _ShimmerBoxState extends State<_ShimmerBox>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat(reverse: true);
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) => Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(widget.radius),
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [
+              const Color(0xFFE8DDD0),
+              Color.lerp(
+                const Color(0xFFE8DDD0),
+                const Color(0xFFF5EDE0),
+                _anim.value,
+              )!,
+              const Color(0xFFE8DDD0),
+            ],
+            stops: [0.0, 0.5, 1.0],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Responsive grid of image + video tiles in a chat bubble.
+class _ChatMediaGrid extends StatelessWidget {
+  const _ChatMediaGrid({required this.images, required this.videos});
+  final List<String> images;
+  final List<String> videos;
+
+  @override
+  Widget build(BuildContext context) {
+    final allImages = images;
+    final allVideos = videos;
+    final total = allImages.length + allVideos.length;
+
+    // Build combined tile list: images first, then videos
+    final tiles = <Widget>[
+      for (int i = 0; i < allImages.length; i++)
+        _ImageChatTile(
+          heroTag: 'chat_img_${allImages[i].hashCode}_$i',
+          base64Data: allImages[i],
+          allImages: allImages,
+          initialIndex: i,
+        ),
+      for (int i = 0; i < allVideos.length; i++)
+        _VideoChatTile(base64Data: allVideos[i], index: i),
+    ];
+
+    if (total == 1) {
+      // Single item — show larger
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: SizedBox(
+          width: 260,
+          child: tiles.first,
+        ),
+      );
+    }
+
+    if (total == 2) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(child: tiles[0]),
+          const SizedBox(width: 6),
+          Flexible(child: tiles[1]),
+        ],
+      );
+    }
+
+    // 3+ items — wrap grid
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: tiles.map((t) {
+        return SizedBox(width: 140, height: 140, child: t);
+      }).toList(),
+    );
+  }
+}
+
+/// A single image tile with shimmer loading, error state, hero + fullscreen viewer.
+class _ImageChatTile extends StatefulWidget {
+  const _ImageChatTile({
+    required this.heroTag,
+    required this.base64Data,
+    required this.allImages,
+    required this.initialIndex,
+  });
+  final String heroTag;
+  final String base64Data;
+  final List<String> allImages;
+  final int initialIndex;
+
+  @override
+  State<_ImageChatTile> createState() => _ImageChatTileState();
+}
+
+class _ImageChatTileState extends State<_ImageChatTile> {
+  Uint8List? _bytes;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _decode();
+  }
+
+  void _decode() {
+    try {
+      final bytes = base64Decode(widget.base64Data);
+      if (mounted) setState(() => _bytes = bytes);
+    } catch (_) {
+      if (mounted) setState(() => _hasError = true);
+    }
+  }
+
+  void _openViewer(BuildContext context) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black87,
+        pageBuilder: (_, __, ___) => _ChatMediaViewer(
+          images: widget.allImages,
+          initialIndex: widget.initialIndex,
+          heroTag: widget.heroTag,
+        ),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasError) {
+      return _errorTile();
+    }
+    if (_bytes == null) {
+      return _ShimmerBox(width: double.infinity, height: double.infinity);
+    }
+
+    return GestureDetector(
+      onTap: () => _openViewer(context),
+      child: Hero(
+        tag: widget.heroTag,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.18),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.memory(
+                  _bytes!,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
+                // Subtle gradient overlay at bottom
+                Positioned(
+                  bottom: 0, left: 0, right: 0,
+                  child: Container(
+                    height: 32,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withOpacity(0.25),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Tap-to-expand hint icon
+                Positioned(
+                  bottom: 6, right: 6,
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: Colors.black45,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(
+                      Icons.fullscreen_rounded,
+                      size: 14,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _errorTile() => Container(
+    decoration: BoxDecoration(
+      color: const Color(0xFFF5EDE0),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xFFDCCBB8)),
+    ),
+    child: const Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.broken_image_outlined, color: Color(0xFFB08060), size: 32),
+        SizedBox(height: 4),
+        Text(
+          'Image unavailable',
+          style: TextStyle(fontSize: 10, color: Color(0xFFB08060)),
+        ),
+      ],
+    ),
+  );
+}
+
+/// A single video tile backed by VideoPlayerController.
+/// Shows thumbnail (first decoded frame via controller) with play overlay.
+class _VideoChatTile extends StatefulWidget {
+  const _VideoChatTile({required this.base64Data, required this.index});
+  final String base64Data;
+  final int index;
+
+  @override
+  State<_VideoChatTile> createState() => _VideoChatTileState();
+}
+
+class _VideoChatTileState extends State<_VideoChatTile> {
+  VideoPlayerController? _ctrl;
+  bool _initialized = false;
+  bool _hasError = false;
+  bool _isPlaying = false;
+  bool _expanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initVideo();
+  }
+
+  Future<void> _initVideo() async {
+    try {
+      final bytes = base64Decode(widget.base64Data);
+      // Write to temp file so VideoPlayerController can load it
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/nexon_video_${widget.index}_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      await file.writeAsBytes(bytes);
+      final ctrl = VideoPlayerController.file(file);
+      await ctrl.initialize();
+      ctrl.addListener(() {
+        if (mounted) setState(() => _isPlaying = ctrl.value.isPlaying);
+      });
+      if (mounted) {
+        setState(() {
+          _ctrl = ctrl;
+          _initialized = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _hasError = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl?.dispose();
+    super.dispose();
+  }
+
+  String _fmtDuration(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasError) {
+      return _errorTile();
+    }
+
+    if (!_initialized || _ctrl == null) {
+      return _ShimmerBox(width: double.infinity, height: double.infinity);
+    }
+
+    return GestureDetector(
+      onTap: () {
+        if (_expanded) {
+          _isPlaying ? _ctrl!.pause() : _ctrl!.play();
+        } else {
+          setState(() => _expanded = true);
+          _ctrl!.play();
+        }
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.black,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.22),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: _expanded ? _buildPlayer() : _buildThumbnail(),
+      ),
+    );
+  }
+
+  Widget _buildThumbnail() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // First frame as thumbnail
+        AspectRatio(
+          aspectRatio: _ctrl!.value.aspectRatio,
+          child: VideoPlayer(_ctrl!),
+        ),
+        // Dark overlay
+        Container(color: Colors.black54),
+        // Play icon
+        const Center(
+          child: Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 44),
+        ),
+        // Duration badge
+        Positioned(
+          bottom: 6, right: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.black70,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              _fmtDuration(_ctrl!.value.duration),
+              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+        // Video badge
+        Positioned(
+          top: 6, left: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.black70,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.videocam_rounded, color: Color(0xFF67E8A0), size: 12),
+                SizedBox(width: 3),
+                Text('VIDEO', style: TextStyle(color: Color(0xFF67E8A0), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPlayer() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Center(
+          child: AspectRatio(
+            aspectRatio: _ctrl!.value.aspectRatio,
+            child: VideoPlayer(_ctrl!),
+          ),
+        ),
+        // Play/Pause overlay
+        Center(
+          child: AnimatedOpacity(
+            opacity: _isPlaying ? 0.0 : 1.0,
+            duration: const Duration(milliseconds: 200),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: const BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 32),
+            ),
+          ),
+        ),
+        // Progress bar
+        Positioned(
+          bottom: 0, left: 0, right: 0,
+          child: ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: _ctrl!,
+            builder: (_, val, __) {
+              final total = val.duration.inMilliseconds;
+              final pos = val.position.inMilliseconds;
+              final progress = total == 0 ? 0.0 : pos / total;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(
+                    value: progress,
+                    backgroundColor: Colors.white24,
+                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF67E8A0)),
+                    minHeight: 3,
+                  ),
+                  Container(
+                    color: Colors.black54,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _fmtDuration(val.position),
+                          style: const TextStyle(color: Colors.white70, fontSize: 10),
+                        ),
+                        Text(
+                          _fmtDuration(val.duration),
+                          style: const TextStyle(color: Colors.white70, fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        // Buffering spinner
+        ValueListenableBuilder<VideoPlayerValue>(
+          valueListenable: _ctrl!,
+          builder: (_, val, __) => val.isBuffering
+              ? const Center(
+                  child: SizedBox(
+                    width: 28, height: 28,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF67E8A0)),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+
+  Widget _errorTile() => Container(
+    decoration: BoxDecoration(
+      color: Colors.black87,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: const Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.videocam_off_rounded, color: Color(0xFF67E8A0), size: 32),
+        SizedBox(height: 6),
+        Text('Video unavailable', style: TextStyle(color: Colors.white60, fontSize: 11)),
+      ],
+    ),
+  );
+}
+
+/// Full-screen media viewer with:
+///  - Hero transition from chat bubble
+///  - InteractiveViewer pinch-to-zoom for images
+///  - VideoPlayer with controls for videos
+///  - Swipe-down to dismiss
+///  - Thumbnail strip for navigating multiple images
+class _ChatMediaViewer extends StatefulWidget {
+  const _ChatMediaViewer({
+    required this.images,
+    required this.initialIndex,
+    required this.heroTag,
+  });
+  final List<String> images;
+  final int initialIndex;
+  final String heroTag;
+
+  @override
+  State<_ChatMediaViewer> createState() => _ChatMediaViewerState();
+}
+
+class _ChatMediaViewerState extends State<_ChatMediaViewer> {
+  late int _current;
+  late final PageController _pageCtrl;
+  final _transformKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    _current = widget.initialIndex;
+    _pageCtrl = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: GestureDetector(
+        onVerticalDragEnd: (details) {
+          if (details.primaryVelocity != null &&
+              details.primaryVelocity!.abs() > 600) {
+            Navigator.of(context).pop();
+          }
+        },
+        child: Stack(
+          children: [
+            // Blurred dark background
+            Container(color: Colors.black.withOpacity(0.92)),
+
+            // Image pager
+            PageView.builder(
+              controller: _pageCtrl,
+              itemCount: widget.images.length,
+              onPageChanged: (i) => setState(() => _current = i),
+              itemBuilder: (context, i) {
+                Uint8List? bytes;
+                try {
+                  bytes = base64Decode(widget.images[i]);
+                } catch (_) {}
+
+                if (bytes == null) {
+                  return const Center(
+                    child: Icon(Icons.broken_image_outlined, color: Colors.white38, size: 60),
+                  );
+                }
+
+                final heroTag = i == widget.initialIndex
+                    ? widget.heroTag
+                    : 'viewer_img_$i';
+
+                return Hero(
+                  tag: heroTag,
+                  child: InteractiveViewer(
+                    minScale: 0.8,
+                    maxScale: 6.0,
+                    child: Center(
+                      child: Image.memory(
+                        bytes,
+                        fit: BoxFit.contain,
+                        gaplessPlayback: true,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            // Top bar — image counter + close
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8,
+              left: 0, right: 0,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    if (widget.images.length > 1)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${_current + 1} / ${widget.images.length}',
+                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                      )
+                    else
+                      const SizedBox.shrink(),
+                    GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Hint: swipe down to dismiss
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 80,
+              left: 0, right: 0,
+              child: const Center(
+                child: Text(
+                  'Swipe down to dismiss · Pinch to zoom',
+                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+              ),
+            ),
+
+            // Thumbnail strip (multiple images)
+            if (widget.images.length > 1)
+              Positioned(
+                bottom: MediaQuery.of(context).padding.bottom + 12,
+                left: 0, right: 0,
+                child: SizedBox(
+                  height: 56,
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    itemCount: widget.images.length,
+                    itemBuilder: (context, i) {
+                      Uint8List? bytes;
+                      try {
+                        bytes = base64Decode(widget.images[i]);
+                      } catch (_) {}
+                      final isSelected = i == _current;
+                      return GestureDetector(
+                        onTap: () => _pageCtrl.animateToPage(
+                          i,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        ),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          margin: const EdgeInsets.only(right: 8),
+                          width: 52, height: 52,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isSelected
+                                  ? Colors.white
+                                  : Colors.white30,
+                              width: isSelected ? 2.5 : 1.0,
+                            ),
+                          ),
+                          child: bytes == null
+                              ? const Icon(Icons.broken_image_outlined, color: Colors.white38)
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Image.memory(bytes, fit: BoxFit.cover),
+                                ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+
 class MessageBubble extends StatelessWidget {
+
   const MessageBubble({
     required this.message,
     required this.index,
@@ -5568,31 +6293,18 @@ class MessageBubble extends StatelessWidget {
               ),
               const SizedBox(height: 8),
             ],
-            if (message.images.isNotEmpty)
+            if (message.images.isNotEmpty || message.videos.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: message.images.map((img) {
-                    return Container(
-                      width: 140,
-                      height: 140,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xFFDCCBB8)),
-                        image: DecorationImage(
-                          image: MemoryImage(base64Decode(img)),
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                padding: const EdgeInsets.only(bottom: 10.0),
+                child: _ChatMediaGrid(
+                  images: message.images,
+                  videos: message.videos,
                 ),
               ),
             if (isToolOutput)
               Builder(
                 builder: (context) {
+
                   // Parse a smart header for tool results
                   final text = message.text;
                   String header;
@@ -6528,24 +7240,22 @@ class Composer extends StatelessWidget {
   }
 }
 
+/// Returns true if [modelName] supports image/vision input.
+///
+/// Detection priority:
+/// 1. Runtime set populated from API modality metadata during [fetchModels].
+/// 2. Keyword heuristics — catches models with capability keywords in their
+///    name regardless of provider-specific naming conventions.
 bool modelHasVision(String modelName) {
-  // First check the runtime-populated set (from API modality metadata)
+  // 1. Runtime API-detected set (most reliable)
   if (ChatClient.modelsWithVision.contains(modelName)) return true;
 
   final lower = modelName.toLowerCase();
 
-  // Known text-only models that might accidentally match patterns below
-  if (lower.contains('deepseek-r1') ||
-      lower.contains('llama-3.3') ||
-      lower.contains('deepseek-v3') ||
-      lower.contains('llama-3.1')) {
-    return false;
-  }
-
-  // ── Explicit multimodal patterns ──────────────────────────────────
-  // Generic capability keywords
+  // 2. Generic capability keywords in model name
+  //    These reliably indicate vision regardless of model family.
   if (lower.contains('vision') ||
-      lower.contains('vl') ||
+      lower.contains('-vl') ||
       lower.contains('vlm') ||
       lower.contains('visual') ||
       lower.contains('multimodal') ||
@@ -6562,73 +7272,225 @@ bool modelHasVision(String modelName) {
     return true;
   }
 
-  // OpenAI family
-  if (lower.contains('gpt-4o') ||
-      lower.contains('gpt-4-turbo') ||
-      lower.contains('gpt-4.1') ||
-      lower.contains('o1') && lower.contains('mini') ||
-      lower.contains('chatgpt-4o')) {
-    return true;
-  }
+  // 3. Well-known model families where vision is a standard feature.
+  //    Kept minimal — only cover broad families, not specific version numbers,
+  //    so new models in these families are automatically detected.
 
-  // Anthropic Claude (claude-3+ are all multimodal; claude-4+ too)
-  if (lower.contains('claude-3') || lower.contains('claude-4')) return true;
+  // OpenAI gpt-4 class (gpt-4o, gpt-4-turbo, gpt-4.1, gpt-4.5, etc.)
+  if (lower.startsWith('gpt-4') || lower.startsWith('chatgpt-4o')) return true;
 
-  // Google Gemini (1.5+, 2.0+, 2.5+ are all multimodal)
-  if (lower.contains('gemini-1.5') ||
-      lower.contains('gemini-2.0') ||
-      lower.contains('gemini-2.5') ||
-      lower.contains('gemini-2') ||
+  // OpenAI o-series (o1, o3, o4 etc. — all support vision)
+  if (RegExp(r'^o\d').hasMatch(lower)) return true;
+
+  // Anthropic Claude 3+ family (all claude-3, claude-4+ support vision)
+  if (RegExp(r'claude-[3-9]').hasMatch(lower)) return true;
+
+  // Google Gemini 1.5+ and Gemini 2+ (all support vision)
+  if (RegExp(r'gemini-(1\.[5-9]|[2-9])').hasMatch(lower) ||
       lower.contains('gemini-flash') ||
       lower.contains('gemini-pro')) {
     return true;
   }
 
-  // Qwen VL variants
-  if (lower.contains('qwen-vl') ||
-      lower.contains('qwen2-vl') ||
-      lower.contains('qwen2.5-vl') ||
-      lower.contains('qwen-vl')) {
-    return true;
-  }
+  // Google Gemma 3+ (has vision)
+  if (RegExp(r'gemma-?[3-9]').hasMatch(lower)) return true;
 
-  // Llama multimodal variants
-  if (lower.contains('llama-3.2-11b') ||
-      lower.contains('llama-3.2-90b') ||
-      lower.contains('llama3.2-vision') ||
-      lower.contains('llama-3.2-vision')) {
-    return true;
-  }
+  // Qwen VL / Qwen 2.x VL
+  if (lower.contains('qwen') && lower.contains('-vl')) return true;
 
-  // Microsoft Phi vision models
-  if (lower.contains('phi-3-vision') ||
-      lower.contains('phi3-vision') ||
-      lower.contains('phi-3.5-vision') ||
-      lower.contains('phi-4-vision') ||
-      lower.contains('phi-4-multimodal')) {
-    return true;
-  }
+  // Llama 3.2+ vision variants
+  if (lower.contains('llama-3.2') && lower.contains('vision')) return true;
 
-  // Google Gemma multimodal (gemma3 has vision)
-  if (lower.contains('gemma3') || lower.contains('gemma-3')) return true;
+  // Microsoft Phi vision variants
+  if (lower.contains('phi') && lower.contains('vision')) return true;
+  if (lower.contains('phi-4-multimodal')) return true;
 
-  // Mistral multimodal
-  if (lower.contains('mistral-small-3') ||
-      lower.contains('pixtral') ||
-      lower.contains('mistral-medium-3')) {
-    return true;
-  }
+  // Mistral vision (pixtral already caught above; mistral-medium-3+)
+  if (lower.contains('mistral') && lower.contains('medium')) return true;
 
-  // Molmo
-  if (lower.contains('molmo')) return true;
-
-  // Aria
-  if (lower.contains('aria')) return true;
+  // Molmo, Aria (always multimodal)
+  if (lower.contains('molmo') || lower.contains('aria')) return true;
 
   return false;
 }
 
+/// Returns true if [modelName] can generate images from text (text-to-image).
+///
+/// Detection priority:
+/// 1. Runtime set populated from API output-modality metadata during [fetchModels].
+/// 2. Keyword heuristics — catches models whose names indicate image generation.
+bool modelCanGenerateImages(String modelName) {
+  // 1. Runtime API-detected set
+  if (ChatClient.modelsWithImageGeneration.contains(modelName)) return true;
+
+  final lower = modelName.toLowerCase();
+
+  // 2. Generic image-generation keywords
+  if (lower.contains('dall-e') ||
+      lower.contains('dalle') ||
+      lower.contains('flux') ||
+      lower.contains('stable-diffusion') ||
+      lower.contains('sdxl') ||
+      lower.contains('imagen') ||
+      lower.contains('midjourney') ||
+      lower.contains('ideogram') ||
+      lower.contains('kandinsky') ||
+      lower.contains('wuerstchen') ||
+      lower.contains('aura-flow') ||
+      lower.contains('kolors') ||
+      lower.contains('playgroundai') ||
+      lower.contains('text-to-image') ||
+      lower.contains('img-gen') ||
+      lower.contains('image-gen') ||
+      lower.contains('image-generation')) {
+    return true;
+  }
+
+  // Gemini image-gen models
+  if (lower.contains('gemini') && lower.contains('image')) return true;
+
+  return false;
+}
+
+/// Returns true if [modelName] can generate videos from text (text-to-video).
+///
+/// Detection priority:
+/// 1. Runtime set populated from API output-modality metadata during [fetchModels].
+/// 2. Keyword heuristics — catches models whose names indicate video generation.
+bool modelCanGenerateVideos(String modelName) {
+  // 1. Runtime API-detected set
+  if (ChatClient.modelsWithVideoGeneration.contains(modelName)) return true;
+
+  final lower = modelName.toLowerCase();
+
+  // 2. Generic video-generation keywords
+  if (lower.contains('video') ||
+      lower.contains('sora') ||
+      lower.contains('runway') ||
+      lower.contains('kling') ||
+      lower.contains('pika') ||
+      lower.contains('luma') ||
+      lower.contains('veo') ||
+      lower.contains('minimax-video') ||
+      lower.contains('cogvideo') ||
+      lower.contains('wan') ||
+      lower.contains('text-to-video') ||
+      lower.contains('vid-gen') ||
+      lower.contains('video-gen') ||
+      lower.contains('video-generation')) {
+    return true;
+  }
+
+  return false;
+}
+
+/// Returns true if [modelName] is a dedicated reasoning / coding model.
+///
+/// Detection uses keyword heuristics. Runtime metadata from providers that
+/// expose capability fields (e.g. OpenRouter's `reasoning` flag) is NOT yet
+/// parsed, so this relies solely on name patterns.
+bool modelIsReasoningOrCoding(String modelName) {
+  final lower = modelName.toLowerCase();
+
+  // Reasoning keywords
+  if (lower.contains('reason') ||
+      lower.contains('think') ||
+      lower.contains('reflect') ||
+      lower.contains('qwq') ||
+      lower.contains('marco-o') ||
+      lower.contains('skywork-o') ||
+      lower.contains('deepseek-r') ||
+      lower.contains('-r1') ||
+      lower.contains('-r2') ||
+      lower.contains('aya-expanse')) {
+    return true;
+  }
+
+  // OpenAI o-series reasoning models (o1, o3, o4 …)
+  // BUT NOT other "o" models like "olmo", "ollama" etc.
+  if (RegExp(r'\bo[1-9]\b').hasMatch(lower)) return true;
+
+  // Coding-specialist keywords
+  if (lower.contains('coder') ||
+      lower.contains('codex') ||
+      lower.contains('starcoder') ||
+      lower.contains('deepseek-coder') ||
+      lower.contains('qwen-coder') ||
+      lower.contains('qwen2.5-coder') ||
+      lower.contains('yi-coder') ||
+      lower.contains('wizardcoder') ||
+      lower.contains('phind-code') ||
+      lower.contains('code-llama') ||
+      lower.contains('codellama') ||
+      lower.contains('granite-code') ||
+      lower.contains('-code-') ||
+      lower.contains('instruct-code') ||
+      lower.contains('code-instruct')) {
+    return true;
+  }
+
+  return false;
+}
+
+/// Classifies [modelName] into a category string.
+///
+/// Priority order (a model can only have one category here):
+/// image > video > vision > reasoning > normal
+String modelCategoryOf(String modelName) {
+  if (modelCanGenerateImages(modelName)) return 'image';
+  if (modelCanGenerateVideos(modelName)) return 'video';
+  if (modelHasVision(modelName)) return 'vision';
+  if (modelIsReasoningOrCoding(modelName)) return 'reasoning';
+  return 'normal';
+}
+
+/// Counts of models per category for a given model list.
+class _ModelCounts {
+  const _ModelCounts({
+    required this.total,
+    required this.normal,
+    required this.reasoning,
+    required this.vision,
+    required this.image,
+    required this.video,
+  });
+
+  final int total;
+  final int normal;
+  final int reasoning;
+  final int vision;
+  final int image;
+  final int video;
+
+  factory _ModelCounts.of(List<String> models) {
+    int normal = 0, reasoning = 0, vision = 0, image = 0, video = 0;
+    for (final m in models) {
+      switch (modelCategoryOf(m)) {
+        case 'image':
+          image++;
+        case 'video':
+          video++;
+        case 'vision':
+          vision++;
+        case 'reasoning':
+          reasoning++;
+        default:
+          normal++;
+      }
+    }
+    return _ModelCounts(
+      total: models.length,
+      normal: normal,
+      reasoning: reasoning,
+      vision: vision,
+      image: image,
+      video: video,
+    );
+  }
+}
+
 class MediaAndModelSheet extends StatefulWidget {
+
   const MediaAndModelSheet({
     super.key,
     required this.sessions,
@@ -6722,6 +7584,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   int? _liveSubscriptionCredits;
   int? _liveTopupCredits;
   Timer? _walletSyncTimer;
+  /// Current category filter in the model picker: 'all', 'normal', 'reasoning', 'vision', 'image', 'video'
+  String _modelCategoryFilter = 'all';
 
   @override
   void initState() {
@@ -7259,10 +8123,24 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Widget _buildModelTab(List<String> models) {
+    final counts = _ModelCounts.of(models);
+
+    // Apply category filter to produce the dropdown list.
+    final filteredModels = _modelCategoryFilter == 'all'
+        ? models
+        : models
+            .where((m) => modelCategoryOf(m) == _modelCategoryFilter)
+            .toList();
+
+    // Ensure the selected model is in the filtered list; if not, fall back.
+    final effectiveModel = filteredModels.contains(_selectedModel)
+        ? _selectedModel
+        : (filteredModels.isNotEmpty ? filteredModels.first : null);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Dropdowns Group Card
+        // ── Provider selector ──────────────────────────────────────────
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -7270,184 +8148,360 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             border: Border.all(color: const Color(0xFFEADCC9)),
             borderRadius: BorderRadius.circular(18),
           ),
-          child: Column(
+          child: Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: _selectedProviderId,
-                      dropdownColor: const Color(0xFFFFFBF2),
-                      decoration: const InputDecoration(
-                        labelText: 'AI Provider',
-                        labelStyle: TextStyle(
-                          color: Color(0xFF6C5946),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        border: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                        ),
-                        prefixIcon: Icon(
-                          Icons.hub_outlined,
-                          color: Color(0xFF7B4E2E),
-                          size: 20,
-                        ),
-                      ),
-                      items: providerCatalog.map((p) {
-                        return DropdownMenuItem<String>(
-                          value: p.id,
-                          child: Text(
-                            p.name,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          final nextProvider = providerCatalog.firstWhere(
-                            (p) => p.id == val,
-                          );
-                          setState(() {
-                            _selectedProviderId = val;
-                            _selectedModel = nextProvider.models.first;
-                          });
-                          widget.onProviderChanged(val);
-                        }
-                      },
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  value: _selectedProviderId,
+                  dropdownColor: const Color(0xFFFFFBF2),
+                  decoration: const InputDecoration(
+                    labelText: 'AI Provider',
+                    labelStyle: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                    border: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                    ),
+                    prefixIcon: Icon(
+                      Icons.hub_outlined,
+                      color: Color(0xFF7B4E2E),
+                      size: 20,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  SizedBox(
-                    height: 50,
-                    width: 50,
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFFDCCBB8)),
-                        padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                  items: providerCatalog.map((p) {
+                    return DropdownMenuItem<String>(
+                      value: p.id,
+                      child: Text(
+                        p.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
                         ),
-                        backgroundColor: Colors.white,
                       ),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        widget.onConfigureKey(_selectedProviderId);
-                      },
-                      child: const Icon(
-                        Icons.key,
-                        color: Color(0xFF7B4E2E),
-                        size: 20,
-                      ),
-                    ),
-                  ),
-                ],
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      final nextProvider = providerCatalog.firstWhere(
+                        (p) => p.id == val,
+                      );
+                      setState(() {
+                        _selectedProviderId = val;
+                        _selectedModel = nextProvider.models.first;
+                        _modelCategoryFilter = 'all';
+                      });
+                      widget.onProviderChanged(val);
+                    }
+                  },
+                ),
               ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: models.contains(_selectedModel)
-                          ? _selectedModel
-                          : models.first,
-                      dropdownColor: const Color(0xFFFFFBF2),
-                      decoration: const InputDecoration(
-                        labelText: 'Model Name',
-                        labelStyle: TextStyle(
-                          color: Color(0xFF6C5946),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        border: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                        ),
-                        prefixIcon: Icon(
-                          Icons.memory_outlined,
-                          color: Color(0xFF7B4E2E),
-                          size: 20,
-                        ),
-                      ),
-                      items: models.map((m) {
-                        return DropdownMenuItem<String>(
-                          value: m,
-                          child: Text(
-                            m,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setState(() => _selectedModel = val);
-                          widget.onModelChanged(val);
-                        }
-                      },
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 50,
+                width: 50,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFDCCBB8)),
+                    padding: EdgeInsets.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
                     ),
+                    backgroundColor: Colors.white,
                   ),
-                  const SizedBox(width: 10),
-                  SizedBox(
-                    height: 50,
-                    width: 50,
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFFDCCBB8)),
-                        padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        backgroundColor: Colors.white,
-                      ),
-                      onPressed: _fetching ? null : _fetch,
-                      child: _fetching
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Color(0xFF7B4E2E),
-                              ),
-                            )
-                          : const Icon(
-                              Icons.sync,
-                              color: Color(0xFF7B4E2E),
-                              size: 20,
-                            ),
-                    ),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    widget.onConfigureKey(_selectedProviderId);
+                  },
+                  child: const Icon(
+                    Icons.key,
+                    color: Color(0xFF7B4E2E),
+                    size: 20,
                   ),
-                ],
+                ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+
+        // ── Model Category Stats Bar ───────────────────────────────────
+        // Shows how many models are available in each category.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '${counts.total} model${counts.total == 1 ? '' : 's'} available',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  if (models.isEmpty)
+                    const Text(
+                      'Tap ⟳ to load',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                    ),
+                ],
+              ),
+              if (counts.total > 0) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    _buildCategoryStatTile(
+                      icon: Icons.chat_bubble_outline,
+                      label: 'Normal',
+                      count: counts.normal,
+                      color: const Color(0xFF6C5946),
+                      category: 'normal',
+                    ),
+                    const SizedBox(width: 8),
+                    _buildCategoryStatTile(
+                      icon: Icons.psychology_outlined,
+                      label: 'Reason',
+                      count: counts.reasoning,
+                      color: const Color(0xFF7B4E2E),
+                      category: 'reasoning',
+                    ),
+                    const SizedBox(width: 8),
+                    _buildCategoryStatTile(
+                      icon: Icons.remove_red_eye_outlined,
+                      label: 'Vision',
+                      count: counts.vision,
+                      color: const Color(0xFF4A90D9),
+                      category: 'vision',
+                    ),
+                    const SizedBox(width: 8),
+                    _buildCategoryStatTile(
+                      icon: Icons.image_outlined,
+                      label: 'Img Gen',
+                      count: counts.image,
+                      color: const Color(0xFF8B4DB8),
+                      category: 'image',
+                    ),
+                    const SizedBox(width: 8),
+                    _buildCategoryStatTile(
+                      icon: Icons.videocam_outlined,
+                      label: 'Vid Gen',
+                      count: counts.video,
+                      color: const Color(0xFF2E7D32),
+                      category: 'video',
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // ── Category Filter Chips ──────────────────────────────────────
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _buildFilterChip('all', Icons.apps, 'All (${counts.total})', const Color(0xFF6C5946)),
+              const SizedBox(width: 6),
+              _buildFilterChip('normal', Icons.chat_bubble_outline, 'Normal (${counts.normal})', const Color(0xFF6C5946)),
+              const SizedBox(width: 6),
+              _buildFilterChip('reasoning', Icons.psychology_outlined, 'Reasoning / Coding (${counts.reasoning})', const Color(0xFF7B4E2E)),
+              const SizedBox(width: 6),
+              _buildFilterChip('vision', Icons.remove_red_eye_outlined, 'Multimodal / Vision (${counts.vision})', const Color(0xFF4A90D9)),
+              const SizedBox(width: 6),
+              _buildFilterChip('image', Icons.image_outlined, 'Image Gen (${counts.image})', const Color(0xFF8B4DB8)),
+              const SizedBox(width: 6),
+              _buildFilterChip('video', Icons.videocam_outlined, 'Video Gen (${counts.video})', const Color(0xFF2E7D32)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // ── Model Dropdown (filtered) ──────────────────────────────────
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7EC),
+            border: Border.all(color: const Color(0xFFEADCC9)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: filteredModels.isEmpty
+                    ? Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: const Color(0xFFDCCBB8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _modelCategoryFilter == 'all'
+                              ? 'No models loaded. Tap ⟳ to fetch.'
+                              : 'No ${_modelCategoryFilter} models found in this provider.',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF6C5946),
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      )
+                    : DropdownButtonFormField<String>(
+                        value: effectiveModel,
+                        dropdownColor: const Color(0xFFFFFBF2),
+                        decoration: InputDecoration(
+                          labelText: _modelCategoryFilter == 'all'
+                              ? 'Model Name'
+                              : '${_modelCategoryFilter[0].toUpperCase()}${_modelCategoryFilter.substring(1)} Models',
+                          labelStyle: const TextStyle(
+                            color: Color(0xFF6C5946),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          border: const OutlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                          ),
+                          enabledBorder: const OutlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFFDCCBB8)),
+                          ),
+                          focusedBorder: const OutlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFF7B4E2E)),
+                          ),
+                          prefixIcon: Icon(
+                            _categoryIcon(_modelCategoryFilter),
+                            color: const Color(0xFF7B4E2E),
+                            size: 20,
+                          ),
+                        ),
+                        items: filteredModels.map((m) {
+                          return DropdownMenuItem<String>(
+                            value: m,
+                            child: Text(
+                              m,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() => _selectedModel = val);
+                            widget.onModelChanged(val);
+                          }
+                        },
+                      ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 50,
+                width: 50,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFDCCBB8)),
+                    padding: EdgeInsets.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    backgroundColor: Colors.white,
+                  ),
+                  onPressed: _fetching ? null : _fetch,
+                  child: _fetching
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFF7B4E2E),
+                          ),
+                        )
+                      : const Icon(
+                          Icons.sync,
+                          color: Color(0xFF7B4E2E),
+                          size: 20,
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // ── Selected Model Capability Badges ──────────────────────────
+        Builder(
+          builder: (context) {
+            final cat = modelCategoryOf(_selectedModel);
+            final hasVision = modelHasVision(_selectedModel);
+            final canImage = modelCanGenerateImages(_selectedModel);
+            final canVideo = modelCanGenerateVideos(_selectedModel);
+            final isReason = modelIsReasoningOrCoding(_selectedModel);
+
+            final badges = <Widget>[];
+            if (hasVision) badges.add(_buildCapabilityChip(Icons.remove_red_eye_outlined, 'Vision Input', const Color(0xFF4A90D9)));
+            if (isReason && cat != 'image' && cat != 'video') badges.add(_buildCapabilityChip(Icons.psychology_outlined, 'Reasoning / Coding', const Color(0xFF7B4E2E)));
+            if (canImage) badges.add(_buildCapabilityChip(Icons.image_outlined, 'Image Generation', const Color(0xFF8B4DB8)));
+            if (canVideo) badges.add(_buildCapabilityChip(Icons.videocam_outlined, 'Video Generation', const Color(0xFF2E7D32)));
+            if (badges.isEmpty) badges.add(_buildCapabilityChip(Icons.chat_bubble_outline, 'Text Chat', const Color(0xFF6C5946)));
+
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F3ED),
+                border: Border.all(color: const Color(0xFFE5DDD3)),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 3),
+                    child: Text(
+                      'Selected:',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF6C5946),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Wrap(spacing: 6, runSpacing: 4, children: badges),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+
+        const SizedBox(height: 8),
 
         // Token Slider Section
         Container(
@@ -8799,6 +9853,134 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     );
   }
 
+  /// Returns the icon for a given model category.
+  IconData _categoryIcon(String category) => switch (category) {
+        'normal' => Icons.chat_bubble_outline,
+        'reasoning' => Icons.psychology_outlined,
+        'vision' => Icons.remove_red_eye_outlined,
+        'image' => Icons.image_outlined,
+        'video' => Icons.videocam_outlined,
+        _ => Icons.memory_outlined,
+      };
+
+  /// Builds a tappable stat tile showing a category count.
+  /// Tapping it activates that category filter.
+  Widget _buildCategoryStatTile({
+    required IconData icon,
+    required String label,
+    required int count,
+    required Color color,
+    required String category,
+  }) {
+    final isActive = _modelCategoryFilter == category;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() {
+          _modelCategoryFilter = isActive ? 'all' : category;
+        }),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          decoration: BoxDecoration(
+            color: isActive ? color.withOpacity(0.15) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isActive ? color.withOpacity(0.5) : Colors.transparent,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(height: 3),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: color,
+                ),
+              ),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: color.withOpacity(0.75),
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Builds a horizontally-scrollable filter chip.
+  Widget _buildFilterChip(String category, IconData icon, String label, Color color) {
+    final isActive = _modelCategoryFilter == category;
+    return GestureDetector(
+      onTap: () => setState(() => _modelCategoryFilter = category),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isActive ? color.withOpacity(0.14) : const Color(0xFFF3EBE0),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isActive ? color.withOpacity(0.5) : const Color(0xFFDCCBB8),
+            width: isActive ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: isActive ? color : const Color(0xFF6C5946)),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
+                color: isActive ? color : const Color(0xFF6C5946),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds a small capability chip with an icon and label.
+  Widget _buildCapabilityChip(IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAttachTile(
     IconData icon,
     String title,
@@ -9692,7 +10874,14 @@ class _ProviderAvatarState extends State<ProviderAvatar>
 }
 
 class ChatClient {
+  /// Models that accept image input (multimodal/vision).
   static final Set<String> modelsWithVision = {};
+
+  /// Models that can generate images from text (text-to-image).
+  static final Set<String> modelsWithImageGeneration = {};
+
+  /// Models that can generate videos from text (text-to-video).
+  static final Set<String> modelsWithVideoGeneration = {};
 
   static final liveDailyPool = ValueNotifier<int?>(null);
   static final liveSubscriptionCredits = ValueNotifier<int?>(null);
@@ -9747,34 +10936,64 @@ class ChatClient {
           final id = item['id']?.toString() ?? '';
           if (id.isEmpty) continue;
 
-          // OpenRouter-style architecture.modality field
+          // OpenRouter-style architecture.modality field.
+          // Format: "<inputs>-><outputs>" e.g. "text+image->text"
+          // or "text->image" for image generators.
           final arch = item['architecture'];
           if (arch is Map) {
             final modality = arch['modality']?.toString().toLowerCase() ?? '';
-            // Keep only models that accept text (possibly + image) as input
-            // and produce text as output. Reject pure image/audio generators.
-            // Modality format: "<inputs>-><outputs>" e.g. "text+image->text"
-            final outputPart = modality.contains('->')
-                ? modality.split('->').last
-                : modality;
-            if (modality.isNotEmpty && !outputPart.contains('text')) {
-              continue; // Skip non-text-generating models
-            }
-            final inputPart = modality.contains('->')
-                ? modality.split('->').first
-                : modality;
-            if (inputPart.contains('image') || inputPart.contains('vision')) {
-              ChatClient.modelsWithVision.add(id);
+            if (modality.isNotEmpty) {
+              final parts = modality.split('->');
+              final inputPart = parts.first.trim();
+              final outputPart = parts.length > 1 ? parts.last.trim() : modality;
+
+              // Detect text-to-image generation models
+              if (outputPart.contains('image') && !outputPart.contains('text')) {
+                ChatClient.modelsWithImageGeneration.add(id);
+                // Don't add to text list — these are pure image generators
+                continue;
+              }
+
+              // Detect text-to-video generation models
+              if (outputPart.contains('video') && !outputPart.contains('text')) {
+                ChatClient.modelsWithVideoGeneration.add(id);
+                // Don't add to text list — these are pure video generators
+                continue;
+              }
+
+              // Skip models that produce neither text, image, nor video
+              if (!outputPart.contains('text') &&
+                  !outputPart.contains('image') &&
+                  !outputPart.contains('video')) {
+                continue;
+              }
+
+              // Detect vision input (image-in + text-out)
+              if (inputPart.contains('image') || inputPart.contains('vision')) {
+                ChatClient.modelsWithVision.add(id);
+              }
             }
           }
 
-          // Some providers expose capabilities/input_modalities array
-          final caps = item['capabilities'] ?? item['input_modalities'];
-          if (caps is List) {
-            for (final cap in caps) {
+          // Some providers expose capabilities/input_modalities/output_modalities arrays
+          final inputCaps = item['input_modalities'] ?? item['capabilities'];
+          if (inputCaps is List) {
+            for (final cap in inputCaps) {
               final capStr = cap.toString().toLowerCase();
               if (capStr.contains('image') || capStr.contains('vision')) {
                 ChatClient.modelsWithVision.add(id);
+              }
+            }
+          }
+          final outputCaps = item['output_modalities'];
+          if (outputCaps is List) {
+            for (final cap in outputCaps) {
+              final capStr = cap.toString().toLowerCase();
+              if (capStr.contains('image') && !capStr.contains('text')) {
+                ChatClient.modelsWithImageGeneration.add(id);
+              }
+              if (capStr.contains('video') && !capStr.contains('text')) {
+                ChatClient.modelsWithVideoGeneration.add(id);
               }
             }
           }
@@ -9813,7 +11032,8 @@ class ChatClient {
             final caps = item['capabilities'];
             if (caps is List) {
               for (final cap in caps) {
-                if (cap.toString().toLowerCase() == 'vision') {
+                final capStr = cap.toString().toLowerCase();
+                if (capStr == 'vision' || capStr.contains('image') || capStr.contains('vision')) {
                   ChatClient.modelsWithVision.add(name);
                 }
               }
@@ -10525,6 +11745,7 @@ class ChatMessage {
     this.isError = false,
     this.reasoning = '',
     this.images = const [],
+    this.videos = const [],
     this.files = const [],
   });
 
@@ -10532,7 +11753,10 @@ class ChatMessage {
   final String text;
   final bool isError;
   final String reasoning;
+  /// Base64-encoded image data attached to this message.
   final List<String> images;
+  /// Base64-encoded video data attached to this message.
+  final List<String> videos;
   final List<AttachedFile> files;
 }
 
@@ -10618,6 +11842,7 @@ class ChatSession {
             'isError': m.isError,
             'reasoning': m.reasoning,
             'images': m.images,
+            'videos': m.videos,
             'files': m.files.map((f) => f.toJson()).toList(),
           },
         )
@@ -10638,6 +11863,7 @@ class ChatSession {
                   'isError': m.isError,
                   'reasoning': m.reasoning,
                   'images': m.images,
+                  'videos': m.videos,
                   'files': m.files.map((f) => f.toJson()).toList(),
                 },
               )
@@ -10661,6 +11887,9 @@ class ChatSession {
                 reasoning: m['reasoning']?.toString() ?? '',
                 images:
                     (m['images'] as List?)?.map((e) => e.toString()).toList() ??
+                    const [],
+                videos:
+                    (m['videos'] as List?)?.map((e) => e.toString()).toList() ??
                     const [],
                 files:
                     (m['files'] as List?)
@@ -10689,6 +11918,11 @@ class ChatSession {
                   reasoning: m['reasoning']?.toString() ?? '',
                   images:
                       (m['images'] as List?)
+                          ?.map((e) => e.toString())
+                          .toList() ??
+                      const [],
+                  videos:
+                      (m['videos'] as List?)
                           ?.map((e) => e.toString())
                           .toList() ??
                       const [],
