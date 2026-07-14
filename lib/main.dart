@@ -5768,7 +5768,7 @@ class _VideoChatTileState extends State<_VideoChatTile> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.black70,
+              color: const Color(0xB2000000),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
@@ -5783,7 +5783,7 @@ class _VideoChatTileState extends State<_VideoChatTile> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.black70,
+              color: const Color(0xB2000000),
               borderRadius: BorderRadius.circular(6),
             ),
             child: const Row(
