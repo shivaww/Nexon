@@ -3892,84 +3892,143 @@ class ChatSurface extends StatelessWidget {
             onOpenModel: onOpenModel,
           ),
           Expanded(
-            child: ListView.builder(
-              controller: scrollController,
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-              itemCount: messages.length,
-              itemBuilder: (context, index) {
-                AvatarAnimationState state = AvatarAnimationState.idle;
-                if (isSending && index == messages.length - 1) {
-                  final msg = messages[index];
-                  if (msg.text.contains('<mcp_request>') ||
-                      msg.text.contains('<tool_request>') ||
-                      msg.text.contains('<command>')) {
-                    state = AvatarAnimationState.mcp;
-                  } else if (msg.text.contains('<search_request>')) {
-                    state = AvatarAnimationState.searching;
-                  } else if ((msg.reasoning?.isNotEmpty ?? false) &&
-                      msg.text.isEmpty) {
-                    state = AvatarAnimationState.reasoning;
-                  } else {
-                    state = AvatarAnimationState.typing;
-                  }
-                }
-                final isUser = messages[index].role == MessageRole.user;
-                List<int> branchIndicesForVersions = [];
-                int currentVersionIndex = 0;
-
-                if (isUser && branches != null && branches!.isNotEmpty) {
-                  final activeMsgs = messages;
-                  final prefix = activeMsgs.sublist(0, index);
-                  final seenTexts = <String>{};
-
-                  for (int b = 0; b < branches!.length; b++) {
-                    final branchMsgs = branches![b];
-                    if (branchMsgs.length > index) {
-                      bool matches = true;
-                      for (int j = 0; j < index; j++) {
-                        if (branchMsgs[j].text != prefix[j].text ||
-                            branchMsgs[j].role != prefix[j].role) {
-                          matches = false;
-                          break;
-                        }
-                      }
-                      if (matches) {
-                        final msgText = branchMsgs[index].text;
-                        if (!seenTexts.contains(msgText)) {
-                          seenTexts.add(msgText);
-                          branchIndicesForVersions.add(b);
-                        }
+            child: Stack(
+              children: [
+                ListView.builder(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+                  itemCount: messages.length,
+                  itemBuilder: (context, int index) {
+                    AvatarAnimationState state = AvatarAnimationState.idle;
+                    if (isSending && index == messages.length - 1) {
+                      final msg = messages[index];
+                      if (msg.text.contains('<mcp_request>') ||
+                          msg.text.contains('<tool_request>') ||
+                          msg.text.contains('<command>')) {
+                        state = AvatarAnimationState.mcp;
+                      } else if (msg.text.contains('<search_request>')) {
+                        state = AvatarAnimationState.searching;
+                      } else if ((msg.reasoning?.isNotEmpty ?? false) &&
+                          msg.text.isEmpty) {
+                        state = AvatarAnimationState.reasoning;
+                      } else {
+                        state = AvatarAnimationState.typing;
                       }
                     }
-                  }
+                    final isUser = messages[index].role == MessageRole.user;
+                    List<int> branchIndicesForVersions = [];
+                    int currentVersionIndex = 0;
 
-                  currentVersionIndex = branchIndicesForVersions.indexWhere(
-                    (bIdx) =>
-                        branches![bIdx][index].text == messages[index].text,
-                  );
-                  if (currentVersionIndex == -1) currentVersionIndex = 0;
-                }
+                    if (isUser && branches != null && branches!.isNotEmpty) {
+                      final activeMsgs = messages;
+                      final prefix = activeMsgs.sublist(0, index);
+                      final seenTexts = <String>{};
 
-                return MessageBubble(
-                  message: messages[index],
-                  index: index,
-                  providerShortName: provider.shortName,
-                  providerName: provider.name,
-                  reasoningEnabled: settings.reasoningEnabled,
-                  animationState: state,
-                  agenticWorkspace: agenticWorkspace,
-                  fileName: fileName,
-                  onEditUserMessage: () => onEditUserMessage(index),
-                  onStartResearch: () => onStartResearch(index),
-                  versionsCount: branchIndicesForVersions.length,
-                  currentVersionIndex: currentVersionIndex,
-                  onVersionChanged: branchIndicesForVersions.isEmpty
-                      ? null
-                      : (vIdx) {
-                          onBranchChanged?.call(branchIndicesForVersions[vIdx]);
-                        },
-                );
-              },
+                      for (int b = 0; b < branches!.length; b++) {
+                        final branchMsgs = branches![b];
+                        if (branchMsgs.length > index) {
+                          bool matches = true;
+                          for (int j = 0; j < index; j++) {
+                            if (branchMsgs[j].text != prefix[j].text ||
+                                branchMsgs[j].role != prefix[j].role) {
+                              matches = false;
+                              break;
+                            }
+                          }
+                          if (matches) {
+                            final msgText = branchMsgs[index].text;
+                            if (!seenTexts.contains(msgText)) {
+                              seenTexts.add(msgText);
+                              branchIndicesForVersions.add(b);
+                            }
+                          }
+                        }
+                      }
+
+                      currentVersionIndex = branchIndicesForVersions.indexWhere(
+                        (bIdx) =>
+                            branches![bIdx][index].text == messages[index].text,
+                      );
+                      if (currentVersionIndex == -1) currentVersionIndex = 0;
+                    }
+
+                    return MessageBubble(
+                      message: messages[index],
+                      index: index,
+                      providerShortName: provider.shortName,
+                      providerName: provider.name,
+                      reasoningEnabled: settings.reasoningEnabled,
+                      animationState: state,
+                      agenticWorkspace: agenticWorkspace,
+                      fileName: fileName,
+                      onEditUserMessage: () => onEditUserMessage(index),
+                      onStartResearch: () => onStartResearch(index),
+                      versionsCount: branchIndicesForVersions.length,
+                      currentVersionIndex: currentVersionIndex,
+                      onVersionChanged: branchIndicesForVersions.isEmpty
+                          ? null
+                          : (int vIdx) {
+                              onBranchChanged?.call(branchIndicesForVersions[vIdx]);
+                            },
+                    );
+                  },
+                ),
+                if (messages.isEmpty && deepResearchEnabled)
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF9F2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFFEADCC9), width: 1.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF7B4E2E).withValues(alpha: 0.08),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFFBF6EC),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.psychology,
+                              color: Color(0xFF7B4E2E),
+                              size: 32,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Deep Research Mode Active',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D241C),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Please select a model which is good at reasoning and make sure you are using at least 32k context model.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF6C5946),
+                              height: 1.4,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           // Live tool status banner
@@ -8830,6 +8889,51 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 onChanged: (val) {
                   setState(() => _svgVisualsEnabled = val);
                   widget.onSvgVisualsEnabledChanged(val);
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Agentic Deep Research Card
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFBF9F4),
+            border: Border.all(color: const Color(0xFFE5DDD3)),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Agentic Deep Research',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Let models perform iterative multi-step research plans',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6C5946),
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: _deepResearchEnabled,
+                activeColor: const Color(0xFF7B4E2E),
+                onChanged: (val) {
+                  setState(() => _deepResearchEnabled = val);
+                  widget.onDeepResearchEnabledChanged(val);
                 },
               ),
             ],
