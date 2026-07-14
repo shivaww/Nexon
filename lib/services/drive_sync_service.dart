@@ -553,33 +553,14 @@ class DriveSyncService {
       // Token is expired — try refreshing via Google's OAuth endpoint
     }
 
-    // 3. Try refreshing via Google's OAuth token endpoint using the stored refresh token.
-    //    Supabase's refreshSession() only refreshes the Supabase JWT, NOT the Google
-    //    provider access token. We must hit Google's token endpoint directly.
-    final refreshToken = prefs.getString(_refreshTokenKey);
-    if (refreshToken != null && refreshToken.isNotEmpty) {
-      final newToken = await _refreshGoogleAccessToken(refreshToken);
-      if (newToken != null) {
-        await prefs.setString(_tokenKey, newToken);
-        return _TokenResult(token: newToken);
-      }
+    // 3. Try refreshing via Supabase GoTrue REST API (which proxies Google
+    //    token refresh server-side) and/or the SDK's refreshSession().
+    final refreshToken = prefs.getString(_refreshTokenKey) ?? '';
+    final newToken = await _refreshGoogleAccessToken(refreshToken);
+    if (newToken != null) {
+      await prefs.setString(_tokenKey, newToken);
+      return _TokenResult(token: newToken);
     }
-
-    // 4. Last resort: try Supabase refreshSession in case it magically returns a
-    //    provider token (some Supabase versions do this with PKCE).
-    try {
-      final refreshed = await auth.refreshSession();
-      final refreshedSession = refreshed.session ?? auth.currentSession;
-      final refreshedToken = refreshedSession?.providerToken;
-      if (refreshedToken != null && refreshedToken.isNotEmpty) {
-        await prefs.setString(_tokenKey, refreshedToken);
-        final refresh = refreshedSession?.providerRefreshToken;
-        if (refresh != null && refresh.isNotEmpty) {
-          await prefs.setString(_refreshTokenKey, refresh);
-        }
-        return _TokenResult(token: refreshedToken);
-      }
-    } catch (_) {}
 
     // All attempts failed
     if (session == null) {
@@ -612,11 +593,68 @@ class DriveSyncService {
   }
 
   /// Attempt to refresh the Google access token.
-  /// Supabase's refreshSession() only refreshes the Supabase JWT, NOT the
-  /// Google provider access token. But some Supabase versions with PKCE flow
-  /// DO return a fresh provider token, so we try it here as a last resort
-  /// before requiring re-login.
+  ///
+  /// Strategy:
+  /// 1. Call Supabase GoTrue REST API directly — the raw JSON response
+  ///    contains `provider_token` even though the Dart SDK often drops it.
+  /// 2. Fall back to the Dart SDK's `refreshSession()` in case the raw
+  ///    call fails for any reason.
   static Future<String?> _refreshGoogleAccessToken(String refreshToken) async {
+    // ── Approach 1: Call Supabase GoTrue REST API directly ──
+    // The Dart SDK's refreshSession() often discards the provider_token
+    // field from the JSON response. By calling the REST API ourselves we
+    // can extract it reliably.
+    try {
+      final supabase = Supabase.instance.client;
+      final supabaseRefreshToken = supabase.auth.currentSession?.refreshToken;
+      if (supabaseRefreshToken != null && supabaseRefreshToken.isNotEmpty) {
+        final url = Uri.parse(
+          'https://tvrqxugomnjthqrcdaih.supabase.co/auth/v1/token?grant_type=refresh_token',
+        );
+        // The anon key from Supabase initialization
+        const apiKey = 'sb_publishable_AmHw2HDm_ZpxRt4jOlb-EA_vaVRTSG_';
+        final response = await http.post(
+          url,
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': apiKey,
+          },
+          body: jsonEncode({'refresh_token': supabaseRefreshToken}),
+        ).timeout(const Duration(seconds: 15));
+
+        if (response.statusCode == 200) {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          final providerToken = body['provider_token'] as String?;
+          final providerRefresh = body['provider_refresh_token'] as String?;
+
+          // Also update the Supabase SDK's internal session so future calls
+          // to refreshSession() use the latest refresh_token from GoTrue.
+          final newRefresh = body['refresh_token'] as String?;
+          final newAccess = body['access_token'] as String?;
+          if (newAccess != null && newRefresh != null) {
+            try {
+              await supabase.auth.setSession(newAccess);
+            } catch (_) {
+              // setSession may fail on some SDK versions — non-fatal
+            }
+          }
+
+          // Persist the new Google refresh token if provided
+          if (providerRefresh != null && providerRefresh.isNotEmpty) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(_refreshTokenKey, providerRefresh);
+          }
+
+          if (providerToken != null && providerToken.isNotEmpty) {
+            return providerToken;
+          }
+        }
+      }
+    } catch (_) {
+      // Fall through to approach 2
+    }
+
+    // ── Approach 2: SDK refreshSession() fallback ──
     try {
       final auth = Supabase.instance.client.auth;
       final supabaseSession = auth.currentSession;
@@ -627,10 +665,11 @@ class DriveSyncService {
           return newProviderToken;
         }
       }
-      return null;
     } catch (_) {
-      return null;
+      // Both approaches failed
     }
+
+    return null;
   }
 
   // ──────────────────────────────────────────────────────────────────

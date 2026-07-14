@@ -81,6 +81,9 @@ dependencies:
   webview_flutter: any
   flutter_svg: any
   
+  # DOCX generation
+  docx_creator: ^1.2.7
+  
   # Icons
   flutter_vector_icons: ^2.0.0
   

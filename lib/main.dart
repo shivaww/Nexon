@@ -21,6 +21,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:docx_creator/docx_creator.dart';
 
 import 'package:nexon/widgets/nexon_chart.dart';
 import 'package:nexon/services/drive_sync_service.dart';
@@ -1189,7 +1190,7 @@ For every project, maintain a README.md at the project root.
           break;
         }
         historyForApi.addAll(
-          _sessions[idx].messages.take(assistantMessageIndex),
+          _compactHistoryForApi(_sessions[idx].messages, assistantMessageIndex),
         );
 
         final stream = _chatClient.sendChatStream(
@@ -1600,54 +1601,73 @@ For every project, maintain a README.md at the project root.
               );
 
             String mcpResult = '';
-            try {
-              final client = HttpClient()
-                ..connectionTimeout = const Duration(seconds: 60);
-              final request = await client.postUrl(Uri.parse(mcpEndpoint));
-              request.headers.contentType = ContentType.json;
-
-              final bytes = utf8.encode(jsonString);
-              request.headers.contentLength = bytes.length;
-              request.add(bytes);
-
-              final response = await request.close();
-              final body = await response.transform(utf8.decoder).join();
-              String cleanResult = body;
+            int maxRetries = 3;
+            int attempt = 0;
+            while (attempt < maxRetries) {
+              attempt++;
+              HttpClient? client;
               try {
-                final parsed = jsonDecode(body) as Map<String, dynamic>;
-                final resultData =
-                    parsed['result'] as Map<String, dynamic>? ?? parsed;
+                client = HttpClient()
+                  ..connectionTimeout = const Duration(seconds: 120);
+                final request = await client.postUrl(Uri.parse(mcpEndpoint))
+                    .timeout(const Duration(seconds: 120));
+                request.headers.contentType = ContentType.json;
 
-                if (resultData.containsKey('aiBlock')) {
-                  cleanResult = resultData['aiBlock'].toString();
-                } else if (resultData.containsKey('stdout')) {
-                  cleanResult = resultData['stdout'].toString();
-                  if (resultData.containsKey('diff') &&
-                      resultData['diff'].toString().isNotEmpty) {
-                    cleanResult +=
-                        '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                final bytes = utf8.encode(jsonString);
+                request.headers.contentLength = bytes.length;
+                request.add(bytes);
+
+                final response = await request.close()
+                    .timeout(const Duration(seconds: 120));
+                final body = await response.transform(utf8.decoder).join()
+                    .timeout(const Duration(seconds: 120));
+                
+                String cleanResult = body;
+                try {
+                  final parsed = jsonDecode(body) as Map<String, dynamic>;
+                  final resultData =
+                      parsed['result'] as Map<String, dynamic>? ?? parsed;
+
+                  if (resultData.containsKey('aiBlock')) {
+                    cleanResult = resultData['aiBlock'].toString();
+                  } else if (resultData.containsKey('stdout')) {
+                    cleanResult = resultData['stdout'].toString();
+                    if (resultData.containsKey('diff') &&
+                        resultData['diff'].toString().isNotEmpty) {
+                      cleanResult +=
+                          '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                    }
+                    if (resultData.containsKey('stderr') &&
+                        resultData['stderr'].toString().trim().isNotEmpty) {
+                      cleanResult +=
+                          '\n\n--- STDERR ---\n' +
+                          resultData['stderr'].toString();
+                    }
+                  } else if (resultData.containsKey('error')) {
+                    cleanResult = 'Error: ' + resultData['error'].toString();
                   }
-                  if (resultData.containsKey('stderr') &&
-                      resultData['stderr'].toString().trim().isNotEmpty) {
-                    cleanResult +=
-                        '\n\n--- STDERR ---\n' +
-                        resultData['stderr'].toString();
-                  }
-                } else if (resultData.containsKey('error')) {
-                  cleanResult = 'Error: ' + resultData['error'].toString();
+                } catch (_) {
+                  // Fallback to raw body if not JSON
                 }
-              } catch (_) {
-                // Fallback to raw body if not JSON
+                
+                mcpResult = cleanResult;
+                if (mcpResult.length > 32000) {
+                  mcpResult =
+                      mcpResult.substring(0, 16000) +
+                      '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
+                      mcpResult.substring(mcpResult.length - 6000);
+                }
+                break; // Success, break out of retry loop.
+              } catch (e) {
+                if (attempt >= maxRetries) {
+                  mcpResult = '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
+                } else {
+                  // Wait a short time before retrying
+                  await Future.delayed(Duration(milliseconds: 500 * attempt));
+                }
+              } finally {
+                client?.close(force: true);
               }
-              mcpResult = cleanResult;
-              if (mcpResult.length > 32000) {
-                mcpResult =
-                    mcpResult.substring(0, 16000) +
-                    '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
-                    mcpResult.substring(mcpResult.length - 6000);
-              }
-            } catch (e) {
-              mcpResult = '{"error": "$e"}';
             }
             if (mounted) setState(() => _toolStatus = '');
             toolOutputs.add("Tool Result [${toolMethod}]:\n\n$mcpResult");
@@ -1713,6 +1733,106 @@ For every project, maintain a README.md at the project root.
         ChatClient.fetchLiveWallet();
       }
     }
+  }
+
+  List<ChatMessage> _compactHistoryForApi(List<ChatMessage> messages, int assistantMessageIndex) {
+    final List<ChatMessage> rawHistory = messages.take(assistantMessageIndex).toList();
+    if (rawHistory.length <= 4) {
+      return rawHistory;
+    }
+
+    final List<ChatMessage> compacted = [];
+    
+    // Always keep the first message (initial instruction/goal)
+    compacted.add(rawHistory.first);
+
+    // Preserve the last 3 messages fully to maintain immediate conversation flow
+    final intermediateEndIndex = rawHistory.length - 4;
+
+    for (int i = 1; i < rawHistory.length; i++) {
+      final msg = rawHistory[i];
+      
+      if (i > intermediateEndIndex) {
+        compacted.add(msg);
+        continue;
+      }
+
+      // Compact intermediate messages to reduce token footprint
+      if (msg.role == MessageRole.system) {
+        String newText = msg.text;
+        
+        if (newText.length > 1500) {
+          final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]').firstMatch(newText);
+          final mcpMatch = newText.contains('MCP Result:\n');
+          
+          if (toolResultMatch != null) {
+            final method = toolResultMatch.group(1);
+            newText = 'Tool Result [$method]:\n\n'
+                '[System: Detailed tool output (${newText.length} characters) omitted for context space. Operation completed successfully.]';
+          } else if (mcpMatch) {
+            newText = 'MCP Result:\n\n'
+                '[System: Detailed MCP tool output (${newText.length} characters) omitted for context space. Operation completed successfully.]';
+          } else if (newText.startsWith('Search results:\n') || newText.startsWith('Web Search results')) {
+            newText = '🔍 Web Search Results:\n\n'
+                '[System: Search results omitted for context space.]';
+          } else if (newText.startsWith('URL Content:\n') || newText.startsWith('Content of URL')) {
+            newText = '🌐 URL Content:\n\n'
+                '[System: Webpage content omitted for context space.]';
+          } else {
+            // General truncation for very long intermediate system messages
+            newText = newText.substring(0, 500) +
+                '\n\n... [${newText.length - 1000} characters omitted for context space] ...\n\n' +
+                newText.substring(newText.length - 500);
+          }
+        }
+        
+        compacted.add(ChatMessage(
+          role: msg.role,
+          text: newText,
+          isError: msg.isError,
+          reasoning: msg.reasoning,
+          images: msg.images,
+          files: const [], // Strip files from intermediate system messages
+        ));
+      } else if (msg.role == MessageRole.assistant) {
+        String newText = msg.text;
+        
+        if (newText.length > 2500) {
+          newText = newText.replaceAllMapped(
+            RegExp(r'<content>([\s\S]{1000,})</content>'),
+            (match) => '<content>... [Code content of length ${match.group(1)!.length} characters omitted for context space] ...</content>',
+          );
+          newText = newText.replaceAllMapped(
+            RegExp(r'<new_content>([\s\S]{1000,})</new_content>'),
+            (match) => '<new_content>... [New code content of length ${match.group(1)!.length} characters omitted for context space] ...</new_content>',
+          );
+          newText = newText.replaceAllMapped(
+            RegExp(r'<patches>([\s\S]{1000,})</patches>'),
+            (match) => '<patches>... [Patches data of length ${match.group(1)!.length} characters omitted] ...</patches>',
+          );
+        }
+        
+        compacted.add(ChatMessage(
+          role: msg.role,
+          text: newText,
+          isError: msg.isError,
+          reasoning: msg.reasoning,
+          images: msg.images,
+          files: const [],
+        ));
+      } else if (msg.role == MessageRole.user) {
+        compacted.add(ChatMessage(
+          role: msg.role,
+          text: msg.text,
+          isError: msg.isError,
+          reasoning: msg.reasoning,
+          images: msg.images,
+          files: const [], // Strip attached files from intermediate user messages to avoid re-sending large base64 contents
+        ));
+      }
+    }
+
+    return compacted;
   }
 
   /// Show permission dialog before executing a shell command.
@@ -2496,7 +2616,7 @@ For every project, maintain a README.md at the project root.
             provider: provider,
             settings: settings,
             model: model,
-            messages: stepMessages,
+            messages: _compactHistoryForApi(stepMessages, stepMessages.length),
           );
 
           await for (final chunk in stream) {
@@ -2792,49 +2912,66 @@ For every project, maintain a README.md at the project root.
                 continue;
               }
             }
-            try {
-              final client = HttpClient()
-                ..connectionTimeout = const Duration(seconds: 10);
-              final request = await client.postUrl(Uri.parse(mcpEndpoint));
-              request.headers.contentType = ContentType.json;
-              final bytes = utf8.encode(jsonString);
-              request.headers.contentLength = bytes.length;
-              request.add(bytes);
-              final response = await request.close();
-              final body = await response.transform(utf8.decoder).join();
-              String cleanResult = body;
+            int maxRetries = 3;
+            int attempt = 0;
+            while (attempt < maxRetries) {
+              attempt++;
+              HttpClient? client;
               try {
-                final parsed = jsonDecode(body) as Map<String, dynamic>;
-                final resultData =
-                    parsed['result'] as Map<String, dynamic>? ?? parsed;
-                if (resultData.containsKey('aiBlock')) {
-                  cleanResult = resultData['aiBlock'].toString();
-                } else if (resultData.containsKey('stdout')) {
-                  cleanResult = resultData['stdout'].toString();
-                  if (resultData.containsKey('diff') &&
-                      resultData['diff'].toString().isNotEmpty) {
-                    cleanResult +=
-                        '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                client = HttpClient()
+                  ..connectionTimeout = const Duration(seconds: 120);
+                final request = await client.postUrl(Uri.parse(mcpEndpoint))
+                    .timeout(const Duration(seconds: 120));
+                request.headers.contentType = ContentType.json;
+                final bytes = utf8.encode(jsonString);
+                request.headers.contentLength = bytes.length;
+                request.add(bytes);
+                final response = await request.close()
+                    .timeout(const Duration(seconds: 120));
+                final body = await response.transform(utf8.decoder).join()
+                    .timeout(const Duration(seconds: 120));
+                String cleanResult = body;
+                try {
+                  final parsed = jsonDecode(body) as Map<String, dynamic>;
+                  final resultData =
+                      parsed['result'] as Map<String, dynamic>? ?? parsed;
+                  if (resultData.containsKey('aiBlock')) {
+                    cleanResult = resultData['aiBlock'].toString();
+                  } else if (resultData.containsKey('stdout')) {
+                    cleanResult = resultData['stdout'].toString();
+                    if (resultData.containsKey('diff') &&
+                        resultData['diff'].toString().isNotEmpty) {
+                      cleanResult +=
+                          '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                    }
+                    if (resultData.containsKey('stderr') &&
+                        resultData['stderr'].toString().trim().isNotEmpty) {
+                      cleanResult +=
+                          '\n\n--- STDERR ---\n' +
+                          resultData['stderr'].toString();
+                    }
+                  } else if (resultData.containsKey('error')) {
+                    cleanResult = 'Error: ' + resultData['error'].toString();
                   }
-                  if (resultData.containsKey('stderr') &&
-                      resultData['stderr'].toString().trim().isNotEmpty) {
-                    cleanResult +=
-                        '\n\n--- STDERR ---\n' +
-                        resultData['stderr'].toString();
-                  }
-                } else if (resultData.containsKey('error')) {
-                  cleanResult = 'Error: ' + resultData['error'].toString();
+                } catch (_) {}
+                mcpResult = cleanResult;
+                if (mcpResult.length > 32000) {
+                  mcpResult =
+                      mcpResult.substring(0, 16000) +
+                      '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
+                      mcpResult.substring(mcpResult.length - 6000);
                 }
-              } catch (_) {}
-              mcpResult = cleanResult;
-              if (mcpResult.length > 32000) {
-                mcpResult =
-                    mcpResult.substring(0, 16000) +
-                    '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
-                    mcpResult.substring(mcpResult.length - 6000);
+                break; // Success, break out of retry loop.
+              } catch (e) {
+                if (attempt >= maxRetries) {
+                  mcpResult = '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
+                } else {
+                  // Wait a short time before retrying
+                  await Future.delayed(Duration(milliseconds: 500 * attempt));
+                }
+              } finally {
+                client?.close(force: true);
               }
-            } catch (e) {
-              mcpResult = '{"error": "$e"}';
             }
             stepMessages.add(
               ChatMessage(
@@ -2938,7 +3075,7 @@ For every project, maintain a README.md at the project root.
           provider: provider,
           settings: settings,
           model: model,
-          messages: stepMessages,
+          messages: _compactHistoryForApi(stepMessages, stepMessages.length),
         );
 
         var isThinking = false;
@@ -4496,16 +4633,46 @@ class _McpToolBlockState extends State<McpToolBlock> {
 
     if (widget.isXml) {
       final methodMatch = RegExp(
-        r'<method>([\s\S]*?)</method>',
+        r'<method[^>]*?>([\s\S]*?)</method\s*>',
+        caseSensitive: false,
       ).firstMatch(widget.mcpJson);
       if (methodMatch != null) {
         method = methodMatch.group(1)?.trim() ?? method;
       }
-      // Parse XML params for description
-      final paramRegex = RegExp(r'<([a-zA-Z0-9_]+)>([\s\S]*?)</\1>');
+      
+      // Parse XML params for description (direct tags)
+      final regex = RegExp(
+        r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
+        caseSensitive: false,
+      );
+      for (final match in regex.allMatches(widget.mcpJson)) {
+        final key = match.group(1)!.toLowerCase();
+        if (key != 'method') {
+          params[key] = match.group(2)?.trim() ?? '';
+        }
+      }
+
+      // Fallback: <PARAM name="key">value</PARAM>
+      final paramRegex = RegExp(
+        r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
+      );
       for (final m in paramRegex.allMatches(widget.mcpJson)) {
-        final key = m.group(1)!;
-        if (key != 'method') params[key] = m.group(2)?.trim() ?? '';
+        final key = m.group(1)!.toLowerCase();
+        if (key != 'method') {
+          params[key] = m.group(2)?.trim() ?? '';
+        }
+      }
+
+      // Fallback: <parameter name="key">value</parameter>
+      final paramRegex2 = RegExp(
+        r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
+        caseSensitive: false,
+      );
+      for (final m in paramRegex2.allMatches(widget.mcpJson)) {
+        final key = m.group(1)!.toLowerCase();
+        if (key != 'method') {
+          params[key] = m.group(2)?.trim() ?? '';
+        }
       }
       formattedContent = widget.mcpJson.trim();
     } else {
@@ -4642,6 +4809,67 @@ class _PermissionInfoRow extends StatelessWidget {
   }
 }
 
+TextSpan _highlightCode(String code, String language) {
+  final lang = language.toLowerCase();
+  
+  final List<String> keywords;
+  if (lang == 'python' || lang == 'py') {
+    keywords = ['def', 'class', 'import', 'from', 'as', 'return', 'if', 'elif', 'else', 'for', 'while', 'in', 'is', 'not', 'and', 'or', 'try', 'except', 'finally', 'pass', 'lambda', 'with', 'assert', 'global', 'nonlocal', 'del', 'yield', 'None', 'True', 'False'];
+  } else if (lang == 'dart' || lang == 'java' || lang == 'kotlin' || lang == 'go' || lang == 'rust' || lang == 'rs') {
+    keywords = ['class', 'import', 'package', 'void', 'return', 'if', 'else', 'for', 'while', 'in', 'try', 'catch', 'finally', 'final', 'const', 'var', 'let', 'static', 'extends', 'implements', 'interface', 'mixin', 'with', 'as', 'is', 'new', 'this', 'super', 'switch', 'case', 'default', 'break', 'continue', 'async', 'await', 'yield', 'fn', 'pub', 'use', 'impl', 'struct', 'enum', 'mut', 'let'];
+  } else if (lang == 'javascript' || lang == 'js' || lang == 'typescript' || lang == 'ts') {
+    keywords = ['class', 'import', 'export', 'from', 'function', 'return', 'if', 'else', 'for', 'while', 'in', 'of', 'try', 'catch', 'finally', 'const', 'let', 'var', 'new', 'this', 'super', 'switch', 'case', 'default', 'break', 'continue', 'async', 'await', 'yield', 'type', 'interface', 'namespace', 'typeof', 'instanceof', 'true', 'false', 'null', 'undefined'];
+  } else {
+    keywords = ['class', 'import', 'export', 'void', 'function', 'return', 'if', 'else', 'for', 'while', 'try', 'catch', 'finally', 'const', 'let', 'var', 'final', 'def', 'fn', 'true', 'false', 'null'];
+  }
+
+  final keywordSet = keywords.toSet();
+
+  // Regex tokenization groups:
+  // 1. Block comments
+  // 2. Line comments
+  // 3. Strings (double, single, or backtick quotes)
+  // 4. Numbers
+  // 5. Identifiers/Words
+  final pattern = RegExp(
+    r'''(/\*[\s\S]*?\*/)|(//.*|#.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d+(?:\.\d+)?\b)|(\b[a-zA-Z_][a-zA-Z0-9_]*\b)|([\s\S])''',
+  );
+
+  final spans = <TextSpan>[];
+  final matches = pattern.allMatches(code);
+
+  for (final m in matches) {
+    final text = m.group(0)!;
+    if (m.group(1) != null || m.group(2) != null) {
+      // Comments
+      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFF7A828F))));
+    } else if (m.group(3) != null) {
+      // Strings
+      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFF98C379))));
+    } else if (m.group(4) != null) {
+      // Numbers
+      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFD19A66))));
+    } else if (m.group(5) != null) {
+      // Words
+      if (keywordSet.contains(text)) {
+        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFC678DD), fontWeight: FontWeight.bold)));
+      } else if (RegExp(r'^[A-Z]').hasMatch(text)) {
+        // Classes/Types
+        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFE5C07B))));
+      } else if (text == 'void' || text == 'int' || text == 'double' || text == 'num' || text == 'bool' || text == 'dynamic') {
+        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFE5C07B))));
+      } else {
+        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFABB2BF))));
+      }
+    } else {
+      // Operators, braces, spaces
+      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFABB2BF))));
+    }
+  }
+
+  return TextSpan(children: spans);
+}
+
 class CodeBlockWidget extends StatelessWidget {
   const CodeBlockWidget({
     required this.code,
@@ -4716,10 +4944,9 @@ class CodeBlockWidget extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.all(14),
-            child: SelectableText(
-              code,
+            child: SelectableText.rich(
+              _highlightCode(code, language),
               style: GoogleFonts.jetBrainsMono(
-                color: const Color(0xFFE5C07B),
                 fontSize: 13,
                 height: 1.45,
               ),
@@ -4815,12 +5042,11 @@ class FileArtifactWidget extends StatelessWidget {
           Container(
             constraints: const BoxConstraints(maxHeight: 260),
             padding: const EdgeInsets.all(12),
-            color: const Color(0xFF1E1915),
+            color: const Color(0xFF1E1E1E),
             child: SingleChildScrollView(
-              child: SelectableText(
-                content,
+              child: SelectableText.rich(
+                _highlightCode(content, language),
                 style: GoogleFonts.jetBrainsMono(
-                  color: const Color(0xFFFFF7EC),
                   fontSize: 12,
                   height: 1.4,
                 ),
@@ -4949,11 +5175,25 @@ List<ContentBlock> parseContentBlocks(String text) {
       }
     } else {
       final lines = part.split('\n');
-      final language = lines.first.trim();
-      final codeContent = lines.skip(1).join('\n');
-      blocks.add(
-        ContentBlock(isCode: true, content: codeContent, language: language),
-      );
+      final firstLine = lines.first.trim();
+      
+      bool isValidLanguageIdentifier(String lang) {
+        if (lang.isEmpty) return true;
+        // A valid language prefix shouldn't contain spaces, quotes, brackets, or math operators, and shouldn't be too long.
+        final invalidChars = RegExp(r"[\s\(\)\{\}\[\]\=\+\-\*\/\\;,'\.]");
+        return !invalidChars.hasMatch(lang) && lang.length <= 20;
+      }
+
+      if (isValidLanguageIdentifier(firstLine)) {
+        final codeContent = lines.skip(1).join('\n');
+        blocks.add(
+          ContentBlock(isCode: true, content: codeContent, language: firstLine),
+        );
+      } else {
+        blocks.add(
+          ContentBlock(isCode: true, content: part, language: ''),
+        );
+      }
     }
   }
   return blocks;
@@ -5517,239 +5757,7 @@ class MessageBubble extends StatelessWidget {
             else ...[
               if (message.reasoning.isNotEmpty && reasoningEnabled)
                 ThoughtBlock(thought: message.reasoning),
-              if (message.text.contains('<research_state>'))
-                Builder(
-                  builder: (context) {
-                    try {
-                      final startIndex = message.text.indexOf(
-                        '<research_state>',
-                      );
-                      final endIndex = message.text.indexOf(
-                        '</research_state>',
-                      );
-                      final jsonStr = message.text
-                          .substring(startIndex + 16, endIndex)
-                          .trim();
-                      final stateMap =
-                          jsonDecode(jsonStr) as Map<String, dynamic>;
-                      final textBefore = message.text
-                          .substring(0, startIndex)
-                          .trim();
-                      var cleanTextBefore = textBefore;
-                      if (cleanTextBefore.contains('<research_plan>')) {
-                        final planIndex = cleanTextBefore.indexOf(
-                          '<research_plan>',
-                        );
-                        final planEndIndex = cleanTextBefore.indexOf(
-                          '</research_plan>',
-                          planIndex,
-                        );
-                        if (planEndIndex != -1) {
-                          cleanTextBefore =
-                              (cleanTextBefore.substring(0, planIndex) +
-                                      cleanTextBefore.substring(
-                                        planEndIndex + 16,
-                                      ))
-                                  .trim();
-                        } else {
-                          cleanTextBefore = cleanTextBefore
-                              .substring(0, planIndex)
-                              .trim();
-                        }
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (cleanTextBefore.isNotEmpty) ...[
-                            ..._buildBlocks(context, cleanTextBefore),
-                            const SizedBox(height: 12),
-                          ],
-                          ResearchPlanWidget(
-                            stateMap: stateMap,
-                            workspaceDir: agenticWorkspace,
-                            fileName: fileName,
-                            onStartResearch: onStartResearch,
-                          ),
-                        ],
-                      );
-                    } catch (_) {
-                      return const Text(
-                        'Error rendering research state',
-                        style: TextStyle(color: Colors.red),
-                      );
-                    }
-                  },
-                )
-              else if (message.text.contains('<search_request>'))
-                Builder(
-                  builder: (context) {
-                    try {
-                      final startIndex = message.text.indexOf(
-                        '<search_request>',
-                      );
-                      final endIndex = message.text.indexOf(
-                        '</search_request>',
-                      );
-                      final query = message.text
-                          .substring(startIndex + 16, endIndex)
-                          .trim();
-                      return Container(
-                        margin: const EdgeInsets.symmetric(vertical: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF0F5FA),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFD0E0F0)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.search,
-                              color: Color(0xFF2B6CB0),
-                              size: 16,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Tool Use: Searched the web for "$query"',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF2B6CB0),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    } catch (_) {
-                      return const Text(
-                        'Error rendering search request',
-                        style: TextStyle(color: Colors.red),
-                      );
-                    }
-                  },
-                )
-              else if (message.text.contains('<read_url>'))
-                Builder(
-                  builder: (context) {
-                    try {
-                      final startIndex = message.text.indexOf('<read_url>');
-                      final endIndex = message.text.indexOf('</read_url>');
-                      final url = message.text
-                          .substring(startIndex + 10, endIndex)
-                          .trim();
-                      return Container(
-                        margin: const EdgeInsets.symmetric(vertical: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF0F5FA),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFD0E0F0)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.link,
-                              color: Color(0xFF2B6CB0),
-                              size: 16,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Tool Use: Reading webpage at "$url"',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF2B6CB0),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    } catch (_) {
-                      return const Text(
-                        'Error rendering read_url request',
-                        style: TextStyle(color: Colors.red),
-                      );
-                    }
-                  },
-                )
-              else if (message.text.contains('<mcp_request>') ||
-                  message.text.contains('<tool_request>') ||
-                  message.text.contains('<command>'))
-                Builder(
-                  builder: (context) {
-                    try {
-                      final isXml =
-                          message.text.contains('<tool_request>') ||
-                          message.text.contains('<command>');
-                      final openTag = message.text.contains('<tool_request>')
-                          ? '<tool_request>'
-                          : (message.text.contains('<command>')
-                                ? '<command>'
-                                : '<mcp_request>');
-                      final closeTag = message.text.contains('</tool_request>')
-                          ? '</tool_request>'
-                          : (message.text.contains('</command>')
-                                ? '</command>'
-                                : '</mcp_request>');
-
-                      final startIndex = message.text.indexOf(openTag);
-                      final endIndex = message.text.indexOf(closeTag);
-                      final textBefore = message.text
-                          .substring(0, startIndex)
-                          .trim();
-
-                      if (endIndex == -1) {
-                        var contentStr = message.text
-                            .substring(startIndex + openTag.length)
-                            .trim();
-                        if (openTag == '<command>') {
-                          contentStr =
-                              '<method>run_command</method><command>$contentStr</command>';
-                        }
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (textBefore.isNotEmpty)
-                              ..._buildBlocks(context, textBefore),
-                            McpToolBlock(mcpJson: contentStr, isXml: isXml),
-                          ],
-                        );
-                      } else {
-                        var contentStr = message.text
-                            .substring(startIndex + openTag.length, endIndex)
-                            .trim();
-                        if (openTag == '<command>') {
-                          contentStr =
-                              '<method>run_command</method><command>$contentStr</command>';
-                        }
-                        final textAfter = message.text
-                            .substring(endIndex + closeTag.length)
-                            .trim();
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (textBefore.isNotEmpty)
-                              ..._buildBlocks(context, textBefore),
-                            McpToolBlock(mcpJson: contentStr, isXml: isXml),
-                            if (textAfter.isNotEmpty)
-                              ..._buildBlocks(context, textAfter),
-                          ],
-                        );
-                      }
-                    } catch (e) {
-                      return Text(
-                        'Error rendering tool request: $e',
-                        style: const TextStyle(color: Colors.red),
-                      );
-                    }
-                  },
-                )
-              else
-                ..._buildBlocks(context, message.text),
+              ..._parseRichMessageContent(context, message.text),
             ],
             const SizedBox(height: 4),
             const Divider(color: Color(0xFFE7D8C4), height: 1),
@@ -5757,6 +5765,160 @@ class MessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  List<Widget> _parseRichMessageContent(BuildContext context, String text) {
+    final widgets = <Widget>[];
+    int currentIndex = 0;
+
+    final tags = [
+      (tag: '<research_state>', isXml: false),
+      (tag: '<search_request>', isXml: false),
+      (tag: '<read_url>', isXml: false),
+      (tag: '<mcp_request>', isXml: false),
+      (tag: '<tool_request>', isXml: true),
+      (tag: '<command>', isXml: true),
+    ];
+
+    while (currentIndex < text.length) {
+      final substring = text.substring(currentIndex);
+      int earliestIndex = -1;
+      var matchedTag = tags.first;
+
+      for (final tagInfo in tags) {
+        final idx = substring.indexOf(tagInfo.tag);
+        if (idx != -1) {
+          if (earliestIndex == -1 || idx < earliestIndex) {
+            earliestIndex = idx;
+            matchedTag = tagInfo;
+          }
+        }
+      }
+
+      if (earliestIndex == -1) {
+        final remaining = substring.trim();
+        if (remaining.isNotEmpty) {
+          widgets.addAll(_buildBlocks(context, remaining));
+        }
+        break;
+      }
+
+      final textBefore = substring.substring(0, earliestIndex).trim();
+      if (textBefore.isNotEmpty) {
+        widgets.addAll(_buildBlocks(context, textBefore));
+      }
+
+      final tagStartIndex = currentIndex + earliestIndex;
+      final openTag = matchedTag.tag;
+      final closeTag = openTag.replaceFirst('<', '</');
+
+      final tagContentStartIndex = tagStartIndex + openTag.length;
+      final closeTagIndexInFull = text.indexOf(closeTag, tagContentStartIndex);
+
+      if (closeTagIndexInFull == -1) {
+        // Unclosed tag (streaming fallback)
+        final contentStr = text.substring(tagContentStartIndex).trim();
+        widgets.add(_buildSpecializedWidget(openTag, contentStr, matchedTag.isXml));
+        break;
+      }
+
+      final contentStr = text.substring(tagContentStartIndex, closeTagIndexInFull).trim();
+      widgets.add(_buildSpecializedWidget(openTag, contentStr, matchedTag.isXml));
+
+      currentIndex = closeTagIndexInFull + closeTag.length;
+    }
+
+    return widgets;
+  }
+
+  Widget _buildSpecializedWidget(String openTag, String content, bool isXml) {
+    try {
+      switch (openTag) {
+        case '<research_state>':
+          {
+            var cleanContent = content;
+            if (cleanContent.contains('<research_plan>')) {
+              final planIndex = cleanContent.indexOf('<research_plan>');
+              final planEndIndex = cleanContent.indexOf('</research_plan>', planIndex);
+              if (planEndIndex != -1) {
+                cleanContent = (cleanContent.substring(0, planIndex) +
+                    cleanContent.substring(planEndIndex + 16)).trim();
+              } else {
+                cleanContent = cleanContent.substring(0, planIndex).trim();
+              }
+            }
+            final stateMap = jsonDecode(cleanContent) as Map<String, dynamic>;
+            return ResearchPlanWidget(
+              stateMap: stateMap,
+              workspaceDir: agenticWorkspace,
+              fileName: fileName,
+              onStartResearch: onStartResearch,
+            );
+          }
+        case '<search_request>':
+          return Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F5FA),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFD0E0F0)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.search, color: Color(0xFF2B6CB0), size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Tool Use: Searched the web for "$content"',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2B6CB0),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        case '<read_url>':
+          return Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F5FA),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFD0E0F0)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.link, color: Color(0xFF2B6CB0), size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Tool Use: Reading webpage at "$content"',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2B6CB0),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        case '<command>':
+          final contentStr = '<method>run_command</method><command>$content</command>';
+          return McpToolBlock(mcpJson: contentStr, isXml: true);
+        default: // <mcp_request>, <tool_request>
+          return McpToolBlock(mcpJson: content, isXml: isXml);
+      }
+    } catch (e) {
+      return Text(
+        'Error rendering $openTag: $e',
+        style: const TextStyle(color: Colors.red),
+      );
+    }
   }
 
   List<Widget> _buildToolResultDetails(BuildContext context, String text) {
@@ -11704,55 +11866,12 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
     setState(() => _exporting = true);
 
     try {
-      final docxDir = Directory('${widget.workspacePath}/.termux_forge');
-      if (!docxDir.existsSync()) {
-        docxDir.createSync(recursive: true);
-      }
+      // Use docx_creator to generate the DOCX natively in Dart
+      final elements = await MarkdownParser.parse(widget.docxContent);
+      final doc = DocxBuiltDocument(elements: elements);
+      final docxBytes = DocxExporter().exportToBytes(doc);
 
-      final tempMdFile = File('${docxDir.path}/temp_doc.md');
-      await tempMdFile.writeAsString(widget.docxContent);
-
-      final tempDocxPath = '${docxDir.path}/temp_compiled.docx';
-
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 45);
-      final request = await client.postUrl(
-        Uri.parse('http://127.0.0.1:8390/mcp'),
-      );
-      request.headers.contentType = ContentType.json;
-
-      final jsonString = jsonEncode({
-        'method': 'run_command',
-        'params': {
-          'command':
-              'python3 /data/data/com.termux/files/home/projects/termux_forge/python_bridge/generate_docx.py "${tempMdFile.path}" "$tempDocxPath"',
-          'cwd': widget.workspacePath,
-        },
-      });
-
-      final bytes = utf8.encode(jsonString);
-      request.headers.contentLength = bytes.length;
-      request.add(bytes);
-
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
-
-      if (!body.contains('Success: Saved document')) {
-        throw Exception(body);
-      }
-
-      final tempDocxFile = File(tempDocxPath);
-      if (!tempDocxFile.existsSync()) {
-        throw Exception('Compiled document not found.');
-      }
-
-      final docxBytes = await tempDocxFile.readAsBytes();
-
-      try {
-        await tempMdFile.delete();
-        await tempDocxFile.delete();
-      } catch (_) {}
-
+      // Determine filename from content
       String filename = 'document.docx';
       final match = RegExp(
         r'^title:\s*(.*)$',
@@ -11771,7 +11890,7 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
       final String? savePath = await FilePicker.platform.saveFile(
         dialogTitle: 'Save Word Document',
         fileName: filename,
-        bytes: docxBytes,
+        bytes: Uint8List.fromList(docxBytes),
       );
 
       if (savePath == null) {
