@@ -633,7 +633,7 @@ class DriveSyncService {
           final newAccess = body['access_token'] as String?;
           if (newAccess != null && newRefresh != null) {
             try {
-              await supabase.auth.setSession(newAccess);
+              await supabase.auth.setSession(newRefresh);
             } catch (_) {
               // setSession may fail on some SDK versions — non-fatal
             }
