@@ -6529,24 +6529,103 @@ class Composer extends StatelessWidget {
 }
 
 bool modelHasVision(String modelName) {
+  // First check the runtime-populated set (from API modality metadata)
   if (ChatClient.modelsWithVision.contains(modelName)) return true;
 
   final lower = modelName.toLowerCase();
-  if (lower.contains('deepseek-r1') || lower.contains('llama-3.3')) {
-    return false; // Specifically disable vision for these large language-only models if they accidentally match
+
+  // Known text-only models that might accidentally match patterns below
+  if (lower.contains('deepseek-r1') ||
+      lower.contains('llama-3.3') ||
+      lower.contains('deepseek-v3') ||
+      lower.contains('llama-3.1')) {
+    return false;
   }
-  return lower.contains('vision') ||
-      lower.contains('gpt-4o') ||
+
+  // ── Explicit multimodal patterns ──────────────────────────────────
+  // Generic capability keywords
+  if (lower.contains('vision') ||
+      lower.contains('vl') ||
+      lower.contains('vlm') ||
+      lower.contains('visual') ||
+      lower.contains('multimodal') ||
+      lower.contains('omni') ||
+      lower.contains('llava') ||
+      lower.contains('moondream') ||
+      lower.contains('pixtral') ||
+      lower.contains('minicpm-v') ||
+      lower.contains('internvl') ||
+      lower.contains('smolvlm') ||
+      lower.contains('cogvlm') ||
+      lower.contains('idefics') ||
+      lower.contains('bakllava')) {
+    return true;
+  }
+
+  // OpenAI family
+  if (lower.contains('gpt-4o') ||
       lower.contains('gpt-4-turbo') ||
-      lower.contains('claude-3') ||
-      lower.contains('gemini-1.5') ||
+      lower.contains('gpt-4.1') ||
+      lower.contains('o1') && lower.contains('mini') ||
+      lower.contains('chatgpt-4o')) {
+    return true;
+  }
+
+  // Anthropic Claude (claude-3+ are all multimodal; claude-4+ too)
+  if (lower.contains('claude-3') || lower.contains('claude-4')) return true;
+
+  // Google Gemini (1.5+, 2.0+, 2.5+ are all multimodal)
+  if (lower.contains('gemini-1.5') ||
       lower.contains('gemini-2.0') ||
       lower.contains('gemini-2.5') ||
+      lower.contains('gemini-2') ||
+      lower.contains('gemini-flash') ||
+      lower.contains('gemini-pro')) {
+    return true;
+  }
+
+  // Qwen VL variants
+  if (lower.contains('qwen-vl') ||
+      lower.contains('qwen2-vl') ||
+      lower.contains('qwen2.5-vl') ||
+      lower.contains('qwen-vl')) {
+    return true;
+  }
+
+  // Llama multimodal variants
+  if (lower.contains('llama-3.2-11b') ||
+      lower.contains('llama-3.2-90b') ||
+      lower.contains('llama3.2-vision') ||
+      lower.contains('llama-3.2-vision')) {
+    return true;
+  }
+
+  // Microsoft Phi vision models
+  if (lower.contains('phi-3-vision') ||
+      lower.contains('phi3-vision') ||
+      lower.contains('phi-3.5-vision') ||
+      lower.contains('phi-4-vision') ||
+      lower.contains('phi-4-multimodal')) {
+    return true;
+  }
+
+  // Google Gemma multimodal (gemma3 has vision)
+  if (lower.contains('gemma3') || lower.contains('gemma-3')) return true;
+
+  // Mistral multimodal
+  if (lower.contains('mistral-small-3') ||
       lower.contains('pixtral') ||
-      lower.contains('llava') ||
-      lower.contains('qwen-vl') ||
-      lower.contains('llama-3.2-11b') ||
-      lower.contains('llama-3.2-90b');
+      lower.contains('mistral-medium-3')) {
+    return true;
+  }
+
+  // Molmo
+  if (lower.contains('molmo')) return true;
+
+  // Aria
+  if (lower.contains('aria')) return true;
+
+  return false;
 }
 
 class MediaAndModelSheet extends StatefulWidget {
@@ -6700,8 +6779,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   @override
   void didUpdateWidget(covariant MediaAndModelSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.settings.model != widget.settings.model ||
-        oldWidget.provider.id != widget.provider.id ||
+    final providerChanged = oldWidget.provider.id != widget.provider.id;
+    final modelChanged = oldWidget.settings.model != widget.settings.model;
+    if (providerChanged ||
+        modelChanged ||
         oldWidget.settings.maxTokens != widget.settings.maxTokens ||
         oldWidget.settings.reasoningEnabled !=
             widget.settings.reasoningEnabled ||
@@ -6711,9 +6792,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         oldWidget.searchSettings.provider != widget.searchSettings.provider) {
       setState(() {
         _selectedProviderId = widget.provider.id;
-        _selectedModel = widget.settings.model.isNotEmpty
-            ? widget.settings.model
-            : widget.provider.models.first;
+        // When provider changes, reset to that provider's default model.
+        // When only model changes (e.g. session switch), honour the new value.
+        if (providerChanged) {
+          _selectedModel = widget.settings.model.isNotEmpty
+              ? widget.settings.model
+              : widget.provider.models.first;
+        } else if (modelChanged) {
+          _selectedModel = widget.settings.model.isNotEmpty
+              ? widget.settings.model
+              : _selectedModel;
+        }
         _maxTokens = widget.settings.maxTokens;
         _reasoningEnabled = widget.settings.reasoningEnabled;
         _searchEnabled = widget.searchSettings.enabled;
@@ -6798,10 +6887,14 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       final models = await widget.onFetchModels();
       if (mounted) {
         setState(() {
-          if (!models.contains(_selectedModel) && models.isNotEmpty) {
+          // Keep the current selection if it exists in the new list.
+          // Only fall back to first model if current selection is absent.
+          if (models.isNotEmpty && !models.contains(_selectedModel)) {
             _selectedModel = models.first;
             widget.onModelChanged(_selectedModel);
           }
+          // Re-evaluate vision capability after fresh model list is loaded
+          // (modelsWithVision is populated during fetchModels)
         });
       }
     } catch (error) {
@@ -9640,40 +9733,97 @@ class ChatClient {
         throw HttpException('HTTP ${response.statusCode}: $body');
       }
       final decoded = jsonDecode(body);
+
+      // ── OpenAI-compatible /v1/models → {"data": [...]} ──
       final data = decoded is Map<String, dynamic> ? decoded['data'] : null;
       if (data is List) {
-        return data
-            .map((item) {
-              if (item is String) return item;
-              if (item is Map) {
-                final id = item['id']?.toString() ?? '';
-                final arch = item['architecture'];
-                if (arch is Map) {
-                  final modality =
-                      arch['modality']?.toString().toLowerCase() ?? '';
-                  if (modality.isNotEmpty && !modality.endsWith('text')) {
-                    return ''; // Filter out non-text generation models
-                  }
-                  if (modality.contains('image') ||
-                      modality.contains('vision')) {
-                    ChatClient.modelsWithVision.add(id);
+        final names = <String>[];
+        for (final item in data) {
+          if (item is String) {
+            names.add(item);
+            continue;
+          }
+          if (item is! Map) continue;
+          final id = item['id']?.toString() ?? '';
+          if (id.isEmpty) continue;
+
+          // OpenRouter-style architecture.modality field
+          final arch = item['architecture'];
+          if (arch is Map) {
+            final modality = arch['modality']?.toString().toLowerCase() ?? '';
+            // Keep only models that accept text (possibly + image) as input
+            // and produce text as output. Reject pure image/audio generators.
+            // Modality format: "<inputs>-><outputs>" e.g. "text+image->text"
+            final outputPart = modality.contains('->')
+                ? modality.split('->').last
+                : modality;
+            if (modality.isNotEmpty && !outputPart.contains('text')) {
+              continue; // Skip non-text-generating models
+            }
+            final inputPart = modality.contains('->')
+                ? modality.split('->').first
+                : modality;
+            if (inputPart.contains('image') || inputPart.contains('vision')) {
+              ChatClient.modelsWithVision.add(id);
+            }
+          }
+
+          // Some providers expose capabilities/input_modalities array
+          final caps = item['capabilities'] ?? item['input_modalities'];
+          if (caps is List) {
+            for (final cap in caps) {
+              final capStr = cap.toString().toLowerCase();
+              if (capStr.contains('image') || capStr.contains('vision')) {
+                ChatClient.modelsWithVision.add(id);
+              }
+            }
+          }
+
+          names.add(id);
+        }
+        return names.where((m) => m.trim().isNotEmpty).toSet().toList();
+      }
+
+      // ── Ollama /api/tags → {"models": [{"name":..., "details":{...}}]} ──
+      if (decoded is Map<String, dynamic> && decoded['models'] is List) {
+        final names = <String>[];
+        for (final item in (decoded['models'] as List)) {
+          String name = '';
+          if (item is String) {
+            name = item;
+          } else if (item is Map) {
+            name = (item['name'] ?? item['id'] ?? '').toString();
+            // Ollama exposes model families in details.families
+            // Models with 'clip' family support image input (LLaVA, Gemma3, etc.)
+            final details = item['details'];
+            if (details is Map) {
+              final families = details['families'];
+              if (families is List) {
+                for (final fam in families) {
+                  final famStr = fam.toString().toLowerCase();
+                  if (famStr == 'clip' ||
+                      famStr.contains('vision') ||
+                      famStr.contains('vl')) {
+                    ChatClient.modelsWithVision.add(name);
                   }
                 }
-                return id;
               }
-              return '';
-            })
-            .where((model) => model.trim().isNotEmpty)
-            .toSet()
-            .toList();
+            }
+            // Also check model info capabilities if available
+            final caps = item['capabilities'];
+            if (caps is List) {
+              for (final cap in caps) {
+                if (cap.toString().toLowerCase() == 'vision') {
+                  ChatClient.modelsWithVision.add(name);
+                }
+              }
+            }
+          }
+          if (name.trim().isNotEmpty) names.add(name);
+        }
+        return names.where((m) => m.trim().isNotEmpty).toSet().toList();
       }
-      if (decoded is Map<String, dynamic> && decoded['models'] is List) {
-        return (decoded['models'] as List)
-            .map((item) => item.toString())
-            .where((model) => model.trim().isNotEmpty)
-            .toSet()
-            .toList();
-      }
+
       return provider.models;
     } finally {
       client.close(force: true);
