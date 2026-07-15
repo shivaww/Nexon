@@ -870,7 +870,23 @@ jobs:
 
         final List<ChatMessage> historyForApi = [];
         final currentDateStr = DateTime.now().toString().substring(0, 10);
-        }
+        String systemPromptText = "";
+
+        if (_deepResearchEnabled && !currentSession.messages.any((m) => m.text.contains('<research_state>'))) {
+          systemPromptText = DeepResearchPrompts.plannerSystemPrompt;
+        } else {
+          systemPromptText =
+              "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
+              "Render via markdown code blocks:\n"
+              "- LaTeX: \\[ ... \\] or \\( ... \\)\n";
+
+          if (_svgVisualsEnabled) {
+            systemPromptText +=
+                "- SVG (ONLY for non-graph diagrams like flowcharts, architecture, illustrations): ```svg\n"
+                "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
+                "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
+                "  NEVER use SVG for charts, graphs, or mind maps. Use ```chart instead.\n\n";
+          }
 
         systemPromptText +=
             "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, cartesian, mindmap): ```chart\n"
