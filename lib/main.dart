@@ -2800,7 +2800,8 @@ For every project, maintain a README.md at the project root.
     required ProviderSettings settings,
     required String model,
   }) async {
-    final steps = stateMap['steps'] as List;
+    try {
+      final steps = stateMap['steps'] as List;
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
 
@@ -3761,6 +3762,33 @@ For every project, maintain a README.md at the project root.
               role: MessageRole.assistant,
               text: finalReportText,
               reasoning: finalReasoningText,
+            ),
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
+          _sendingSessionIds.remove(_sessions[sessionIndex].id);
+        });
+        await _saveSessions();
+      }
+    }
+    } catch (globalError) {
+      debugPrint("Global Deep Research Loop error: $globalError");
+      stateMap['status'] = 'completed'; // resolve it
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          if (messageIndex < msgs.length) {
+            msgs[messageIndex] = ChatMessage(
+              role: MessageRole.assistant,
+              text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+              reasoning: msgs[messageIndex].reasoning,
+            );
+          }
+          msgs.add(
+            ChatMessage(
+              role: MessageRole.assistant,
+              text: "⚠️ Deep Research encountered an unexpected error and stopped:\n\n```\n$globalError\n```\n\nPlease check your configuration, local server status, or try again.",
             ),
           );
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
@@ -11886,6 +11914,63 @@ class ChatClient {
                   )
                   .join('\n\n');
             }
+          } else if (provider == 'duckduckgo') {
+            final uri = Uri.parse('https://lite.duckduckgo.com/lite/');
+            final request = await client.postUrl(uri);
+            request.headers.contentType =
+                ContentType('application', 'x-www-form-urlencoded');
+            request.headers.set(
+              'User-Agent',
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            );
+            final bodyBytes = utf8.encode('q=${Uri.encodeQueryComponent(query)}');
+            request.headers.contentLength = bodyBytes.length;
+            request.add(bodyBytes);
+
+            final response = await request.close();
+            final body = await response.transform(utf8.decoder).join();
+
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              throw HttpException('HTTP ${response.statusCode}: $body');
+            }
+
+            final results = <String>[];
+            final resultRegex = RegExp(
+              r"""<a\s+rel="nofollow"\s+href="([^"]+)"\s+class='result-link'>([\s\S]*?)</a>[\s\S]*?<td\s+class='result-snippet'>([\s\S]*?)</td>""",
+              caseSensitive: false,
+            );
+            final matches = resultRegex.allMatches(body);
+            for (final match in matches) {
+              var rawUrl = match.group(1) ?? '';
+              var title = match.group(2) ?? '';
+              var snippet = match.group(3) ?? '';
+
+              title = title.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&amp;', '&').trim();
+              snippet = snippet.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&amp;', '&').trim();
+
+              var decodedUrl = rawUrl;
+              if (rawUrl.contains('uddg=')) {
+                final uddgIndex = rawUrl.indexOf('uddg=') + 5;
+                final ampIndex = rawUrl.indexOf('&', uddgIndex);
+                final encodedUrl = (ampIndex != -1)
+                    ? rawUrl.substring(uddgIndex, ampIndex)
+                    : rawUrl.substring(uddgIndex);
+                decodedUrl = Uri.decodeComponent(encodedUrl);
+              } else if (rawUrl.startsWith('//')) {
+                decodedUrl = 'https:$rawUrl';
+              }
+
+              if (decodedUrl.isNotEmpty && title.isNotEmpty) {
+                results.add('- [$title]($decodedUrl): $snippet');
+              }
+              if (results.length >= 4) break;
+            }
+
+            if (results.isNotEmpty) {
+              return results.join('\n\n');
+            } else {
+              throw Exception('No search results found on DuckDuckGo');
+            }
           }
         } catch (e) {
           if (i < keys.length - 1) {
@@ -11899,6 +11984,14 @@ class ChatClient {
       }
       return 'No search results found.';
     } catch (e) {
+      if (provider == 'tavily') {
+        debugPrint('Tavily search failed: $e. Falling back to DuckDuckGo...');
+        try {
+          return await searchWeb(query, 'duckduckgo', ['']);
+        } catch (fallbackError) {
+          return 'Web search failed: $fallbackError';
+        }
+      }
       return 'Web search failed: $e';
     } finally {
       client.close(force: true);

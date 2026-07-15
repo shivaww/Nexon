@@ -25,6 +25,11 @@ class LlamaCppEmbedder:
     def _discover_model() -> Path | None:
         configured = os.getenv("DEEP_RESEARCH_EMBEDDING_MODEL")
         candidates = [Path(configured).expanduser()] if configured else []
+        
+        # Check relative to projects folder (python_bridge/models/)
+        pkg_dir = Path(__file__).resolve().parents[2]
+        candidates.append(pkg_dir / "models" / "embeddinggemma-300m-Q4_0.gguf")
+        
         home = Path.home()
         candidates.extend([
             home / "embeddinggemma-300m-Q4_0.gguf",

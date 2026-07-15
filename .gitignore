@@ -64,3 +64,6 @@ venv/
 # Logs
 *.log
 bridge.log
+
+# RAG Models
+python_bridge/models/
