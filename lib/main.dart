@@ -2520,6 +2520,80 @@ For every project, maintain a README.md at the project root.
     return 'research_$slug.md';
   }
 
+  String _updateResearchStateInText(String oldText, Map<String, dynamic> stateMap) {
+    final newStateStr = '<research_state>${jsonEncode(stateMap)}</research_state>';
+    final startIdx = oldText.indexOf('<research_state>');
+    if (startIdx == -1) {
+      return oldText.isEmpty ? newStateStr : '$oldText\n\n$newStateStr';
+    }
+    final endIdx = oldText.indexOf('</research_state>', startIdx);
+    if (endIdx == -1) {
+      return oldText.substring(0, startIdx) + newStateStr;
+    }
+    return oldText.substring(0, startIdx) + newStateStr + oldText.substring(endIdx + 17);
+  }
+
+  Future<void> _autoIngestSearchResults({
+    required String stageId,
+    required String queryId,
+    required List<String> urls,
+  }) async {
+    final batchSize = 3;
+    for (var i = 0; i < urls.length; i += batchSize) {
+      final end = (i + batchSize < urls.length) ? i + batchSize : urls.length;
+      final batch = urls.sublist(i, end);
+
+      await Future.wait(batch.map((url) async {
+        try {
+          var targetUrl = url.trim();
+          if (targetUrl.isEmpty) return;
+          if (!targetUrl.startsWith('http')) {
+            targetUrl = 'https://$targetUrl';
+          }
+
+          final client = HttpClient()
+            ..connectionTimeout = const Duration(seconds: 8);
+          final request = await client.getUrl(Uri.parse(targetUrl));
+          final response = await request.close();
+
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            final isPdf = targetUrl.toLowerCase().endsWith('.pdf') ||
+                (response.headers.contentType?.mimeType == 'application/pdf');
+
+            String text = '';
+            if (isPdf) {
+              final bytesBuilder = BytesBuilder();
+              await for (final chunk in response) {
+                bytesBuilder.add(chunk);
+              }
+              final bytes = bytesBuilder.takeBytes();
+              final PdfDocument document = PdfDocument(inputBytes: bytes);
+              text = PdfTextExtractor(document).extractText();
+              document.dispose();
+            } else {
+              text = await response.transform(utf8.decoder).join();
+              text = text.replaceAll(RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false), '');
+              text = text.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false), '');
+              text = text.replaceAll(RegExp(r'<[^>]*>'), ' ');
+              text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+            }
+
+            if (text.isNotEmpty) {
+              await _ingestDeepResearch(
+                stageId: stageId,
+                queryId: queryId,
+                sourceUrl: targetUrl,
+                text: text,
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint("Auto-ingest failed for $url: $e");
+        }
+      }));
+    }
+  }
+
   /// Returns a human-readable status label for a tool call, e.g.:
   ///   "📖 Reading main.dart lines 10–50"
   ///   "✏️ Writing /home/project/lib/main.dart"
@@ -2709,7 +2783,8 @@ For every project, maintain a README.md at the project root.
       final messages = List<ChatMessage>.from(_sessions[sessionIndex].messages);
       messages[messageIndex] = ChatMessage(
         role: MessageRole.assistant,
-        text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+        text: _updateResearchStateInText(messages[messageIndex].text, stateMap),
+        reasoning: messages[messageIndex].reasoning,
       );
       _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
         messages: messages,
@@ -2729,8 +2804,18 @@ For every project, maintain a README.md at the project root.
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
 
+    String originalUserPrompt = '';
+    if (messageIndex > 0 && messageIndex - 1 < _sessions[sessionIndex].messages.length) {
+      originalUserPrompt = _sessions[sessionIndex].messages[messageIndex - 1].text;
+    }
+
     final systemPrompt = _deepResearchEnabled
-        ? DeepResearchPrompts.researchSystemPrompt
+        ? "${DeepResearchPrompts.researchSystemPrompt}\n\n"
+          "OVERALL RESEARCH GOAL & CONTEXT:\n"
+          "The user's original query/goal is:\n"
+          "\"$originalUserPrompt\"\n\n"
+          "Keep this overall objective in mind while executing the specific phase instructions. "
+          "Use the overall context to align your searches, filter irrelevant information, and ensure you do not miss requirements."
         : "";
 
     // We maintain a single continuous conversation context for the entire research process
@@ -2747,7 +2832,8 @@ For every project, maintain a README.md at the project root.
         final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
         msgs[messageIndex] = ChatMessage(
           role: MessageRole.assistant,
-          text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+          text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+          reasoning: msgs[messageIndex].reasoning,
         );
         _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
           messages: msgs,
@@ -2870,8 +2956,8 @@ For every project, maintain a README.md at the project root.
                 );
                 msgs[messageIndex] = ChatMessage(
                   role: MessageRole.assistant,
-                  text:
-                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+                  reasoning: msgs[messageIndex].reasoning,
                 );
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   messages: msgs,
@@ -2907,6 +2993,19 @@ For every project, maintain a README.md at the project root.
                   .toList(),
               'preview': searchResult,
             });
+
+            final List<String> urls = resultMatches
+                .map((match) => match.group(2)?.trim() ?? '')
+                .where((url) => url.isNotEmpty)
+                .toList();
+            if (_deepResearchEnabled && urls.isNotEmpty) {
+              await _autoIngestSearchResults(
+                stageId: 'stage_${i + 1}',
+                queryId: query,
+                urls: urls,
+              );
+            }
+
             _publishResearchState(sessionIndex, messageIndex, stateMap);
             stepMessages.add(
               ChatMessage(
@@ -2927,8 +3026,8 @@ For every project, maintain a README.md at the project root.
                 );
                 msgs[messageIndex] = ChatMessage(
                   role: MessageRole.assistant,
-                  text:
-                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+                  reasoning: msgs[messageIndex].reasoning,
                 );
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   messages: msgs,
@@ -2944,53 +3043,65 @@ For every project, maintain a README.md at the project root.
                 ..connectionTimeout = const Duration(seconds: 15);
               final request = await client.getUrl(Uri.parse(targetUrl));
               final response = await request.close();
-              final body = await response.transform(utf8.decoder).join();
+              final isPdf = targetUrl.toLowerCase().endsWith('.pdf') ||
+                  (response.headers.contentType?.mimeType == 'application/pdf');
 
-              var htmlBody = body;
-              final bodyMatch = RegExp(
-                r'<body[^>]*>(.*?)</body>',
-                caseSensitive: false,
-                dotAll: true,
-              ).firstMatch(body);
-              if (bodyMatch != null) {
-                htmlBody = bodyMatch.group(1) ?? htmlBody;
+              String text = '';
+              if (isPdf) {
+                final bytesBuilder = BytesBuilder();
+                await for (final chunk in response) {
+                  bytesBuilder.add(chunk);
+                }
+                final bytes = bytesBuilder.takeBytes();
+                final PdfDocument document = PdfDocument(inputBytes: bytes);
+                text = PdfTextExtractor(document).extractText();
+                document.dispose();
+              } else {
+                final body = await response.transform(utf8.decoder).join();
+                var htmlBody = body;
+                final bodyMatch = RegExp(
+                  r'<body[^>]*>(.*?)</body>',
+                  caseSensitive: false,
+                  dotAll: true,
+                ).firstMatch(body);
+                if (bodyMatch != null) {
+                  htmlBody = bodyMatch.group(1) ?? htmlBody;
+                }
+                htmlBody = htmlBody.replaceAll(
+                  RegExp(
+                    r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
+                    caseSensitive: false,
+                    dotAll: true,
+                  ),
+                  '',
+                );
+                htmlBody = htmlBody.replaceAll(
+                  RegExp(
+                    r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
+                    caseSensitive: false,
+                    dotAll: true,
+                  ),
+                  '',
+                );
+                htmlBody = htmlBody.replaceAll(
+                  RegExp(r'<img[^>]*>', caseSensitive: false),
+                  '',
+                );
+                htmlBody = htmlBody.replaceAll(
+                  RegExp(
+                    r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
+                    caseSensitive: false,
+                    dotAll: true,
+                  ),
+                  '',
+                );
+                htmlBody = htmlBody.replaceAll(
+                  RegExp(r'<!--.*?-->', dotAll: true),
+                  '',
+                );
+                text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
+                text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
               }
-
-              htmlBody = htmlBody.replaceAll(
-                RegExp(
-                  r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
-                  caseSensitive: false,
-                  dotAll: true,
-                ),
-                '',
-              );
-              htmlBody = htmlBody.replaceAll(
-                RegExp(
-                  r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
-                  caseSensitive: false,
-                  dotAll: true,
-                ),
-                '',
-              );
-              htmlBody = htmlBody.replaceAll(
-                RegExp(r'<img[^>]*>', caseSensitive: false),
-                '',
-              );
-              htmlBody = htmlBody.replaceAll(
-                RegExp(
-                  r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
-                  caseSensitive: false,
-                  dotAll: true,
-                ),
-                '',
-              );
-              htmlBody = htmlBody.replaceAll(
-                RegExp(r'<!--.*?-->', dotAll: true),
-                '',
-              );
-
-              String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
-              text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
 
               if (_deepResearchEnabled) {
                 final result = await _ingestDeepResearch(
@@ -3043,8 +3154,8 @@ For every project, maintain a README.md at the project root.
                 );
                 msgs[messageIndex] = ChatMessage(
                   role: MessageRole.assistant,
-                  text:
-                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+                  reasoning: msgs[messageIndex].reasoning,
                 );
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   messages: msgs,
@@ -3209,8 +3320,8 @@ For every project, maintain a README.md at the project root.
                 );
                 msgs[messageIndex] = ChatMessage(
                   role: MessageRole.assistant,
-                  text:
-                      '<research_state>${jsonEncode(stateMap)}</research_state>',
+                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+                  reasoning: msgs[messageIndex].reasoning,
                 );
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
                   messages: msgs,
@@ -3234,7 +3345,8 @@ For every project, maintain a README.md at the project root.
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+            reasoning: msgs[messageIndex].reasoning,
           );
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
             messages: msgs,
@@ -3252,7 +3364,8 @@ For every project, maintain a README.md at the project root.
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+            reasoning: msgs[messageIndex].reasoning,
           );
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
             messages: msgs,
@@ -3415,7 +3528,8 @@ For every project, maintain a README.md at the project root.
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+            reasoning: msgs[messageIndex].reasoning,
           );
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
             messages: msgs,
@@ -3519,7 +3633,8 @@ For every project, maintain a README.md at the project root.
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+            reasoning: msgs[messageIndex].reasoning,
           );
           msgs.add(
             ChatMessage(
@@ -3542,7 +3657,8 @@ For every project, maintain a README.md at the project root.
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+            reasoning: msgs[messageIndex].reasoning,
           );
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
             messages: msgs,
@@ -3637,7 +3753,8 @@ For every project, maintain a README.md at the project root.
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
+            reasoning: msgs[messageIndex].reasoning,
           );
           msgs.add(
             ChatMessage(
@@ -7040,6 +7157,7 @@ class MessageBubble extends StatelessWidget {
     int currentIndex = 0;
 
     final tags = [
+      (tag: '<research_plan>', isXml: false),
       (tag: '<research_state>', isXml: false),
       (tag: '<search_request>', isXml: false),
       (tag: '<read_url>', isXml: false),
@@ -7102,6 +7220,8 @@ class MessageBubble extends StatelessWidget {
   Widget _buildSpecializedWidget(String openTag, String content, bool isXml) {
     try {
       switch (openTag) {
+        case '<research_plan>':
+          return const SizedBox.shrink();
         case '<research_state>':
           {
             var cleanContent = content;
@@ -12783,45 +12903,59 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.science,
-                      size: 18,
-                      color: Color(0xFF2C5282),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      status == 'completed'
-                          ? 'Deep Research Complete'
-                          : status == 'pending'
-                          ? 'Research Plan Ready'
-                          : 'Deep Research in Progress...',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.science,
+                        size: 18,
                         color: Color(0xFF2C5282),
                       ),
-                    ),
-                  ],
-                ),
-                if (status == 'pending') ...[
-                  IconButton(
-                    tooltip: 'Edit research plan',
-                    onPressed: _editPlan,
-                    icon: const Icon(Icons.edit_outlined, size: 19),
-                    color: const Color(0xFF2C5282),
-                  ),
-                  if (widget.onStartResearch != null)
-                    FilledButton.icon(
-                      onPressed: () => widget.onStartResearch!(widget.stateMap),
-                      icon: const Icon(Icons.play_arrow, size: 16),
-                      label: const Text('Start Research'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF2C5282),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                        minimumSize: const Size(0, 34),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          status == 'completed'
+                              ? 'Deep Research Complete'
+                              : status == 'pending'
+                              ? 'Research Plan Ready'
+                              : 'Deep Research in Progress...',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2C5282),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (status == 'pending') ...[
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        constraints: const BoxConstraints(),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                        tooltip: 'Edit research plan',
+                        onPressed: _editPlan,
+                        icon: const Icon(Icons.edit_outlined, size: 19),
+                        color: const Color(0xFF2C5282),
+                      ),
+                      const SizedBox(width: 4),
+                      if (widget.onStartResearch != null)
+                        FilledButton.icon(
+                          onPressed: () => widget.onStartResearch!(widget.stateMap),
+                          icon: const Icon(Icons.play_arrow, size: 16),
+                          label: const Text('Start'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF2C5282),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            minimumSize: const Size(0, 32),
+                          ),
+                        ),
+                    ],
+                  ),
                 ],
                 if (status == 'running')
                   Text(
