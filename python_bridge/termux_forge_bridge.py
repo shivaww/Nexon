@@ -87,6 +87,7 @@ from background_service_manager import (
     BackgroundServiceManager,
     detect_server_command,
 )
+from deep_research import DeepResearchOrchestrator
 
 # ── Constants ─────────────────────────────────────────────────────────
 VERSION = "1.0.0"
@@ -163,6 +164,9 @@ class TermuxForgeBridge:
         # Background Service Manager
         self.services = BackgroundServiceManager()
 
+        # Deep research keeps retrieved source text out of the LLM tool result.
+        self.deep_research = DeepResearchOrchestrator()
+
         # State
         self._clients: set[WebSocketServerProtocol] = set()
         self._approval_queue: dict[str, dict[str, Any]] = {}
@@ -230,6 +234,10 @@ class TermuxForgeBridge:
         r.register("mcp_server_manage", self._mcp_server_manage)
         r.register("mcp_tool_discover", self._mcp_tool_discover)
         r.register("mcp_transport_handle", self._mcp_transport_handle)
+
+        # ── Deep research ────────────────────────────────────────────
+        r.register("deep_research.ingest", self._deep_research_ingest)
+        r.register("deep_research.retrieve", self._deep_research_retrieve)
 
         # ── Workflows ─────────────────────────────────────────────────
         r.register("workflow_execute", self._workflow_execute)
@@ -901,6 +909,18 @@ class TermuxForgeBridge:
             return {"server": name, "tools": tools}
         all_tools = await self.mcp.discover_all_tools()
         return {"tools": all_tools}
+
+    # ── Deep research ─────────────────────────────────────────────────
+
+    async def _deep_research_ingest(
+        self, stage_id: str, query_id: str, source_url: str, text: str
+    ) -> dict:
+        """Index already-cleaned content, used internally by ``web_fetch`` and tests."""
+        return await self.deep_research.ingest(stage_id, query_id, source_url, text)
+
+    async def _deep_research_retrieve(self, stage_id: str, query: str) -> dict:
+        """Write ranked chunks to temp.json and return confirmation metadata only."""
+        return await self.deep_research.retrieve(stage_id, query)
 
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,

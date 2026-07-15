@@ -109,6 +109,46 @@ class _ForgeChatAppState extends State<ForgeChatApp> {
   }
 }
 
+class DeepResearchPrompts {
+  static const String plannerSystemPrompt = """ROLE: Planner. No searching, no fetching. Output XML only.
+Decide: complexity (STANDARD/COMPLEX), stage_count (5-15) based on user query.
+Generate a phase-by-phase research plan.
+Output format:
+<research_plan>
+  <phase1>Stage Title - Detailed goal and instructions for this phase</phase1>
+  <phase2>Stage Title - Detailed goal and instructions for this phase</phase2>
+  ...
+</research_plan>
+No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
+
+  static const String researchSystemPrompt = """ROLE: Research agent. You are running one phase of a multi-step research plan.
+Your task is to gather enough relevant information to fully address the phase's prompt.
+You have the following tools available:
+1. Web Search: Output <search_request>your query</search_request> to get a list of search results.
+2. Fetch Page: Output <read_url>URL</read_url> to fetch page content. Note that when Deep Research is enabled, fetching a page automatically ingests the content into a local RAG database, and you will only see ingestion stats (like new_chunks_added and novelty_ratio) rather than the raw page text to preserve context space.
+You must run searches and fetches iteratively.
+If the novelty ratio of your fetches is consistently low (e.g. less than 0.15), it means you have saturated this query angle and should try a different search query or wrap up.
+Once you have collected enough info for this phase, output <step_complete/> to finish the phase.
+Only output ONE tool/action tag per message. Wait for the user response after each action.""";
+
+  static const String synthesisSystemPrompt = """ROLE: Synthesis agent. You do not see raw chunk text, ever. Tool: deep_research.retrieve(stage_id, query) -> {chunks_written, avg_score} only.
+For each completed stage, generate a set of specific questions that fully cover that stage's goal (as many as needed, no cap). Call deep_research.retrieve for each question. Continue until every stage's questions are exhausted. Do not attempt to summarize or answer — your only output is the sequence of tool calls plus a final confirmation once all stages are done.
+To call the retrieve tool, emit it as an MCP tool request:
+<mcp_request>
+{
+  "method": "deep_research.retrieve",
+  "params": {
+    "stage_id": "stage1",
+    "query": "your synthesis query"
+  }
+}
+</mcp_request>
+Once all stages have been synthesized, output <synthesis_complete/>.""";
+
+  static const String writerSystemPrompt = """ROLE: Writer. Input: full temp.json content (all stages/queries/chunks).
+Read every chunk. Decide a hierarchical document structure: Chapter per stage (or merge/split stages into logical chapters if that reads better), subsections (1.1, 1.2, ...) per sub-topic within a chapter, grounded in the actual chunks retrieved. Write the final research document as Markdown with proper chapter/subsection headers. Do not fabricate claims not supported by temp.json content. Ensure you write detailed paragraphs for each section.""";
+}
+
 class ChatHomePage extends StatefulWidget {
   const ChatHomePage({super.key});
 
@@ -214,6 +254,51 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
     // Fire and forget auto-sync to Google Drive
     DriveSyncService.syncToDrive(_sessions);
+  }
+
+  Future<Map<String, dynamic>> _ingestDeepResearch({
+    required String stageId,
+    required String queryId,
+    required String sourceUrl,
+    required String text,
+  }) async {
+    final endpoint = _customMcpUrl.isNotEmpty
+        ? _customMcpUrl
+        : 'http://127.0.0.1:8390/mcp';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 120);
+    try {
+      final request = await client.postUrl(Uri.parse(endpoint));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({
+        'method': 'deep_research.ingest',
+        'params': {
+          'stage_id': stageId,
+          'query_id': queryId,
+          'source_url': sourceUrl,
+          'text': text,
+        },
+      }));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('HTTP ${response.statusCode}: $body');
+      }
+      final decoded = jsonDecode(body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Invalid deep research response');
+      }
+      final result = decoded['result'];
+      if (result is Map<String, dynamic>) return result;
+      if (decoded['error'] != null) {
+        throw HttpException(decoded['error'].toString());
+      }
+      throw const FormatException('Missing deep research result');
+    } finally {
+      client.close(force: true);
+    }
   }
 
   void _switchSession(String sessionId) {
@@ -388,7 +473,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _agenticWorkspace =
           agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
-      _deepResearchEnabled = false;
+      _deepResearchEnabled = deepResearchRaw ?? false;
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
         _selectedProviderId = selected;
@@ -432,7 +517,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setBool('artifacts_enabled_v1', _artifactsEnabled);
     await prefs.setBool('svg_visuals_enabled_v1', _svgVisualsEnabled);
     await prefs.setString('shell_permission_v1', _shellPermission);
-    await prefs.setBool('deep_research_enabled_v1', false);
+    await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
     // Auto-generate GitHub Actions workflow if Flutter project detected
@@ -785,17 +870,6 @@ jobs:
 
         final List<ChatMessage> historyForApi = [];
         final currentDateStr = DateTime.now().toString().substring(0, 10);
-        String systemPromptText =
-            "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
-            "Render via markdown code blocks:\n"
-            "- LaTeX: \\[ ... \\] or \\( ... \\)\n";
-
-        if (_svgVisualsEnabled) {
-          systemPromptText +=
-              "- SVG (ONLY for non-graph diagrams like flowcharts, architecture, illustrations): ```svg\n"
-              "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
-              "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
-              "  NEVER use SVG for charts, graphs, or mind maps. Use ```chart instead.\n\n";
         }
 
         systemPromptText +=
@@ -1179,6 +1253,7 @@ For every project, maintain a README.md at the project root.
 
         systemPromptText +=
             "\nMemory Tool: Use <memory action=\"read\"></memory>, <memory action=\"append\">text</memory>, or <memory action=\"replace\">text</memory> to save/read personal details across sessions. Limit 10KB. Use only when essential.\n";
+        }
 
         if (systemPromptText.isNotEmpty) {
           historyForApi.add(
@@ -1503,17 +1578,31 @@ For every project, maintain a README.md at the project root.
               String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
               text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-              urlResult = text;
-              if (urlResult.length > 8000) {
-                urlResult =
-                    urlResult.substring(0, 8000) +
-                    '\n\n...[truncated due to length]';
+              if (_deepResearchEnabled) {
+                final result = await _ingestDeepResearch(
+                  stageId: 'stage1',
+                  queryId: 'query1',
+                  sourceUrl: targetUrl,
+                  text: text,
+                );
+                urlResult = jsonEncode(result);
+              } else {
+                urlResult = text;
+                if (urlResult.length > 8000) {
+                  urlResult =
+                      urlResult.substring(0, 8000) +
+                      '\n\n...[truncated due to length]';
+                }
               }
             } catch (e) {
               urlResult = 'Error fetching URL: $e';
             }
             if (mounted) setState(() => _toolStatus = '');
-            toolOutputs.add("Content of URL '$url':\n\n$urlResult");
+            toolOutputs.add(
+              _deepResearchEnabled
+                  ? "Deep research ingest for '$url':\n\n$urlResult"
+                  : "Content of URL '$url':\n\n$urlResult",
+            );
           }
         }
         if (memoryMatch != null) {
@@ -2542,7 +2631,10 @@ For every project, maintain a README.md at the project root.
     }
   }
 
-  void _startResearchLoop(int messageIndex) {
+  void _startResearchLoop(
+    int messageIndex, [
+    Map<String, dynamic>? editedStateMap,
+  ]) {
     final activeSession = _sessions.firstWhere((s) => s.id == _activeSessionId);
     final sessionIndex = _sessions.indexOf(activeSession);
     if (sessionIndex == -1) return;
@@ -2557,7 +2649,8 @@ For every project, maintain a README.md at the project root.
         )
         .trim();
     try {
-      final stateMap = jsonDecode(stateStr) as Map<String, dynamic>;
+      final stateMap = editedStateMap ??
+          (jsonDecode(stateStr) as Map<String, dynamic>);
       stateMap['status'] = 'running';
 
       setState(() {
@@ -2590,6 +2683,24 @@ For every project, maintain a README.md at the project root.
     }
   }
 
+  void _publishResearchState(
+    int sessionIndex,
+    int messageIndex,
+    Map<String, dynamic> stateMap,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      final messages = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+      messages[messageIndex] = ChatMessage(
+        role: MessageRole.assistant,
+        text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+      );
+      _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+        messages: messages,
+      );
+    });
+  }
+
   Future<void> _runResearchLoop({
     required int sessionIndex,
     required int messageIndex,
@@ -2602,7 +2713,9 @@ For every project, maintain a README.md at the project root.
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
     final currentDateStr = DateTime.now().toString().substring(0, 10);
 
-    final systemPrompt = "";
+    final systemPrompt = _deepResearchEnabled
+        ? DeepResearchPrompts.researchSystemPrompt
+        : "";
 
     // We maintain a single continuous conversation context for the entire research process
     List<ChatMessage> stepMessages = [
@@ -2613,6 +2726,7 @@ For every project, maintain a README.md at the project root.
     for (int i = 0; i < steps.length; i++) {
       if (!mounted) return;
       steps[i]['status'] = 'running';
+      steps[i]['events'] ??= <Map<String, dynamic>>[];
       setState(() {
         final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
         msgs[messageIndex] = ChatMessage(
@@ -2759,6 +2873,25 @@ For every project, maintain a README.md at the project root.
               searchResult =
                   searchResult.substring(0, 4000) + '\n\n...[truncated]';
             }
+            final searchEvents = steps[i]['events'] as List;
+            final resultMatches = RegExp(
+              r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)',
+              multiLine: true,
+            ).allMatches(searchResult);
+            searchEvents.add({
+              'kind': 'search',
+              'query': query,
+              'result_count': resultMatches.length,
+              'results': resultMatches
+                  .map((match) => {
+                        'title': match.group(1) ?? '',
+                        'url': match.group(2) ?? '',
+                        'snippet': match.group(3) ?? '',
+                      })
+                  .toList(),
+              'preview': searchResult,
+            });
+            _publishResearchState(sessionIndex, messageIndex, stateMap);
             stepMessages.add(
               ChatMessage(
                 role: MessageRole.user,
@@ -2843,9 +2976,26 @@ For every project, maintain a README.md at the project root.
               String text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
               text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
 
-              urlResult = text;
-              if (urlResult.length > 8000) {
-                urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated]';
+              if (_deepResearchEnabled) {
+                final result = await _ingestDeepResearch(
+                  stageId: 'stage${i + 1}',
+                  queryId: 'query${loopCount}',
+                  sourceUrl: targetUrl,
+                  text: text,
+                );
+                urlResult = jsonEncode(result);
+                final fetchEvents = steps[i]['events'] as List;
+                fetchEvents.add({
+                  'kind': 'fetch',
+                  'url': targetUrl,
+                  ...result,
+                });
+                _publishResearchState(sessionIndex, messageIndex, stateMap);
+              } else {
+                urlResult = text;
+                if (urlResult.length > 8000) {
+                  urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated]';
+                }
               }
             } catch (e) {
               if (e.toString().contains('429')) rethrow;
@@ -2854,7 +3004,9 @@ For every project, maintain a README.md at the project root.
             stepMessages.add(
               ChatMessage(
                 role: MessageRole.user,
-                text: "URL Content:\n$urlResult",
+                text: _deepResearchEnabled
+                    ? "Deep research ingest:\n$urlResult"
+                    : "URL Content:\n$urlResult",
               ),
             );
           } else if (mcpMatch != null) {
@@ -3076,118 +3228,415 @@ For every project, maintain a README.md at the project root.
       }
     }
 
-    stateMap['status'] = 'generating_report';
-    if (mounted) {
-      setState(() {
-        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-        msgs[messageIndex] = ChatMessage(
-          role: MessageRole.assistant,
-          text: '<research_state>${jsonEncode(stateMap)}</research_state>',
-        );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-          messages: msgs,
-        );
-      });
-    }
+    if (_deepResearchEnabled) {
+      // 1. Synthesis Phase
+      stateMap['status'] = 'synthesizing';
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
+        });
+      }
 
-    final finalPrompt =
-        "All research phases are complete. Now, output the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.";
-    stepMessages.add(ChatMessage(role: MessageRole.user, text: finalPrompt));
+      List<ChatMessage> synthesisMessages = [
+        const ChatMessage(
+          role: MessageRole.system,
+          text: DeepResearchPrompts.synthesisSystemPrompt,
+        ),
+        ChatMessage(
+          role: MessageRole.user,
+          text: "Here is the completed research plan:\n${jsonEncode(stateMap['steps'])}"
+              "\n\nBegin the synthesis phase. Generate specific questions and retrieve chunks for each stage. "
+              "Remember, the retrieve tool returns statistics only. Continue calling retrieve until all stages are synthesized. "
+              "Once all stages have been covered and synthesized, output <synthesis_complete/>.",
+        ),
+      ];
 
-    String finalReportText = '';
-    String finalReasoningText = '';
-    bool finalReportDone = false;
-    int finalReportRetries = 0;
+      bool synthesisDone = false;
+      int synthesisLoop = 0;
 
-    while (!finalReportDone && finalReportRetries < 3) {
-      try {
-        final stream = _chatClient.sendChatStream(
-          provider: provider,
-          settings: settings,
-          model: model,
-          messages: _compactHistoryForApi(stepMessages, stepMessages.length),
-        );
+      while (!synthesisDone && synthesisLoop < 20) {
+        if (!mounted) return;
+        if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
+          break;
+        }
+        synthesisLoop++;
 
-        var isThinking = false;
-        await for (final chunk in stream) {
-          if (chunk.startsWith('[REASONING]')) {
-            finalReasoningText += chunk.substring(11);
-          } else {
-            var textChunk = chunk;
-            if (!isThinking &&
-                (textChunk.contains('<think>') ||
-                    textChunk.contains('<reasoning>') ||
-                    textChunk.contains('<thought>'))) {
-              final tag = textChunk.contains('<think>')
-                  ? '<think>'
-                  : textChunk.contains('<thought>')
-                  ? '<thought>'
-                  : '<reasoning>';
-              final parts = textChunk.split(tag);
-              finalReportText += parts[0];
-              isThinking = true;
-              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-            }
+        try {
+          String responseText = '';
+          String reasoningText = '';
+          final stream = _chatClient.sendChatStream(
+            provider: provider,
+            settings: settings,
+            model: model,
+            messages: _compactHistoryForApi(synthesisMessages, synthesisMessages.length),
+          );
 
-            if (isThinking &&
-                (textChunk.contains('</think>') ||
-                    textChunk.contains('</reasoning>') ||
-                    textChunk.contains('</thought>'))) {
-              final tag = textChunk.contains('</think>')
-                  ? '</think>'
-                  : textChunk.contains('</thought>')
-                  ? '</thought>'
-                  : '</reasoning>';
-              final parts = textChunk.split(tag);
-              finalReasoningText += parts[0];
-              isThinking = false;
-              textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-              finalReportText += textChunk;
-            } else if (isThinking) {
-              finalReasoningText += textChunk;
+          var isThinking = false;
+          await for (final chunk in stream) {
+            if (chunk.startsWith('[REASONING]')) {
+              reasoningText += chunk.substring(11);
             } else {
-              finalReportText += textChunk;
+              var textChunk = chunk;
+              if (!isThinking &&
+                  (textChunk.contains('<think>') ||
+                      textChunk.contains('<reasoning>') ||
+                      textChunk.contains('<thought>'))) {
+                final tag = textChunk.contains('<think>')
+                    ? '<think>'
+                    : textChunk.contains('<thought>')
+                    ? '<thought>'
+                    : '<reasoning>';
+                final parts = textChunk.split(tag);
+                responseText += parts[0];
+                isThinking = true;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+              }
+
+              if (isThinking &&
+                  (textChunk.contains('</think>') ||
+                      textChunk.contains('</reasoning>') ||
+                      textChunk.contains('</thought>'))) {
+                final tag = textChunk.contains('</think>')
+                    ? '</think>'
+                    : textChunk.contains('</thought>')
+                    ? '</thought>'
+                    : '</reasoning>';
+                final parts = textChunk.split(tag);
+                reasoningText += parts[0];
+                isThinking = false;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                responseText += textChunk;
+              } else if (isThinking) {
+                reasoningText += textChunk;
+              } else {
+                responseText += textChunk;
+              }
             }
           }
-        }
-        stateMap['final_report'] = finalReportText;
-        finalReportDone = true;
-      } catch (e) {
-        final errorStr = e.toString().toLowerCase();
-        if (errorStr.contains('429') ||
-            errorStr.contains('500') ||
-            errorStr.contains('503')) {
-          finalReportRetries++;
-          await Future.delayed(const Duration(seconds: 10));
-        } else {
-          stateMap['final_report'] = "Error generating final report: $e";
-          finalReportText = stateMap['final_report'] as String;
-          finalReportDone = true;
+
+          synthesisMessages.add(
+            ChatMessage(
+              role: MessageRole.assistant,
+              text: responseText,
+              reasoning: reasoningText,
+            ),
+          );
+
+          final mcpMatch = _findMcpMatch(responseText);
+          final completeMatch = RegExp(
+            r'<synthesis_complete/?>',
+            caseSensitive: false,
+          ).firstMatch(responseText);
+
+          if (completeMatch != null) {
+            synthesisDone = true;
+          } else if (mcpMatch != null) {
+            String jsonString = mcpMatch.group(1)?.trim() ?? '';
+            jsonString = jsonString
+                .replaceAll(RegExp(r'^```json\s*'), '')
+                .replaceAll(RegExp(r'^```\s*'), '')
+                .replaceAll(RegExp(r'\s*```$'), '');
+
+            String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
+            try {
+              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+              final params = parsed['params'] as Map<String, dynamic>? ?? {};
+              if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
+                mcpEndpoint = _customMcpUrl;
+              }
+            } catch (_) {}
+
+            String mcpResult = '';
+            HttpClient? client;
+            try {
+              client = HttpClient()
+                ..connectionTimeout = const Duration(seconds: 120);
+              final request = await client.postUrl(Uri.parse(mcpEndpoint));
+              request.headers.contentType = ContentType.json;
+              final bytes = utf8.encode(jsonString);
+              request.headers.contentLength = bytes.length;
+              request.add(bytes);
+              final response = await request.close();
+              final body = await response.transform(utf8.decoder).join();
+              mcpResult = body;
+            } catch (e) {
+              mcpResult = '{"error": "$e"}';
+            } finally {
+              client?.close(force: true);
+            }
+
+            synthesisMessages.add(
+              ChatMessage(
+                role: MessageRole.user,
+                text: "MCP Result:\n$mcpResult",
+              ),
+            );
+          } else {
+            synthesisMessages.add(
+              const ChatMessage(
+                role: MessageRole.user,
+                text: "Continue generating queries to retrieve information, or output <synthesis_complete/> if you have retrieved all necessary information.",
+              ),
+            );
+          }
+          await Future.delayed(const Duration(seconds: 2));
+        } catch (e) {
+          synthesisDone = true;
         }
       }
-    }
 
-    stateMap['status'] = 'completed';
-    if (mounted) {
-      setState(() {
-        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-        msgs[messageIndex] = ChatMessage(
-          role: MessageRole.assistant,
-          text: '<research_state>${jsonEncode(stateMap)}</research_state>',
-        );
-        msgs.add(
-          ChatMessage(
+      // 2. Writer Phase
+      stateMap['status'] = 'generating_report';
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: finalReportText,
-            reasoning: finalReasoningText,
-          ),
-        );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-          messages: msgs,
-        );
-        _sendingSessionIds.remove(_sessions[sessionIndex].id);
-      });
-      await _saveSessions();
+            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
+        });
+      }
+
+      final tempFile = File('$_agenticWorkspace/.termux_forge/deep_research/temp.json');
+      String tempJsonContent = '{}';
+      try {
+        if (await tempFile.exists()) {
+          tempJsonContent = await tempFile.readAsString();
+        }
+      } catch (e) {
+        debugPrint("Error reading temp.json: $e");
+      }
+
+      List<ChatMessage> writerMessages = [
+        const ChatMessage(
+          role: MessageRole.system,
+          text: DeepResearchPrompts.writerSystemPrompt,
+        ),
+        ChatMessage(
+          role: MessageRole.user,
+          text: "Here is the retrieved content from the database (temp.json):\n$tempJsonContent\n\n"
+              "Please write the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.",
+        ),
+      ];
+
+      String finalReportText = '';
+      String finalReasoningText = '';
+      bool finalReportDone = false;
+      int writerRetries = 0;
+
+      while (!finalReportDone && writerRetries < 3) {
+        if (!mounted) return;
+        if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
+          break;
+        }
+        try {
+          final stream = _chatClient.sendChatStream(
+            provider: provider,
+            settings: settings,
+            model: model,
+            messages: _compactHistoryForApi(writerMessages, writerMessages.length),
+          );
+
+          var isThinking = false;
+          await for (final chunk in stream) {
+            if (chunk.startsWith('[REASONING]')) {
+              finalReasoningText += chunk.substring(11);
+            } else {
+              var textChunk = chunk;
+              if (!isThinking &&
+                  (textChunk.contains('<think>') ||
+                      textChunk.contains('<reasoning>') ||
+                      textChunk.contains('<thought>'))) {
+                final tag = textChunk.contains('<think>')
+                    ? '<think>'
+                    : textChunk.contains('<thought>')
+                    ? '<thought>'
+                    : '<reasoning>';
+                final parts = textChunk.split(tag);
+                finalReportText += parts[0];
+                isThinking = true;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+              }
+
+              if (isThinking &&
+                  (textChunk.contains('</think>') ||
+                      textChunk.contains('</reasoning>') ||
+                      textChunk.contains('</thought>'))) {
+                final tag = textChunk.contains('</think>')
+                    ? '</think>'
+                    : textChunk.contains('</thought>')
+                    ? '</thought>'
+                    : '</reasoning>';
+                final parts = textChunk.split(tag);
+                finalReasoningText += parts[0];
+                isThinking = false;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                finalReportText += textChunk;
+              } else if (isThinking) {
+                finalReasoningText += textChunk;
+              } else {
+                finalReportText += textChunk;
+              }
+            }
+          }
+          stateMap['final_report'] = finalReportText;
+          finalReportDone = true;
+        } catch (e) {
+          writerRetries++;
+          await Future.delayed(const Duration(seconds: 10));
+        }
+      }
+
+      stateMap['status'] = 'completed';
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+          );
+          msgs.add(
+            ChatMessage(
+              role: MessageRole.assistant,
+              text: finalReportText,
+              reasoning: finalReasoningText,
+            ),
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
+          _sendingSessionIds.remove(_sessions[sessionIndex].id);
+        });
+        await _saveSessions();
+      }
+    } else {
+      stateMap['status'] = 'generating_report';
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
+        });
+      }
+
+      final finalPrompt =
+          "All research phases are complete. Now, output the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.";
+      stepMessages.add(ChatMessage(role: MessageRole.user, text: finalPrompt));
+
+      String finalReportText = '';
+      String finalReasoningText = '';
+      bool finalReportDone = false;
+      int finalReportRetries = 0;
+
+      while (!finalReportDone && finalReportRetries < 3) {
+        if (!mounted) return;
+        if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
+          break;
+        }
+        try {
+          final stream = _chatClient.sendChatStream(
+            provider: provider,
+            settings: settings,
+            model: model,
+            messages: _compactHistoryForApi(stepMessages, stepMessages.length),
+          );
+
+          var isThinking = false;
+          await for (final chunk in stream) {
+            if (chunk.startsWith('[REASONING]')) {
+              finalReasoningText += chunk.substring(11);
+            } else {
+              var textChunk = chunk;
+              if (!isThinking &&
+                  (textChunk.contains('<think>') ||
+                      textChunk.contains('<reasoning>') ||
+                      textChunk.contains('<thought>'))) {
+                final tag = textChunk.contains('<think>')
+                    ? '<think>'
+                    : textChunk.contains('<thought>')
+                    ? '<thought>'
+                    : '<reasoning>';
+                final parts = textChunk.split(tag);
+                finalReportText += parts[0];
+                isThinking = true;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+              }
+
+              if (isThinking &&
+                  (textChunk.contains('</think>') ||
+                      textChunk.contains('</reasoning>') ||
+                      textChunk.contains('</thought>'))) {
+                final tag = textChunk.contains('</think>')
+                    ? '</think>'
+                    : textChunk.contains('</thought>')
+                    ? '</thought>'
+                    : '</reasoning>';
+                final parts = textChunk.split(tag);
+                finalReasoningText += parts[0];
+                isThinking = false;
+                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                finalReportText += textChunk;
+              } else if (isThinking) {
+                finalReasoningText += textChunk;
+              } else {
+                finalReportText += textChunk;
+              }
+            }
+          }
+          stateMap['final_report'] = finalReportText;
+          finalReportDone = true;
+        } catch (e) {
+          final errorStr = e.toString().toLowerCase();
+          if (errorStr.contains('429') ||
+              errorStr.contains('500') ||
+              errorStr.contains('503')) {
+            finalReportRetries++;
+            await Future.delayed(const Duration(seconds: 10));
+          } else {
+            stateMap['final_report'] = "Error generating final report: $e";
+            finalReportText = stateMap['final_report'] as String;
+            finalReportDone = true;
+          }
+        }
+      }
+
+      stateMap['status'] = 'completed';
+      if (mounted) {
+        setState(() {
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: '<research_state>${jsonEncode(stateMap)}</research_state>',
+          );
+          msgs.add(
+            ChatMessage(
+              role: MessageRole.assistant,
+              text: finalReportText,
+              reasoning: finalReasoningText,
+            ),
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
+          _sendingSessionIds.remove(_sessions[sessionIndex].id);
+        });
+        await _saveSessions();
+      }
     }
   }
 
@@ -3234,7 +3683,7 @@ For every project, maintain a README.md at the project root.
           agenticEnabled: _agenticEnabled,
           artifactsEnabled: _artifactsEnabled,
           svgVisualsEnabled: _svgVisualsEnabled,
-          deepResearchEnabled: false,
+          deepResearchEnabled: _deepResearchEnabled,
           agenticWorkspace: _agenticWorkspace,
           customMcpUrl: _customMcpUrl,
           onSearchSettingsChanged: (nextSearchSettings) async {
@@ -3261,9 +3710,9 @@ For every project, maintain a README.md at the project root.
             });
             await _saveSettings();
           },
-          onDeepResearchEnabledChanged: (_) async {
+          onDeepResearchEnabledChanged: (val) async {
             setState(() {
-              _deepResearchEnabled = false;
+              _deepResearchEnabled = val;
             });
             await _saveSettings();
           },
@@ -3564,7 +4013,7 @@ For every project, maintain a README.md at the project root.
                 activeBranchIndex: activeSession.activeBranchIndex,
                 onBranchChanged: _switchBranch,
                 agenticWorkspace: _agenticWorkspace,
-                deepResearchEnabled: false,
+                deepResearchEnabled: _deepResearchEnabled,
                 onStartResearch: _startResearchLoop,
                 fileName: _getResearchFileName(activeSession.title),
               ),
@@ -3866,7 +4315,8 @@ class ChatSurface extends StatelessWidget {
   final VoidCallback onCancelEdit;
   final String agenticWorkspace;
   final bool deepResearchEnabled;
-  final ValueChanged<int> onStartResearch;
+  final void Function(int, [Map<String, dynamic>? editedStateMap])
+      onStartResearch;
   final VoidCallback? onStop;
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
@@ -3962,7 +4412,8 @@ class ChatSurface extends StatelessWidget {
                       agenticWorkspace: agenticWorkspace,
                       fileName: fileName,
                       onEditUserMessage: () => onEditUserMessage(index),
-                      onStartResearch: () => onStartResearch(index),
+                      onStartResearch: ([editedStateMap]) =>
+                          onStartResearch(index, editedStateMap),
                       versionsCount: branchIndicesForVersions.length,
                       currentVersionIndex: currentVersionIndex,
                       onVersionChanged: branchIndicesForVersions.isEmpty
@@ -6216,7 +6667,8 @@ class MessageBubble extends StatelessWidget {
   final String fileName;
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
-  final VoidCallback? onStartResearch;
+  final void Function([Map<String, dynamic>? editedStateMap])?
+      onStartResearch;
   final int versionsCount;
   final int currentVersionIndex;
   final ValueChanged<int>? onVersionChanged;
@@ -12139,7 +12591,8 @@ class ResearchPlanWidget extends StatefulWidget {
   final Map<String, dynamic> stateMap;
   final String workspaceDir;
   final String fileName;
-  final VoidCallback? onStartResearch;
+  final void Function([Map<String, dynamic>? editedStateMap])?
+      onStartResearch;
 
   @override
   State<ResearchPlanWidget> createState() => _ResearchPlanWidgetState();
@@ -12149,6 +12602,76 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   final Set<int> _expandedSteps = {};
   late final Stopwatch _stopwatch;
   Timer? _timer;
+
+  Future<void> _editPlan() async {
+    final originalSteps = widget.stateMap['steps'] as List? ?? [];
+    final controllers = originalSteps.map((step) {
+      final value = step as Map;
+      return TextEditingController(text: value['prompt']?.toString() ?? '');
+    }).toList();
+    final titles = originalSteps
+        .map((step) => (step as Map)['title']?.toString() ?? 'Research stage')
+        .toList();
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Edit Research Plan',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: controllers.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (context, index) => TextField(
+                  controller: controllers[index],
+                  maxLines: 4,
+                  decoration: InputDecoration(
+                    labelText: titles[index],
+                    alignLabelWithHint: true,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.check),
+              label: const Text('Save Plan'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true) {
+      final updatedSteps = <Map<String, dynamic>>[];
+      for (var index = 0; index < originalSteps.length; index++) {
+        final step = Map<String, dynamic>.from(originalSteps[index] as Map);
+        step['prompt'] = controllers[index].text.trim();
+        updatedSteps.add(step);
+      }
+      setState(() => widget.stateMap['steps'] = updatedSteps);
+    }
+    for (final controller in controllers) {
+      controller.dispose();
+    }
+  }
 
   @override
   void initState() {
@@ -12265,31 +12788,25 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                     ),
                   ],
                 ),
-                if (status == 'pending' && widget.onStartResearch != null)
-                  ElevatedButton.icon(
-                    onPressed: widget.onStartResearch,
-                    icon: const Icon(
-                      Icons.play_arrow,
-                      size: 16,
-                      color: Colors.white,
-                    ),
-                    label: const Text(
-                      'Start',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2C5282),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      minimumSize: const Size(0, 32),
-                    ),
+                if (status == 'pending') ...[
+                  IconButton(
+                    tooltip: 'Edit research plan',
+                    onPressed: _editPlan,
+                    icon: const Icon(Icons.edit_outlined, size: 19),
+                    color: const Color(0xFF2C5282),
                   ),
+                  if (widget.onStartResearch != null)
+                    FilledButton.icon(
+                      onPressed: () => widget.onStartResearch!(widget.stateMap),
+                      icon: const Icon(Icons.play_arrow, size: 16),
+                      label: const Text('Start Research'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF2C5282),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        minimumSize: const Size(0, 34),
+                      ),
+                    ),
+                ],
                 if (status == 'running')
                   Text(
                     '${_stopwatch.elapsed.inMinutes.toString().padLeft(2, '0')}:${(_stopwatch.elapsed.inSeconds % 60).toString().padLeft(2, '0')}',
@@ -12312,6 +12829,16 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
               ],
             ),
           ),
+          if (steps.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+              child: LinearProgressIndicator(
+                value: steps.where((step) => step['status'] == 'completed').length / steps.length,
+                backgroundColor: const Color(0xFFCFE0EE),
+                color: const Color(0xFF2C5282),
+                minHeight: 5,
+              ),
+            ),
           ...steps.asMap().entries.map((entry) {
             final idx = entry.key;
             final step = entry.value as Map<String, dynamic>;
@@ -12389,6 +12916,12 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             color: Colors.black54,
                           ),
                         ),
+                        if ((step['events'] as List? ?? []).isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          ...((step['events'] as List)
+                              .cast<Map>()
+                              .map((event) => _ResearchEventRow(event: event))),
+                        ],
                         if (step['content'] != null &&
                             step['content'].toString().isNotEmpty)
                           ...step['content']
@@ -12468,6 +13001,91 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
               ],
             );
           }).toList(),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResearchEventRow extends StatelessWidget {
+  const _ResearchEventRow({required this.event});
+
+  final Map event;
+
+  @override
+  Widget build(BuildContext context) {
+    final isSearch = event['kind'] == 'search';
+    final primary = isSearch
+        ? event['query']?.toString() ?? 'Web search'
+        : event['url']?.toString() ?? 'Fetched source';
+    final resultCount = event['result_count']?.toString();
+    final added = event['new_chunks_added']?.toString();
+    final novelty = event['novelty_ratio'];
+    final detail = isSearch
+        ? '${resultCount ?? '0'} results'
+        : '${added ?? '0'} chunks${novelty is num ? ' · ${(novelty * 100).toStringAsFixed(0)}% novel' : ''}';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isSearch ? const Color(0xFFEAF3FA) : const Color(0xFFEDF6EF),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: isSearch ? const Color(0xFFB8D3E8) : const Color(0xFFB9D9C0),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isSearch ? Icons.search : Icons.language,
+            size: 17,
+            color: isSearch ? const Color(0xFF1D5E85) : const Color(0xFF327342),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  primary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF52606D)),
+                ),
+                if (isSearch && event['results'] is List) ...[
+                  const SizedBox(height: 7),
+                  ...((event['results'] as List).cast<Map>().map(
+                    (result) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            result['title']?.toString() ?? 'Search result',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+                          ),
+                          Text(
+                            result['snippet']?.toString() ?? '',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF52606D)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )),
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );
