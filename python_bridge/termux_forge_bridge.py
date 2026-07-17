@@ -93,6 +93,7 @@ from deep_research import DeepResearchOrchestrator
 VERSION = "1.0.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+MCP_HTTP_TIMEOUT_SECONDS = float(os.getenv("MCP_HTTP_TIMEOUT_SECONDS", "110"))
 LOG_DIR = os.path.expanduser("~/.termux_forge/logs")
 HISTORY_FILE = os.path.expanduser("~/.termux_forge/command_history.json")
 DEFAULT_CWD = os.path.expanduser("~")
@@ -238,6 +239,7 @@ class TermuxForgeBridge:
         # ── Deep research ────────────────────────────────────────────
         r.register("deep_research.ingest", self._deep_research_ingest)
         r.register("deep_research.retrieve", self._deep_research_retrieve)
+        r.register("deep_research.export_temp", self._deep_research_export_temp)
 
         # ── Workflows ─────────────────────────────────────────────────
         r.register("workflow_execute", self._workflow_execute)
@@ -921,6 +923,14 @@ class TermuxForgeBridge:
     async def _deep_research_retrieve(self, stage_id: str, query: str) -> dict:
         """Write ranked chunks to temp.json and return confirmation metadata only."""
         return await self.deep_research.retrieve(stage_id, query)
+
+    async def _deep_research_export_temp(self) -> dict:
+        """Return the bridge-owned retrieval payload for Flutter's writer stage."""
+        try:
+            content = self.deep_research.temp_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            content = "{}"
+        return {"content": content}
 
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,
@@ -2091,7 +2101,17 @@ class TermuxForgeBridge:
             
             # Dispatch as internal JSON-RPC
             rpc_req = JsonRpcRequest(method=method, params=params, id="http-req", jsonrpc="2.0")
-            rpc_resp = await self.router.dispatch(rpc_req)
+            try:
+                rpc_resp = await asyncio.wait_for(
+                    self.router.dispatch(rpc_req),
+                    timeout=MCP_HTTP_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error("MCP HTTP request timed out: method=%s", method)
+                return web.json_response(
+                    {"error": f"MCP request timed out after {MCP_HTTP_TIMEOUT_SECONDS:g}s"},
+                    status=504,
+                )
             
             if rpc_resp.error:
                 error_msg = rpc_resp.error.get("message", "Unknown RPC error") if isinstance(rpc_resp.error, dict) else str(rpc_resp.error)

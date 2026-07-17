@@ -268,7 +268,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 120);
     try {
-      final request = await client.postUrl(Uri.parse(endpoint));
+      final request = await client
+          .postUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 120));
       request.headers.contentType = ContentType.json;
       final bytes = utf8.encode(jsonEncode({
         'method': 'deep_research.ingest',
@@ -281,8 +283,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
       }));
       request.headers.contentLength = bytes.length;
       request.add(bytes);
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
+      final response = await request.close().timeout(
+        const Duration(seconds: 120),
+      );
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 120));
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw HttpException('HTTP ${response.statusCode}: $body');
       }
@@ -296,6 +303,44 @@ class _ChatHomePageState extends State<ChatHomePage> {
         throw HttpException(decoded['error'].toString());
       }
       throw const FormatException('Missing deep research result');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<String> _exportDeepResearchTemp() async {
+    final endpoint = _customMcpUrl.isNotEmpty
+        ? _customMcpUrl
+        : 'http://127.0.0.1:8390/mcp';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 120);
+    try {
+      final request = await client
+          .postUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 120));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({
+        'method': 'deep_research.export_temp',
+        'params': <String, dynamic>{},
+      }));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(
+        const Duration(seconds: 120),
+      );
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 120));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('HTTP ${response.statusCode}: $body');
+      }
+      final decoded = jsonDecode(body);
+      final result = decoded is Map ? decoded['result'] : null;
+      if (result is Map && result['content'] is String) {
+        return result['content'] as String;
+      }
+      throw const FormatException('Missing deep research export content');
     } finally {
       client.close(force: true);
     }
@@ -1544,8 +1589,12 @@ For every project, maintain a README.md at the project root.
                 targetUrl = 'https://$targetUrl';
               final client = HttpClient()
                 ..connectionTimeout = const Duration(seconds: 15);
-              final request = await client.getUrl(Uri.parse(targetUrl));
-              final response = await request.close();
+              final request = await client
+                  .getUrl(Uri.parse(targetUrl))
+                  .timeout(const Duration(seconds: 60));
+              final response = await request.close().timeout(
+                const Duration(seconds: 60),
+              );
               final body = await response.transform(utf8.decoder).join();
 
               var htmlBody = body;
@@ -1650,8 +1699,8 @@ For every project, maintain a README.md at the project root.
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
             String toolMethod = 'tool';
             Map<String, dynamic> toolParams = {};
-            try {
-              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+           try {
+             final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
               toolMethod = parsed['method']?.toString() ?? 'tool';
               toolParams = parsed['params'] as Map<String, dynamic>? ?? {};
 
@@ -2792,6 +2841,87 @@ For every project, maintain a README.md at the project root.
     });
   }
 
+  // Bound state persisted into <research_state>; all limits are UTF-8 bytes.
+  String _truncateEventText(String value, int maxBytes) {
+    final bytes = utf8.encode(value);
+    if (bytes.length <= maxBytes) return value;
+    const ellipsis = '…';
+    final budget = maxBytes - utf8.encode(ellipsis).length;
+    final buffer = StringBuffer();
+    var usedBytes = 0;
+    for (final rune in value.runes) {
+      final character = String.fromCharCode(rune);
+      final characterBytes = utf8.encode(character).length;
+      if (usedBytes + characterBytes > budget) break;
+      buffer.write(character);
+      usedBytes += characterBytes;
+    }
+    return '${buffer.toString()}$ellipsis';
+  }
+
+  String _eventPlainText(String value) => value
+      .replaceAll(RegExp(r'<[^>]*>'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  Map<String, dynamic> _compactSearchPayload(Iterable<Map> results) {
+    return {
+      'results': results.take(3).map((result) {
+        return {
+          'title': _truncateEventText(result['title']?.toString() ?? '', 120),
+          'url': _truncateEventText(result['url']?.toString() ?? '', 300),
+          'snippet': _truncateEventText(
+            result['snippet']?.toString() ??
+                result['description']?.toString() ??
+                '',
+            150,
+          ),
+        };
+      }).toList(),
+    };
+  }
+
+  Map<String, dynamic> _compactReadUrlPayload({
+    required String url,
+    required String content,
+  }) {
+    return {
+      'url': _truncateEventText(url, 300),
+      'content_preview': _truncateEventText(_eventPlainText(content), 200),
+    };
+  }
+
+  Map<String, dynamic> _compactMcpPayload({
+    required String kind,
+    required Map<String, dynamic> params,
+    required Map<String, dynamic>? resultData,
+    required String rawResult,
+  }) {
+    final nestedData = resultData?['data'];
+    final data = nestedData is Map
+        ? Map<String, dynamic>.from(nestedData)
+        : resultData;
+    if (kind == 'search') {
+      final results = resultData?['results'] ?? data?['results'];
+      if (results is List) {
+        return _compactSearchPayload(
+          results.whereType<Map>().map(Map<String, dynamic>.from),
+        );
+      }
+    } else if (kind == 'fetch') {
+      final content = data?['content'] ??
+          data?['text'] ??
+          data?['body'] ??
+          data?['markdown'] ??
+          rawResult;
+      return _compactReadUrlPayload(
+        url: (data?['url'] ?? params['url'] ?? params['uri'] ?? '').toString(),
+        content: content.toString(),
+      );
+    }
+    return {'summary': _truncateEventText(_eventPlainText(rawResult), 150)};
+  }
+
   Future<void> _runResearchLoop({
     required int sessionIndex,
     required int messageIndex,
@@ -2845,12 +2975,66 @@ For every project, maintain a README.md at the project root.
           "Research Phase ${i + 1}: ${steps[i]['title']}\nInstructions: ${steps[i]['prompt']}";
       stepMessages.add(ChatMessage(role: MessageRole.user, text: stepPrompt));
 
-      String stepContent = '';
-      int loopCount = 0;
-      int consecutive429s = 0;
-      bool stepDone = false;
+     String stepContent = '';
+     int loopCount = 0;
+     int consecutive429s = 0;
+     bool stepDone = false;
+      bool stepFailed = false;
+      String? stepFailure;
+      final stepEvents = steps[i]['events'] as List;
+      var nextEventSequence = stepEvents.length;
 
-      while (!stepDone && loopCount < 15) {
+      // Events are written twice: once before dispatch so the UI can show a
+      // running operation, then in place when that same operation terminates.
+      String beginResearchEvent({
+        required String kind,
+        required String tool,
+        String? query,
+        String? url,
+      }) {
+        final eventId = 'step-${i + 1}-event-${++nextEventSequence}';
+        final event = <String, dynamic>{
+          'id': eventId,
+          'kind': kind,
+          'tool': tool,
+          'status': 'running',
+          if (query != null && query.isNotEmpty) 'query': query,
+          if (url != null && url.isNotEmpty) 'url': url,
+        };
+        stepEvents.add(event);
+        if (kind == 'mcp') {
+          debugPrint(
+            '[event-fallback] id=${event['id']} tool=${event['tool']} kind=${event['kind']}',
+          );
+        }
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
+        return eventId;
+      }
+
+      void finishResearchEvent(
+        String eventId, {
+        required String status,
+        required Stopwatch stopwatch,
+        Map<String, dynamic> details = const {},
+        String? error,
+      }) {
+        final event = stepEvents.cast<Map>().firstWhere(
+          (candidate) => candidate['id'] == eventId,
+        );
+        event
+          ..['status'] = status
+          ..['latency_ms'] = stopwatch.elapsedMilliseconds
+          ..addAll(details);
+        if (error != null && error.isNotEmpty) event['error'] = error;
+        if (status == 'error') {
+          debugPrint(
+            '[event-error-transition] id=${event['id']} tool=${event['tool']} error=${event['error']}',
+          );
+        }
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
+      }
+
+     while (!stepDone && loopCount < 15) {
         if (!mounted) return;
         loopCount++;
 
@@ -2944,9 +3128,15 @@ For every project, maintain a README.md at the project root.
                 ? contentClean
                 : '$stepContent\n\n$contentClean';
             stepDone = true;
-          } else if (searchMatch != null) {
-            final query = searchMatch.group(1)?.trim() ?? '';
-            stepContent = stepContent.isEmpty
+         } else if (searchMatch != null) {
+           final query = searchMatch.group(1)?.trim() ?? '';
+            final eventWatch = Stopwatch()..start();
+            final eventId = beginResearchEvent(
+              kind: 'search',
+              tool: 'web_search',
+              query: query,
+            );
+           stepContent = stepContent.isEmpty
                 ? '<search_request>$query</search_request>'
                 : '$stepContent\n\n<search_request>$query</search_request>';
             steps[i]['content'] = stepContent;
@@ -2965,35 +3155,53 @@ For every project, maintain a README.md at the project root.
                 );
               });
             }
-            final searchResultRaw = await _chatClient.searchWeb(
-              query,
-              _searchSettings.provider,
-              [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
-              googleCx: _searchSettings.googleCx,
-            );
+            String searchResultRaw;
+            try {
+              searchResultRaw = await _chatClient.searchWeb(
+                query,
+                _searchSettings.provider,
+                [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
+                googleCx: _searchSettings.googleCx,
+              ).timeout(const Duration(seconds: 60));
+            } catch (e) {
+              finishResearchEvent(
+                eventId,
+                status: 'error',
+                stopwatch: eventWatch,
+                error: e.toString(),
+              );
+              rethrow;
+            }
             String searchResult = searchResultRaw;
             if (searchResult.length > 4000) {
               searchResult =
                   searchResult.substring(0, 4000) + '\n\n...[truncated]';
             }
-            final searchEvents = steps[i]['events'] as List;
+            final searchError = searchResult.startsWith('Web search failed:')
+                ? searchResult
+                : null;
             final resultMatches = RegExp(
               r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)',
               multiLine: true,
             ).allMatches(searchResult);
-            searchEvents.add({
-              'kind': 'search',
-              'query': query,
-              'result_count': resultMatches.length,
-              'results': resultMatches
-                  .map((match) => {
-                        'title': match.group(1) ?? '',
-                        'url': match.group(2) ?? '',
-                        'snippet': match.group(3) ?? '',
-                      })
-                  .toList(),
-              'preview': searchResult,
-            });
+            finishResearchEvent(
+              eventId,
+              status: searchError == null ? 'done' : 'error',
+              stopwatch: eventWatch,
+              details: {
+                'result_count': resultMatches.length,
+                'result_payload': _compactSearchPayload(
+                  resultMatches.map(
+                    (match) => {
+                      'title': match.group(1) ?? '',
+                      'url': match.group(2) ?? '',
+                      'snippet': match.group(3) ?? '',
+                    },
+                  ),
+                ),
+              },
+              error: searchError,
+            );
 
             final List<String> urls = resultMatches
                 .map((match) => match.group(2)?.trim() ?? '')
@@ -3001,22 +3209,29 @@ For every project, maintain a README.md at the project root.
                 .toList();
             if (_deepResearchEnabled && urls.isNotEmpty) {
               await _autoIngestSearchResults(
-                stageId: 'stage_${i + 1}',
+                // Keep search-result ingestion in the same RAG namespace as
+                // read_url ingestion and the synthesis prompt (stage1, ...).
+                stageId: 'stage${i + 1}',
                 queryId: query,
                 urls: urls,
               );
             }
 
-            _publishResearchState(sessionIndex, messageIndex, stateMap);
             stepMessages.add(
               ChatMessage(
                 role: MessageRole.user,
                 text: "Search results:\n$searchResult",
               ),
             );
-          } else if (readUrlMatch != null) {
-            final url = readUrlMatch.group(1)?.trim() ?? '';
-            stepContent = stepContent.isEmpty
+         } else if (readUrlMatch != null) {
+           final url = readUrlMatch.group(1)?.trim() ?? '';
+            final eventWatch = Stopwatch()..start();
+            final eventId = beginResearchEvent(
+              kind: 'fetch',
+              tool: 'read_url',
+              url: url,
+            );
+           stepContent = stepContent.isEmpty
                 ? '<read_url>$url</read_url>'
                 : '$stepContent\n\n<read_url>$url</read_url>';
             steps[i]['content'] = stepContent;
@@ -3034,23 +3249,29 @@ For every project, maintain a README.md at the project root.
                   messages: msgs,
                 );
               });
-            }
-            String urlResult = '';
-            try {
-              var targetUrl = url;
-              if (!targetUrl.startsWith('http'))
-                targetUrl = 'https://$targetUrl';
+           }
+           String urlResult = '';
+            var targetUrl = url;
+           try {
+             if (!targetUrl.startsWith('http'))
+               targetUrl = 'https://$targetUrl';
               final client = HttpClient()
                 ..connectionTimeout = const Duration(seconds: 15);
-              final request = await client.getUrl(Uri.parse(targetUrl));
-              final response = await request.close();
+              final request = await client
+                  .getUrl(Uri.parse(targetUrl))
+                  .timeout(const Duration(seconds: 60));
+              final response = await request.close().timeout(
+                const Duration(seconds: 60),
+              );
               final isPdf = targetUrl.toLowerCase().endsWith('.pdf') ||
                   (response.headers.contentType?.mimeType == 'application/pdf');
 
               String text = '';
               if (isPdf) {
                 final bytesBuilder = BytesBuilder();
-                await for (final chunk in response) {
+                await for (final chunk in response.timeout(
+                  const Duration(seconds: 60),
+                )) {
                   bytesBuilder.add(chunk);
                 }
                 final bytes = bytesBuilder.takeBytes();
@@ -3058,7 +3279,10 @@ For every project, maintain a README.md at the project root.
                 text = PdfTextExtractor(document).extractText();
                 document.dispose();
               } else {
-                final body = await response.transform(utf8.decoder).join();
+                final body = await response
+                    .transform(utf8.decoder)
+                    .join()
+                    .timeout(const Duration(seconds: 60));
                 var htmlBody = body;
                 final bodyMatch = RegExp(
                   r'<body[^>]*>(.*?)</body>',
@@ -3111,24 +3335,52 @@ For every project, maintain a README.md at the project root.
                   sourceUrl: targetUrl,
                   text: text,
                 );
-                urlResult = jsonEncode(result);
-                final fetchEvents = steps[i]['events'] as List;
-                fetchEvents.add({
-                  'kind': 'fetch',
-                  'url': targetUrl,
-                  ...result,
-                });
-                _publishResearchState(sessionIndex, messageIndex, stateMap);
-              } else {
-                urlResult = text;
-                if (urlResult.length > 8000) {
-                  urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated]';
-                }
-              }
-            } catch (e) {
+               urlResult = jsonEncode(result);
+                finishResearchEvent(
+                  eventId,
+                  status: result['failed'] == true ? 'error' : 'done',
+                  stopwatch: eventWatch,
+                  details: {
+                    'url': targetUrl,
+                    ...result,
+                    'result_payload': _compactReadUrlPayload(
+                      url: targetUrl,
+                      content: text,
+                    ),
+                  },
+                  error: result['failed'] == true
+                      ? result['error']?.toString() ?? 'Deep research ingestion failed.'
+                      : null,
+                );
+             } else {
+               urlResult = text;
+               if (urlResult.length > 8000) {
+                 urlResult = urlResult.substring(0, 8000) + '\n\n...[truncated]';
+               }
+                finishResearchEvent(
+                  eventId,
+                  status: 'done',
+                  stopwatch: eventWatch,
+                  details: {
+                    'url': targetUrl,
+                    'result_payload': _compactReadUrlPayload(
+                      url: targetUrl,
+                      content: text,
+                    ),
+                  },
+                );
+             }
+           } catch (e) {
+              finishResearchEvent(
+                eventId,
+                status: 'error',
+                stopwatch: eventWatch,
+                details: {'url': targetUrl},
+                error: e.toString(),
+              );
               if (e.toString().contains('429')) rethrow;
-              urlResult = 'Failed to read URL: $e';
-            }
+             urlResult = 'Failed to read URL: $e';
+           }
             stepMessages.add(
               ChatMessage(
                 role: MessageRole.user,
@@ -3183,20 +3435,52 @@ For every project, maintain a README.md at the project root.
               }
               _resolveToolPaths(params, _agenticWorkspace);
               parsed['params'] = params;
-              jsonString = jsonEncode(parsed);
-            } catch (_) {}
+             jsonString = jsonEncode(parsed);
+           } catch (_) {}
 
-            String mcpResult = '';
-            if (toolMethod == 'run_command' ||
+            final normalizedTool = toolMethod.toLowerCase();
+            final isWebSearch = normalizedTool == 'web_search' ||
+                normalizedTool == 'search_web' ||
+                normalizedTool == 'search';
+            final isReadUrl = normalizedTool == 'read_url' ||
+                normalizedTool == 'fetch_url' ||
+                normalizedTool == 'fetch_page';
+            final eventKind = isWebSearch
+                ? 'search'
+                : isReadUrl
+                ? 'fetch'
+                : 'mcp';
+            final eventWatch = Stopwatch()..start();
+            final eventId = beginResearchEvent(
+              kind: eventKind,
+              tool: toolMethod,
+              query: isWebSearch
+                  ? (toolParams['query'] ?? toolParams['q'])?.toString()
+                  : null,
+              url: isReadUrl
+                  ? (toolParams['url'] ?? toolParams['uri'])?.toString()
+                  : null,
+            );
+           String mcpResult = '';
+            var mcpFailed = false;
+            String? mcpError;
+            Map<String, dynamic>? mcpResultData;
+           if (toolMethod == 'run_command' ||
                 toolMethod == 'shell_exec' ||
                 toolMethod == 'execute_command' ||
                 toolMethod == 'execute_shell' ||
                 toolMethod == 'shell_rich' ||
                 toolMethod == 'run_background') {
               final cmd = toolParams['command']?.toString() ?? '';
-              final allowed = await _askShellPermission(cmd);
-              if (!allowed) {
-                stepMessages.add(
+             final allowed = await _askShellPermission(cmd);
+             if (!allowed) {
+                finishResearchEvent(
+                  eventId,
+                  status: 'error',
+                  stopwatch: eventWatch,
+                  error: 'User denied shell command execution.',
+                );
+               stepMessages.add(
                   ChatMessage(
                     role: MessageRole.user,
                     text:
@@ -3210,9 +3494,15 @@ For every project, maintain a README.md at the project root.
               final allowed = await _askFileMutationPermission(
                 toolMethod,
                 toolParams,
-              );
-              if (!allowed) {
-                stepMessages.add(
+             );
+             if (!allowed) {
+                finishResearchEvent(
+                  eventId,
+                  status: 'error',
+                  stopwatch: eventWatch,
+                  error: 'User denied file operation.',
+                );
+               stepMessages.add(
                   ChatMessage(
                     role: MessageRole.user,
                     text:
@@ -3236,15 +3526,20 @@ For every project, maintain a README.md at the project root.
                 final bytes = utf8.encode(jsonString);
                 request.headers.contentLength = bytes.length;
                 request.add(bytes);
-                final response = await request.close()
-                    .timeout(const Duration(seconds: 120));
-                final body = await response.transform(utf8.decoder).join()
-                    .timeout(const Duration(seconds: 120));
-                String cleanResult = body;
+               final response = await request.close()
+                   .timeout(const Duration(seconds: 120));
+               final body = await response.transform(utf8.decoder).join()
+                   .timeout(const Duration(seconds: 120));
+                if (response.statusCode >= 400) {
+                  mcpFailed = true;
+                  mcpError = 'MCP request failed with HTTP ${response.statusCode}.';
+                }
+               String cleanResult = body;
                 try {
                   final parsed = jsonDecode(body) as Map<String, dynamic>;
                   final resultData =
                       parsed['result'] as Map<String, dynamic>? ?? parsed;
+                  mcpResultData = resultData;
                   if (resultData.containsKey('aiBlock')) {
                     cleanResult = resultData['aiBlock'].toString();
                   } else if (resultData.containsKey('stdout')) {
@@ -3260,10 +3555,12 @@ For every project, maintain a README.md at the project root.
                           '\n\n--- STDERR ---\n' +
                           resultData['stderr'].toString();
                     }
-                  } else if (resultData.containsKey('error')) {
-                    cleanResult = 'Error: ' + resultData['error'].toString();
-                  }
-                } catch (_) {}
+                 } else if (resultData.containsKey('error')) {
+                    mcpFailed = true;
+                    mcpError = resultData['error'].toString();
+                    cleanResult = 'Error: $mcpError';
+                 }
+               } catch (_) {}
                 mcpResult = cleanResult;
                 if (mcpResult.length > 32000) {
                   mcpResult =
@@ -3273,17 +3570,33 @@ For every project, maintain a README.md at the project root.
                 }
                 break; // Success, break out of retry loop.
               } catch (e) {
-                if (attempt >= maxRetries) {
-                  mcpResult = '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
+               if (attempt >= maxRetries) {
+                 mcpResult = '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
+                  mcpFailed = true;
+                  mcpError = 'MCP bridge connection failed after $maxRetries attempts: $e';
                 } else {
                   // Wait a short time before retrying
                   await Future.delayed(Duration(milliseconds: 500 * attempt));
                 }
               } finally {
                 client?.close(force: true);
-              }
-            }
-            stepMessages.add(
+             }
+           }
+            finishResearchEvent(
+              eventId,
+              status: mcpFailed ? 'error' : 'done',
+              stopwatch: eventWatch,
+              details: {
+                'result_payload': _compactMcpPayload(
+                  kind: eventKind,
+                  params: toolParams,
+                  resultData: mcpResultData,
+                  rawResult: mcpResult,
+                ),
+              },
+              error: mcpError,
+            );
+           stepMessages.add(
               ChatMessage(
                 role: MessageRole.user,
                 text: "MCP Result:\n$mcpResult",
@@ -3331,15 +3644,25 @@ For every project, maintain a README.md at the project root.
             }
             await Future.delayed(Duration(seconds: delaySeconds));
           } else {
+            stepFailed = true;
+            stepFailure = e.toString();
             stepContent = stepContent.isEmpty
-                ? "Error during step: $e"
-                : "$stepContent\n\nError during step: $e";
+                ? "⚠️ Step failed: $stepFailure"
+                : "$stepContent\n\n⚠️ Step failed: $stepFailure";
             stepDone = true;
           }
         }
       }
 
-      steps[i]['status'] = 'completed';
+      if (!stepDone) {
+        stepFailed = true;
+        stepFailure = 'The step exceeded the 15-iteration execution limit.';
+        stepContent = stepContent.isEmpty
+            ? "⚠️ Step failed: $stepFailure"
+            : "$stepContent\n\n⚠️ Step failed: $stepFailure";
+      }
+      steps[i]['status'] = stepFailed ? 'failed' : 'completed';
+      if (stepFailed) steps[i]['error'] = stepFailure;
       steps[i]['content'] = stepContent;
       if (mounted) {
         setState(() {
@@ -3354,6 +3677,34 @@ For every project, maintain a README.md at the project root.
           );
         });
         await _saveSessions();
+      }
+    }
+
+    final executionIssues = <Map<String, dynamic>>[];
+    for (final stepValue in steps) {
+      final step = stepValue as Map;
+      final eventErrors = (step['events'] as List? ?? [])
+          .whereType<Map>()
+          .where((event) => event['status'] == 'error')
+          .map(
+            (event) => _truncateEventText(
+              event['error']?.toString() ?? 'Tool call failed.',
+              300,
+            ),
+          )
+          .toList();
+      if (step['status'] == 'failed' || eventErrors.isNotEmpty) {
+        executionIssues.add({
+          'step': step['title']?.toString() ?? 'Research step',
+          'status': step['status']?.toString() ?? 'completed_with_tool_errors',
+          'error': _truncateEventText(
+            step['error']?.toString() ??
+                (eventErrors.isNotEmpty
+                    ? eventErrors.join('; ')
+                    : 'Step did not complete.'),
+            500,
+          ),
+        });
       }
     }
 
@@ -3390,6 +3741,7 @@ For every project, maintain a README.md at the project root.
 
       bool synthesisDone = false;
       int synthesisLoop = 0;
+      final synthesisIssues = <String>[];
 
       while (!synthesisDone && synthesisLoop < 20) {
         if (!mounted) return;
@@ -3488,16 +3840,46 @@ For every project, maintain a README.md at the project root.
             try {
               client = HttpClient()
                 ..connectionTimeout = const Duration(seconds: 120);
-              final request = await client.postUrl(Uri.parse(mcpEndpoint));
+              final request = await client
+                  .postUrl(Uri.parse(mcpEndpoint))
+                  .timeout(const Duration(seconds: 120));
               request.headers.contentType = ContentType.json;
               final bytes = utf8.encode(jsonString);
               request.headers.contentLength = bytes.length;
               request.add(bytes);
-              final response = await request.close();
-              final body = await response.transform(utf8.decoder).join();
+              final response = await request.close().timeout(
+                const Duration(seconds: 120),
+              );
+              final body = await response
+                  .transform(utf8.decoder)
+                  .join()
+                  .timeout(const Duration(seconds: 120));
               mcpResult = body;
+              if (response.statusCode < 200 || response.statusCode >= 300) {
+                synthesisIssues.add(
+                  'Retrieval request returned HTTP ${response.statusCode}: '
+                  '${_truncateEventText(body, 300)}',
+                );
+              } else {
+                try {
+                  final decoded = jsonDecode(body);
+                  if (decoded is Map && decoded['error'] != null) {
+                    synthesisIssues.add(
+                      'Retrieval request failed: '
+                      '${_truncateEventText(decoded['error'].toString(), 300)}',
+                    );
+                  }
+                } catch (_) {
+                  // The synthesis model receives the raw response and can
+                  // decide whether it is useful; a non-JSON success is not
+                  // itself a pipeline failure.
+                }
+              }
             } catch (e) {
               mcpResult = '{"error": "$e"}';
+              synthesisIssues.add(
+                'Retrieval request threw: ${_truncateEventText(e.toString(), 300)}',
+              );
             } finally {
               client?.close(force: true);
             }
@@ -3518,8 +3900,22 @@ For every project, maintain a README.md at the project root.
           }
           await Future.delayed(const Duration(seconds: 2));
         } catch (e) {
+          synthesisIssues.add(
+            'Synthesis agent stopped: ${_truncateEventText(e.toString(), 300)}',
+          );
           synthesisDone = true;
         }
+      }
+
+      if (!synthesisDone && synthesisLoop >= 20) {
+        synthesisIssues.add('Synthesis stopped after reaching the 20-turn limit.');
+      }
+      for (final issue in synthesisIssues) {
+        executionIssues.add({
+          'step': 'Synthesis and retrieval',
+          'status': 'failed',
+          'error': issue,
+        });
       }
 
       // 2. Writer Phase
@@ -3538,14 +3934,25 @@ For every project, maintain a README.md at the project root.
         });
       }
 
-      final tempFile = File('$_agenticWorkspace/.termux_forge/deep_research/temp.json');
       String tempJsonContent = '{}';
       try {
-        if (await tempFile.exists()) {
-          tempJsonContent = await tempFile.readAsString();
-        }
+        tempJsonContent = await _exportDeepResearchTemp();
       } catch (e) {
-        debugPrint("Error reading temp.json: $e");
+        debugPrint("Error exporting deep-research temp.json: $e");
+        executionIssues.add({
+          'step': 'Writer input export',
+          'status': 'failed',
+          'error': 'The writer could not load the bridge-owned retrieval data: '
+              '${_truncateEventText(e.toString(), 300)}',
+        });
+      }
+      if (tempJsonContent.trim().isEmpty || tempJsonContent.trim() == '{}') {
+        executionIssues.add({
+          'step': 'Writer input export',
+          'status': 'failed',
+          'error': 'No retrieved evidence was available from the bridge. '
+              'Do not present the report as a complete evidence-based result.',
+        });
       }
 
       List<ChatMessage> writerMessages = [
@@ -3556,6 +3963,8 @@ For every project, maintain a README.md at the project root.
         ChatMessage(
           role: MessageRole.user,
           text: "Here is the retrieved content from the database (temp.json):\n$tempJsonContent\n\n"
+              "Execution issues that must be disclosed in the report. Do not invent facts to fill these gaps; add an explicit limitation or failed-section marker where relevant:\n"
+              "${jsonEncode(executionIssues)}\n\n"
               "Please write the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.",
         ),
       ];
@@ -3564,6 +3973,7 @@ For every project, maintain a README.md at the project root.
       String finalReasoningText = '';
       bool finalReportDone = false;
       int writerRetries = 0;
+      String? writerFailure;
 
       while (!finalReportDone && writerRetries < 3) {
         if (!mounted) return;
@@ -3623,11 +4033,22 @@ For every project, maintain a README.md at the project root.
           stateMap['final_report'] = finalReportText;
           finalReportDone = true;
         } catch (e) {
+          writerFailure = e.toString();
           writerRetries++;
           await Future.delayed(const Duration(seconds: 10));
         }
       }
 
+      if (!finalReportDone || finalReportText.trim().isEmpty) {
+        finalReportText =
+            '# Research report incomplete\n\n'
+            '⚠️ The report writer did not complete. '
+            'Reason: ' +
+            (writerFailure ?? 'No report was returned by the writer model.') +
+            '\n\n'
+            'The collected step status and content remain available below; do not treat this as a complete research report.';
+        stateMap['final_report'] = finalReportText;
+      }
       stateMap['status'] = 'completed';
       if (mounted) {
         setState(() {
@@ -3774,7 +4195,11 @@ For every project, maintain a README.md at the project root.
     }
     } catch (globalError) {
       debugPrint("Global Deep Research Loop error: $globalError");
-      stateMap['status'] = 'completed'; // resolve it
+      stateMap['status'] = 'failed';
+      stateMap['final_report'] ??=
+          '# Research report incomplete\n\n'
+          '⚠️ Deep Research stopped before completion. Reason: $globalError\n\n'
+          'Do not treat the available step content as a complete report.';
       if (mounted) {
         setState(() {
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
@@ -13159,12 +13584,25 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             color: Colors.black54,
                           ),
                         ),
-                        if ((step['events'] as List? ?? []).isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          ...((step['events'] as List)
-                              .cast<Map>()
-                              .map((event) => _ResearchEventRow(event: event))),
-                        ],
+                       if ((step['events'] as List? ?? []).isNotEmpty) ...[
+                         const SizedBox(height: 12),
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: (step['events'] as List).length,
+                            itemBuilder: (context, eventIndex) {
+                              final event = (step['events'] as List)[eventIndex]
+                                  as Map;
+                              return _ResearchEventRow(
+                                key: ValueKey(
+                                  event['id']?.toString() ??
+                                      'legacy-event-$eventIndex',
+                                ),
+                                event: event,
+                              );
+                            },
+                          ),
+                       ],
                         if (step['content'] != null &&
                             step['content'].toString().isNotEmpty)
                           ...step['content']
@@ -13180,7 +13618,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                                       )
                                       .trim();
                                   return McpToolBlock(mcpJson: jsonStr);
-                                } else if (s.contains('<search_request>')) {
+                               } else if (s.contains('<search_request>')) {
                                   final query = s
                                       .substring(
                                         s.indexOf('<search_request>') + 16,
@@ -13218,9 +13656,49 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                                           ),
                                         ),
                                       ],
+                                   ),
+                                 );
+                                } else if (s.contains('<read_url>')) {
+                                  final url = s
+                                      .substring(
+                                        s.indexOf('<read_url>') + 10,
+                                        s.indexOf('</read_url>'),
+                                      )
+                                      .trim();
+                                  return Container(
+                                    margin: const EdgeInsets.symmetric(
+                                      vertical: 8,
+                                    ),
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF0F5FA),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xFFD0E0F0),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.link,
+                                          color: Color(0xFF2B6CB0),
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Read webpage at "$url"',
+                                            style: const TextStyle(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF2B6CB0),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   );
-                                }
+                               }
                                 return Padding(
                                   padding: const EdgeInsets.only(top: 8.0),
                                   child: Text(
@@ -13250,86 +13728,320 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   }
 }
 
-class _ResearchEventRow extends StatelessWidget {
-  const _ResearchEventRow({required this.event});
+class _ResearchEventRow extends StatefulWidget {
+  const _ResearchEventRow({super.key, required this.event});
 
   final Map event;
 
   @override
-  Widget build(BuildContext context) {
-    final isSearch = event['kind'] == 'search';
-    final primary = isSearch
-        ? event['query']?.toString() ?? 'Web search'
-        : event['url']?.toString() ?? 'Fetched source';
-    final resultCount = event['result_count']?.toString();
-    final added = event['new_chunks_added']?.toString();
-    final novelty = event['novelty_ratio'];
-    final detail = isSearch
-        ? '${resultCount ?? '0'} results'
-        : '${added ?? '0'} chunks${novelty is num ? ' · ${(novelty * 100).toStringAsFixed(0)}% novel' : ''}';
+  State<_ResearchEventRow> createState() => _ResearchEventRowState();
+}
 
+class _ResearchEventRowState extends State<_ResearchEventRow> {
+  Timer? _pulseTimer;
+  var _dimmed = false;
+  var _expanded = false;
+
+  bool get _isRunning => widget.event['status'] == 'running';
+  bool get _isError => widget.event['status'] == 'error';
+  bool get _canExpand {
+    if (_isRunning) return false;
+    if (_isError) return true;
+    final payload = widget.event['result_payload'];
+    return payload is Map && payload.isNotEmpty;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ResearchEventRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncPulse();
+    if (_isRunning && _expanded) _expanded = false;
+  }
+
+  void _syncPulse() {
+    if (_isRunning && _pulseTimer == null) {
+      _pulseTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
+        if (mounted) setState(() => _dimmed = !_dimmed);
+      });
+    } else if (!_isRunning && _pulseTimer != null) {
+      _pulseTimer!.cancel();
+      _pulseTimer = null;
+      _dimmed = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseTimer?.cancel();
+    super.dispose();
+  }
+
+  Widget _detailBlock(String text, Color accent) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
+      width: double.infinity,
+      padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: isSearch ? const Color(0xFFEAF3FA) : const Color(0xFFEDF6EF),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isSearch ? const Color(0xFFB8D3E8) : const Color(0xFFB9D9C0),
+        color: const Color(0xFFFFFFFF),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: accent.withOpacity(0.35)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 11,
+          color: accent,
         ),
       ),
-      child: Row(
-        children: [
-          Icon(
-            isSearch ? Icons.search : Icons.language,
-            size: 17,
-            color: isSearch ? const Color(0xFF1D5E85) : const Color(0xFF327342),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
+    );
+  }
+
+  Widget _expandedPayload(Color accent) {
+    if (_isError) {
+      return _detailBlock(
+        widget.event['error']?.toString() ?? 'Tool call failed.',
+        accent,
+      );
+    }
+
+    final payload = widget.event['result_payload'];
+    if (payload is! Map) return const SizedBox.shrink();
+    final kind = widget.event['kind']?.toString();
+    if (kind == 'search') {
+      final results = payload['results'];
+      if (results is! List || results.isEmpty) {
+        return _detailBlock('No displayable search results returned.', accent);
+      }
+      return Column(
+        children: results.whereType<Map>().map((result) {
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFFFF),
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(color: const Color(0xFFD8E5EF)),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  primary,
+                  result['title']?.toString() ?? 'Search result',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
-                  detail,
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF52606D)),
+                  result['snippet']?.toString() ?? '',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF52606D),
+                  ),
                 ),
-                if (isSearch && event['results'] is List) ...[
-                  const SizedBox(height: 7),
-                  ...((event['results'] as List).cast<Map>().map(
-                    (result) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            result['title']?.toString() ?? 'Search result',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
-                          ),
-                          Text(
-                            result['snippet']?.toString() ?? '',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF52606D)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )),
-                ],
+                const SizedBox(height: 3),
+                Text(
+                  result['url']?.toString() ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
               ],
             ),
+          );
+        }).toList(),
+      );
+    }
+    if (kind == 'fetch') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            payload['url']?.toString() ??
+                widget.event['url']?.toString() ??
+                '',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10.5, color: Color(0xFF64748B)),
           ),
+          const SizedBox(height: 5),
+          _detailBlock(payload['content_preview']?.toString() ?? '', accent),
         ],
+      );
+    }
+    return _detailBlock(payload['summary']?.toString() ?? '', accent);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = widget.event['kind']?.toString();
+    final isSearch = kind == 'search';
+    final isFetch = kind == 'fetch';
+    final isError = _isError;
+    final isRunning = _isRunning;
+    final tool = widget.event['tool']?.toString() ?? kind ?? 'tool';
+    final toolLabel = isSearch
+        ? 'Web search'
+        : isFetch
+        ? 'Read URL'
+        : tool;
+    final target = isSearch
+        ? widget.event['query']?.toString() ?? 'No query'
+        : isFetch
+        ? widget.event['url']?.toString() ?? 'No URL'
+        : 'Tool: ' + tool;
+    final resultCount = widget.event['result_count']?.toString();
+    final added = widget.event['new_chunks_added']?.toString();
+    final novelty = widget.event['novelty_ratio'];
+    final latencyMs = widget.event['latency_ms'];
+    final latency = latencyMs is num
+        ? ' · ' + (latencyMs / 1000).toStringAsFixed(1) + 's'
+        : '';
+    final detail = isRunning
+        ? 'Running…'
+        : isError
+        ? widget.event['error']?.toString() ?? 'Tool call failed'
+        : isSearch
+        ? (resultCount ?? '0') + ' results'
+        : isFetch
+        ? (added ?? '0') +
+              ' chunks' +
+              (novelty is num
+                  ? ' · ' + (novelty * 100).toStringAsFixed(0) + '% novel'
+                  : '')
+        : tool;
+    final background = isError
+        ? const Color(0xFFF9ECE8)
+        : isSearch
+        ? const Color(0xFFEAF3FA)
+        : isFetch
+        ? const Color(0xFFEDF6EF)
+        : const Color(0xFFF3F4F6);
+    final border = isError
+        ? const Color(0xFF9B4D39)
+        : isSearch
+        ? const Color(0xFFB8D3E8)
+        : isFetch
+        ? const Color(0xFFB9D9C0)
+        : const Color(0xFFD1D5DB);
+    final accent = isError
+        ? const Color(0xFF9B4D39)
+        : isSearch
+        ? const Color(0xFF1D5E85)
+        : isFetch
+        ? const Color(0xFF327342)
+        : const Color(0xFF4B5563);
+    final icon = isError
+        ? Icons.error_outline
+        : isSearch
+        ? Icons.search
+        : isFetch
+        ? Icons.language
+        : Icons.settings;
+    final statusIcon = isRunning
+        ? Icons.more_horiz
+        : isError
+        ? Icons.error_outline
+        : Icons.check_circle;
+
+    return InkWell(
+      onTap: _canExpand ? () => setState(() => _expanded = !_expanded) : null,
+      borderRadius: BorderRadius.circular(6),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 450),
+        opacity: isRunning && _dimmed ? 0.58 : 1,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 17, color: accent),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          toolLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          target,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: Color(0xFF52606D),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Icon(statusIcon, size: 16, color: accent),
+                      if (!isRunning && latency.isNotEmpty)
+                        Text(
+                          latency.trim(),
+                          style: TextStyle(fontSize: 10.5, color: accent),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                detail,
+                maxLines: isError ? 2 : 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: accent),
+              ),
+              AnimatedCrossFade(
+                duration: const Duration(milliseconds: 180),
+                sizeCurve: Curves.easeInOut,
+                crossFadeState: _expanded
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                firstChild: const SizedBox.shrink(),
+                secondChild: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _expandedPayload(accent),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

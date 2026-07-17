@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
 @dataclass(frozen=True)
 class IndexNode:
-    """A persisted node in the three-tier retrieval hierarchy."""
+    """A persisted node in the three-tier retrieval hierarchy (legacy/compatibility)."""
 
     id: int | None
     stage_id: str
@@ -18,6 +18,45 @@ class IndexNode:
     content: str
     embedding: list[float]
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DocumentNode:
+    """Represents a document/source in the Hierarchical RAG."""
+
+    stage_id: str
+    source_url: str
+    content: str
+    embedding: list[float]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SectionNode:
+    """Represents a section or subsection within a document."""
+
+    id: int | None
+    stage_id: str
+    source_url: str
+    section_index: int
+    title: str | None
+    content: str
+    embedding: list[float]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ChunkNode:
+    """Represents a leaf chunk belonging to a section."""
+
+    id: int | None
+    stage_id: str
+    source_url: str
+    section_id: int
+    chunk_index: int
+    content: str
+    embedding: list[float]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
