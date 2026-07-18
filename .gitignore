@@ -75,3 +75,13 @@ python_bridge/models/
 *.wal
 *.walf
 *.shm
+
+# One-off patch/debug scripts (keep out of repo)
+patch_*.py
+scripts/
+
+# Standalone backend (disconnected FastAPI app, not part of active pipeline)
+backend/
+
+# llama.cpp server logs
+llama_server_*.log
