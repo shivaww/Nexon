@@ -40,7 +40,9 @@ class LLMService {
   // Singleton
   // ---------------------------------------------------------------------------
 
-  LLMService._internal();
+  LLMService._internal() {
+    _httpClient.findProxy = (uri) => "DIRECT";
+  }
 
   /// The global [LLMService] instance.
   static final LLMService instance = LLMService._internal();

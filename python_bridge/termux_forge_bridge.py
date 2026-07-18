@@ -240,6 +240,8 @@ class TermuxForgeBridge:
         r.register("deep_research.ingest", self._deep_research_ingest)
         r.register("deep_research.retrieve", self._deep_research_retrieve)
         r.register("deep_research.export_temp", self._deep_research_export_temp)
+        r.register("web_search", self._web_search)
+        r.register("read_url", self._read_url)
 
         # ── Workflows ─────────────────────────────────────────────────
         r.register("workflow_execute", self._workflow_execute)
@@ -258,6 +260,7 @@ class TermuxForgeBridge:
 
         # ── Environment / Project Health ──────────────────────────────
         r.register("env_status", self._env_status)
+        r.register("system_ram_headroom", self._system_ram_headroom)
         r.register("project_health", self._project_health)
 
         # ── Hybrid Tools (shell + Python, AI-optimized output) ────────────
@@ -932,6 +935,147 @@ class TermuxForgeBridge:
             content = "{}"
         return {"content": content}
 
+    async def _web_search(self, query: str = "", q: str = "") -> dict:
+        search_query = query or q
+        if not search_query:
+            return {"error": "Query is required."}
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+            return {"error": "TAVILY_API_KEY environment variable not configured."}
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": api_key,
+                        "query": search_query,
+                        "search_depth": "basic",
+                        "max_results": 4
+                    },
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    if resp.status >= 300:
+                        body = await resp.text()
+                        return {"error": f"Tavily API failed: {resp.status} - {body}"}
+                    data = await resp.json()
+                    results = []
+                    for r in data.get("results", []):
+                        results.append({
+                            "title": r.get("title") or "Search Result",
+                            "url": r.get("url") or "",
+                            "snippet": r.get("content") or ""
+                        })
+                    return {"results": results}
+        except Exception as e:
+            return {"error": f"Tavily search execution failed: {e}"}
+
+    async def _read_url(
+        self, url: str = "", uri: str = "", stage_id: str = "stage_mcp", query_id: str = "query_mcp"
+    ) -> dict:
+        target_url = url or uri
+        if not target_url:
+            return {"error": "Fetch failed: URL is required."}
+        if not target_url.startswith("http"):
+            target_url = "https://" + target_url
+
+        is_pdf = target_url.lower().endswith(".pdf")
+        text = ""
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status < 200 or resp.status >= 300:
+                        return {"error": f"Fetch failed: HTTP {resp.status}"}
+                    content_type = resp.headers.get("content-type", "").lower()
+                    if "application/pdf" in content_type:
+                        is_pdf = True
+                    if is_pdf:
+                        try:
+                            pdf_bytes = await resp.read()
+                            if not pdf_bytes:
+                                return {"error": "Extraction failed: Empty PDF"}
+                            pypdf_text = ""
+                            pypdf_err = None
+                            try:
+                                import io
+                                from pypdf import PdfReader
+                                reader = PdfReader(io.BytesIO(pdf_bytes))
+                                text_parts = []
+                                for page in reader.pages:
+                                    t = page.extract_text()
+                                    if t:
+                                        text_parts.append(t)
+                                pypdf_text = "\n".join(text_parts).strip()
+                            except Exception as pe:
+                                pypdf_err = pe
+
+                            if len(pypdf_text) >= 10:
+                                text = pypdf_text
+                            else:
+                                custom_text = ""
+                                try:
+                                    import zlib
+                                    import re
+                                    stream_pattern = re.compile(rb"stream[\r\n]+([\s\S]*?)[\r\n]+endstream")
+                                    custom_parts = []
+                                    for match in stream_pattern.finditer(pdf_bytes):
+                                        stream_content = match.group(1)
+                                        decompressed = None
+                                        try:
+                                            decompressed = zlib.decompress(stream_content)
+                                        except Exception:
+                                            decompressed = stream_content
+                                        if decompressed:
+                                            for bt_match in re.finditer(rb"BT([\s\S]*?)ET", decompressed):
+                                                bt_data = bt_match.group(1)
+                                                for text_match in re.finditer(rb"\((.*?)\)", bt_data):
+                                                    try:
+                                                        val = text_match.group(1).decode("utf-8", errors="ignore")
+                                                        val = re.sub(r"\\[0-7]{3}", "", val)
+                                                        val = val.replace("\\(", "(").replace("\\)", ")").replace("\\\\", "\\")
+                                                        custom_parts.append(val)
+                                                    except Exception:
+                                                        pass
+                                    custom_text = " ".join(custom_parts)
+                                    custom_text = re.sub(rb"\s+", b" ", custom_text.encode("utf-8")).decode("utf-8").strip()
+                                except Exception:
+                                    pass
+
+                                if len(custom_text) >= 10:
+                                    text = custom_text
+                                elif pypdf_err is not None:
+                                    return {"error": f"Extraction failed: {pypdf_err}"}
+                                else:
+                                    return {"error": "Extraction failed: No text layer found (possibly scanned/image PDF)"}
+                        except Exception as e:
+                            return {"error": f"Extraction failed: {e}"}
+                    else:
+                        try:
+                            body = await resp.text()
+                            from deep_research.rag.cleaner import TextCleaner
+                            text = TextCleaner().clean(body)
+                        except Exception as e:
+                            return {"error": f"Extraction failed: {e}"}
+        except Exception as e:
+            return {"error": f"Fetch failed: {e}"}
+
+        try:
+            res = await self.deep_research.ingest(stage_id, query_id, target_url, text)
+            if res.get("failed") == True:
+                return {"error": "Ingest failed: " + str(res.get("error", "Unknown ingestion error"))}
+            return {
+                "parse_format": "pdf" if is_pdf else "html",
+                "new_chunks_added": res.get("new_chunks_added", 0),
+                "novelty_ratio": res.get("novelty_ratio", 0.0),
+                "total_chunks_stage": res.get("total_chunks_stage", 0),
+                "stage": stage_id,
+                "content": text[:200],
+                "url": target_url
+            }
+        except Exception as e:
+            return {"error": f"Ingest failed: {e}"}
+
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,
     ) -> dict:
@@ -1049,6 +1193,15 @@ class TermuxForgeBridge:
             "bridge": VERSION,
             "availableTools": [k for k, v in tools.items() if v.get("available")],
         }
+
+    async def _system_ram_headroom(self) -> dict:
+        """Return available RAM headroom in bytes using psutil."""
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            return {"available_bytes": mem.available, "total_bytes": mem.total}
+        except Exception as e:
+            return {"error": str(e)}
 
     async def _project_health(self, path: str = DEFAULT_CWD) -> dict:
         """

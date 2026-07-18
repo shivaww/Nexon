@@ -11,3 +11,8 @@ aiohttp>=3.9,<4.0
 
 # Async file I/O (optional, for file operations)
 aiofiles>=23.0,<25.0
+
+# Vector storage + similarity search for the RAG layer.  The vector store is
+# plain sqlite3 BLOB storage (float32 embeddings) and cosine similarity is
+# computed with numpy; sqlite-vec is NOT used (no viable Android/Termux wheel).
+numpy>=1.26

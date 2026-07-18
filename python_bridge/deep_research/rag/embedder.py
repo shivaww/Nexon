@@ -146,6 +146,7 @@ class LlamaCppEmbedder:
             async with session.post(
                 f"{self.endpoint}/embedding",
                 json={"content": texts},
+                headers={"Connection": "close"},
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status >= 300:

@@ -8,11 +8,17 @@ Uses lexical-vector hybrid reranking and deduplication.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import math
 import re
+import time
 from typing import Any
 
+import numpy as np
+
 from .store import ResearchStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -140,41 +146,50 @@ class HybridRetriever:
         self, stage_id: str, query_vector: list[float], query: str
     ) -> list[RetrievedEvidence]:
         """Stage 1: Doc candidates -> Stage 2: Section candidates -> Stage 3: Chunks."""
-        # 1. Select documents
+        # 1. Select documents (candidate set is already scoped to this stage)
         docs = self.store.all_documents(stage_id)
         if not docs:
             return []
-        scored_docs = [
-            (self._cosine(query_vector, doc.embedding), doc)
-            for doc in docs
-        ]
-        scored_docs.sort(key=lambda x: x[0], reverse=True)
+        doc_embs = [doc.embedding for doc in docs]
+        stage_start = time.perf_counter()
+        doc_scores = self._cosine_batch(query_vector, doc_embs)
+        logger.debug(
+            "retrieve[document_first] stage=doc candidates=%d latency=%.4fs",
+            len(doc_embs), time.perf_counter() - stage_start,
+        )
+        scored_docs = sorted(zip(doc_scores, docs), key=lambda x: x[0], reverse=True)
         top_docs = [doc for _, doc in scored_docs[: self.doc_top_k]]
 
-        # 2. Select sections within selected documents
+        # 2. Select sections within selected documents (scoped to top docs)
         sections = []
         for doc in top_docs:
             sections.extend(self.store.sections_for_document(stage_id, doc.source_url))
         if not sections:
             return []
-        scored_sections = [
-            (self._cosine(query_vector, sec.embedding), sec)
-            for sec in sections
-        ]
-        scored_sections.sort(key=lambda x: x[0], reverse=True)
+        sec_embs = [sec.embedding for sec in sections]
+        stage_start = time.perf_counter()
+        sec_scores = self._cosine_batch(query_vector, sec_embs)
+        logger.debug(
+            "retrieve[document_first] stage=section candidates=%d latency=%.4fs",
+            len(sec_embs), time.perf_counter() - stage_start,
+        )
+        scored_sections = sorted(zip(sec_scores, sections), key=lambda x: x[0], reverse=True)
         top_sections = [sec for _, sec in scored_sections[: self.section_top_k]]
 
-        # 3. Select chunks within selected sections
+        # 3. Select chunks within selected sections (scoped to top sections)
         chunks = []
         for sec in top_sections:
             chunks.extend(self.store.chunks_for_section(stage_id, sec.id))
         if not chunks:
             return []
-        scored_chunks = [
-            (self._cosine(query_vector, ch.embedding), ch)
-            for ch in chunks
-        ]
-        scored_chunks.sort(key=lambda x: x[0], reverse=True)
+        chunk_embs = [ch.embedding for ch in chunks]
+        stage_start = time.perf_counter()
+        chunk_scores = self._cosine_batch(query_vector, chunk_embs)
+        logger.debug(
+            "retrieve[document_first] stage=chunk candidates=%d latency=%.4fs",
+            len(chunk_embs), time.perf_counter() - stage_start,
+        )
+        scored_chunks = sorted(zip(chunk_scores, chunks), key=lambda x: x[0], reverse=True)
         top_chunks = scored_chunks[: self.chunk_top_k]
 
         # Construct evidence payloads enriched with section context
@@ -204,11 +219,14 @@ class HybridRetriever:
         sections = self.store.all_sections(stage_id)
         if not sections:
             return []
-        scored_sections = [
-            (self._cosine(query_vector, sec.embedding), sec)
-            for sec in sections
-        ]
-        scored_sections.sort(key=lambda x: x[0], reverse=True)
+        sec_embs = [sec.embedding for sec in sections]
+        stage_start = time.perf_counter()
+        sec_scores = self._cosine_batch(query_vector, sec_embs)
+        logger.debug(
+            "retrieve[section_first] stage=section candidates=%d latency=%.4fs",
+            len(sec_embs), time.perf_counter() - stage_start,
+        )
+        scored_sections = sorted(zip(sec_scores, sections), key=lambda x: x[0], reverse=True)
         top_sections = [sec for _, sec in scored_sections[: self.section_top_k]]
 
         # 2. Select chunks within selected sections
@@ -217,11 +235,14 @@ class HybridRetriever:
             chunks.extend(self.store.chunks_for_section(stage_id, sec.id))
         if not chunks:
             return []
-        scored_chunks = [
-            (self._cosine(query_vector, ch.embedding), ch)
-            for ch in chunks
-        ]
-        scored_chunks.sort(key=lambda x: x[0], reverse=True)
+        chunk_embs = [ch.embedding for ch in chunks]
+        stage_start = time.perf_counter()
+        chunk_scores = self._cosine_batch(query_vector, chunk_embs)
+        logger.debug(
+            "retrieve[section_first] stage=chunk candidates=%d latency=%.4fs",
+            len(chunk_embs), time.perf_counter() - stage_start,
+        )
+        scored_chunks = sorted(zip(chunk_scores, chunks), key=lambda x: x[0], reverse=True)
         top_chunks = scored_chunks[: self.chunk_top_k]
 
         evidences = []
@@ -249,11 +270,14 @@ class HybridRetriever:
         chunks = self.store.all_chunks(stage_id)
         if not chunks:
             return []
-        scored_chunks = [
-            (self._cosine(query_vector, ch.embedding), ch)
-            for ch in chunks
-        ]
-        scored_chunks.sort(key=lambda x: x[0], reverse=True)
+        chunk_embs = [ch.embedding for ch in chunks]
+        stage_start = time.perf_counter()
+        chunk_scores = self._cosine_batch(query_vector, chunk_embs)
+        logger.debug(
+            "retrieve[direct] stage=chunk candidates=%d latency=%.4fs",
+            len(chunk_embs), time.perf_counter() - stage_start,
+        )
+        scored_chunks = sorted(zip(chunk_scores, chunks), key=lambda x: x[0], reverse=True)
         top_chunks = scored_chunks[: self.chunk_top_k]
 
         sections = self.store.all_sections(stage_id)
@@ -322,6 +346,29 @@ class HybridRetriever:
             if len(fused) >= depth:
                 break
         return fused
+
+    @staticmethod
+    def _cosine_batch(query_vector: list[float], embeddings: list[list[float]]) -> list[float]:
+        """Vectorized cosine similarity of one query against many candidates.
+
+        Stacks the candidate embeddings into a single 2-D numpy array and
+        computes every similarity in one matrix operation rather than a
+        per-row Python loop.  Because the hierarchical narrowing stages
+        always pass an already-scoped candidate set (never the full corpus),
+        this brute-force comparison stays fast for realistic single-user
+        corpus sizes.  Returns a list of scores aligned with ``embeddings``.
+        """
+        if not embeddings:
+            return []
+        q = np.asarray(query_vector, dtype=np.float32)
+        q_norm = float(np.linalg.norm(q))
+        if q_norm == 0.0:
+            return [0.0] * len(embeddings)
+        matrix = np.asarray(embeddings, dtype=np.float32)  # shape (n, d)
+        norms = np.linalg.norm(matrix, axis=1)
+        safe_norms = np.where(norms == 0.0, 1.0, norms)
+        sims = (matrix @ q) / (safe_norms * q_norm)
+        return sims.tolist()
 
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:

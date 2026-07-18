@@ -432,6 +432,10 @@ class MethodRouter:
 
         try:
             if isinstance(request.params, dict):
+                if "active_llm_provider" in request.params:
+                    os.environ["DEEP_RESEARCH_REFLECTION_URL"] = str(request.params.get("active_llm_base_url") or "")
+                    os.environ["DEEP_RESEARCH_REFLECTION_KEY"] = str(request.params.get("active_llm_api_key") or "")
+                    os.environ["DEEP_RESEARCH_REFLECTION_MODEL"] = str(request.params.get("active_llm_model") or "")
                 normalized_params = self._normalize_aliases(request.params)
                 # Pre-process parameters to expand tilde paths ('~') for path-related arguments
                 path_keys = {'path', 'cwd', 'directory', 'dir', 'dir_path', 'dest', 'src', 'path_a', 'path_b', 'output_dir'}

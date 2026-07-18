@@ -7,14 +7,24 @@ and appropriate indices for fast hierarchical narrowing.
 
 from __future__ import annotations
 
-from array import array
 import json
 from pathlib import Path
 import re
 import sqlite3
 from typing import Iterable, Any
 
+import numpy as np
+
 from ..schemas import DocumentNode, SectionNode, ChunkNode
+
+# Embeddings are persisted as a plain SQLite BLOB holding a contiguous
+# float32 (little-endian) buffer.  The dtype is fixed (float32) and the
+# dimension is recovered from the BLOB length (len // 4), so no extra
+# columns are required for safe deserialization.  This layout is byte-for-
+# byte compatible with the previous ``array('f')`` serialization, which
+# means databases written before this change keep loading without any
+# migration step.
+EMBEDDING_DTYPE = np.float32
 
 
 def normalize_stage_id(stage_id: str) -> str:
@@ -133,13 +143,11 @@ class ResearchStore:
 
     @staticmethod
     def _encode_vector(vector: list[float]) -> bytes:
-        return array("f", vector).tobytes()
+        return np.asarray(vector, dtype=EMBEDDING_DTYPE).tobytes()
 
     @staticmethod
     def _decode_vector(value: bytes) -> list[float]:
-        vector = array("f")
-        vector.frombytes(value)
-        return vector.tolist()
+        return np.frombuffer(value, dtype=EMBEDDING_DTYPE).tolist()
 
     @staticmethod
     def _stage_predicate(stage_id: str) -> tuple[str, tuple[str, ...]]:

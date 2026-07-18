@@ -37,12 +37,43 @@ def _ram_headroom_mb() -> float:
 
 
 def _call_local_llm(prompt: str, max_tokens: int = 200) -> str | None:
-    """Single short call to the already-loaded local model. Never raises."""
-    if not REFLECTION_LLM_ENDPOINT:
+    endpoint = os.getenv("DEEP_RESEARCH_REFLECTION_URL") or REFLECTION_LLM_ENDPOINT
+    key = os.getenv("DEEP_RESEARCH_REFLECTION_KEY")
+    model = os.getenv("DEEP_RESEARCH_REFLECTION_MODEL")
+    if not endpoint:
         return None
+    is_local = "localhost" in endpoint or "127.0.0.1" in endpoint or "reflection.test" in endpoint or endpoint.endswith("/completion")
+    if key or (not is_local):
+        try:
+            url = endpoint
+            if not url.endswith("/chat/completions"):
+                if url.endswith("/v1") or url.endswith("/v1/"):
+                    url = url.rstrip("/") + "/chat/completions"
+                else:
+                    url = url.rstrip("/") + "/v1/chat/completions"
+            headers = {}
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+            logger.info(f"reflect() calling hosted endpoint: {url} | model: {model or 'unknown'}")
+            resp = requests.post(
+                url,
+                headers=headers,
+                json={
+                    "model": model or "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.2
+                },
+                timeout=LLM_CALL_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.warning(f"Hosted reflection LLM call failed: {e}")
     try:
         resp = requests.post(
-            REFLECTION_LLM_ENDPOINT,
+            endpoint,
             json={"prompt": prompt, "n_predict": max_tokens, "temperature": 0.2},
             timeout=LLM_CALL_TIMEOUT_S,
         )

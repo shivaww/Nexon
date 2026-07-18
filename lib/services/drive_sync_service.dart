@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
@@ -51,6 +52,12 @@ class DriveSyncService {
   static const _backupFileName = 'nexon_backup.json';
   static const _tokenKey = 'google_provider_token';
   static const _refreshTokenKey = 'google_provider_refresh_token';
+  static const _tokenExpiryKey = 'google_provider_token_expiry';
+  // This is a public OAuth client identifier, not a client secret. It must
+  // match the Google OAuth client configured in Supabase for this Android app.
+  static const _googleOAuthClientId = String.fromEnvironment(
+    'GOOGLE_OAUTH_CLIENT_ID',
+  );
   static const _maxArtifactBytes = 2 * 1024 * 1024;
   static const _textExtensions = {
     '.md',
@@ -100,15 +107,9 @@ class DriveSyncService {
   static Future<void> persistProviderToken() async {
     final session = Supabase.instance.client.auth.currentSession;
     if (session == null) return;
-    final prefs = await SharedPreferences.getInstance();
     final token = session.providerToken;
-    if (token != null && token.isNotEmpty) {
-      await prefs.setString(_tokenKey, token);
-    }
     final refresh = session.providerRefreshToken;
-    if (refresh != null && refresh.isNotEmpty) {
-      await prefs.setString(_refreshTokenKey, refresh);
-    }
+    await _storeGoogleTokens(accessToken: token, refreshToken: refresh);
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -193,11 +194,7 @@ class DriveSyncService {
     }
     log.add('✅ Authenticated');
 
-    GoogleAuthClient? client;
     try {
-      client = GoogleAuthClient(tokenResult.token!);
-      final driveApi = drive.DriveApi(client);
-
       // ── Step 2: build backup payload ──
       onProgress?.call('Collecting chats, settings, keys, artifacts & media…');
       log.add('⏳ Building backup payload…');
@@ -233,14 +230,24 @@ class DriveSyncService {
       drive.File? existing;
       String? folderId;
       try {
-        folderId = await _getOrCreateBackupFolder(driveApi);
-        existing = await _findBackupFile(driveApi, folderId);
+        final lookup = await _withDriveAuthRetry(
+          (driveApi) async {
+            final id = await _getOrCreateBackupFolder(driveApi);
+            return _BackupLookup(
+              folderId: id,
+              existing: await _findBackupFile(driveApi, id),
+            );
+          },
+          log,
+        );
+        folderId = lookup.folderId;
+        existing = lookup.existing;
       } catch (e) {
-        log.add('❌ Drive search failed: $e');
+        _appendDriveFailure(log, 'Drive search', e);
         return DriveSyncResult(
           success: false,
-          needsRelogin: _isAuthError(e),
-          message: 'Failed to search Drive: $e',
+          needsRelogin: _needsReloginForError(e),
+          message: _driveErrorMessage('Failed to search Drive', e),
           details: log,
         );
       }
@@ -266,30 +273,33 @@ class DriveSyncService {
       // ── Step 5: upload ──
       onProgress?.call('Uploading ${sizeKB} KB to Google Drive…');
       log.add('⏳ Uploading…');
-      final media = drive.Media(Stream.value(bytes), bytes.length);
       try {
-        if (existing?.id != null) {
-          await driveApi.files.update(
-            drive.File()
-              ..name = _backupFileName
-              ..modifiedTime = DateTime.now().toUtc(),
-            existing!.id!,
-            uploadMedia: media,
-          );
-        } else {
-          await driveApi.files.create(
-            drive.File()
-              ..name = _backupFileName
-              ..parents = [folderId],
-            uploadMedia: media,
-          );
-        }
+        await _withDriveAuthRetry((driveApi) async {
+          // Build a fresh stream for the one permitted auth retry.
+          final upload = drive.Media(Stream.value(bytes), bytes.length);
+          if (existing?.id != null) {
+            await driveApi.files.update(
+              drive.File()
+                ..name = _backupFileName
+                ..modifiedTime = DateTime.now().toUtc(),
+              existing!.id!,
+              uploadMedia: upload,
+            );
+          } else {
+            await driveApi.files.create(
+              drive.File()
+                ..name = _backupFileName
+                ..parents = [folderId],
+              uploadMedia: upload,
+            );
+          }
+        }, log);
       } catch (e) {
-        log.add('❌ Upload failed: $e');
+        _appendDriveFailure(log, 'Upload', e);
         return DriveSyncResult(
           success: false,
-          needsRelogin: _isAuthError(e),
-          message: 'Upload to Drive failed: $e',
+          needsRelogin: _needsReloginForError(e),
+          message: _driveErrorMessage('Upload to Drive failed', e),
           details: log,
         );
       }
@@ -303,15 +313,13 @@ class DriveSyncService {
       log.add('✅ $msg');
       return DriveSyncResult(success: true, message: msg, details: log);
     } catch (e) {
-      log.add('❌ Unexpected error: $e');
+      _appendDriveFailure(log, 'Backup', e);
       return DriveSyncResult(
         success: false,
-        needsRelogin: _isAuthError(e),
-        message: 'Backup failed: $e',
+        needsRelogin: _needsReloginForError(e),
+        message: _driveErrorMessage('Backup failed', e),
         details: log,
       );
-    } finally {
-      client?.close();
     }
   }
 
@@ -339,31 +347,28 @@ class DriveSyncService {
     }
     log.add('✅ Authenticated');
 
-    GoogleAuthClient? client;
     try {
-      client = GoogleAuthClient(tokenResult.token!);
-      final driveApi = drive.DriveApi(client);
-
       // ── Step 2: find backup file ──
       onProgress?.call('Searching for backup on Drive…');
       log.add('⏳ Looking for backup file…');
       drive.File? existing;
       try {
-        final folderList = await driveApi.files.list(
-          spaces: 'drive',
-          q: "mimeType = 'application/vnd.google-apps.folder' and name = 'Nexon Backups' and trashed = false",
-          $fields: 'files(id)',
-          pageSize: 1,
-        );
-        if (folderList.files?.isNotEmpty == true) {
-          existing = await _findBackupFile(driveApi, folderList.files!.first.id!);
-        }
+        existing = await _withDriveAuthRetry((driveApi) async {
+          final folderList = await driveApi.files.list(
+            spaces: 'drive',
+            q: "mimeType = 'application/vnd.google-apps.folder' and name = 'Nexon Backups' and trashed = false",
+            $fields: 'files(id)',
+            pageSize: 1,
+          );
+          if (folderList.files?.isEmpty != false) return null;
+          return _findBackupFile(driveApi, folderList.files!.first.id!);
+        }, log);
       } catch (e) {
-        log.add('❌ Drive search failed: $e');
+        _appendDriveFailure(log, 'Drive search', e);
         return DriveSyncResult(
           success: false,
-          needsRelogin: _isAuthError(e),
-          message: 'Failed to search Drive: $e',
+          needsRelogin: _needsReloginForError(e),
+          message: _driveErrorMessage('Failed to search Drive', e),
           details: log,
         );
       }
@@ -382,17 +387,18 @@ class DriveSyncService {
       log.add('⏳ Downloading…');
       Map<String, dynamic> backupData;
       try {
-        final response =
-            await driveApi.files.get(
-                  existing.id!,
-                  downloadOptions: drive.DownloadOptions.fullMedia,
-                )
-                as drive.Media;
-
-        final bytes = <int>[];
-        await for (final chunk in response.stream) {
-          bytes.addAll(chunk);
-        }
+        final bytes = await _withDriveAuthRetry((driveApi) async {
+          final response = await driveApi.files.get(
+                existing!.id!,
+                downloadOptions: drive.DownloadOptions.fullMedia,
+              )
+              as drive.Media;
+          final downloaded = <int>[];
+          await for (final chunk in response.stream) {
+            downloaded.addAll(chunk);
+          }
+          return downloaded;
+        }, log);
         final sizeKB = (bytes.length / 1024).toStringAsFixed(1);
         log.add('✅ Downloaded ${sizeKB} KB');
 
@@ -401,11 +407,11 @@ class DriveSyncService {
         backupData = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
         log.add('✅ Parsed — version ${backupData['version'] ?? 'unknown'}');
       } catch (e) {
-        log.add('❌ Download/parse failed: $e');
+        _appendDriveFailure(log, 'Download/parse', e);
         return DriveSyncResult(
           success: false,
-          needsRelogin: _isAuthError(e),
-          message: 'Failed to download or parse backup: $e',
+          needsRelogin: _needsReloginForError(e),
+          message: _driveErrorMessage('Failed to download or parse backup', e),
           details: log,
         );
       }
@@ -546,166 +552,170 @@ class DriveSyncService {
         details: log,
       );
     } catch (e) {
-      log.add('❌ Unexpected error: $e');
+      _appendDriveFailure(log, 'Restore', e);
       return DriveSyncResult(
         success: false,
-        needsRelogin: _isAuthError(e),
-        message: 'Restore failed: $e',
+        needsRelogin: _needsReloginForError(e),
+        message: _driveErrorMessage('Restore failed', e),
         details: log,
       );
-    } finally {
-      client?.close();
     }
   }
 
   // ──────────────────────────────────────────────────────────────────
   // TOKEN MANAGEMENT — the critical fix
   // ──────────────────────────────────────────────────────────────────
-  /// Result of a token acquisition attempt.
-  static Future<_TokenResult> _getValidGoogleToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final auth = Supabase.instance.client.auth;
-    final session = auth.currentSession;
-
-    // 1. Try the live session's provider token (only available right after sign-in).
-    //    Trust it without validation — it was just issued by Google.
+  /// Gets the current provider token. Expiry is tracked once Google returns an
+  /// `expires_in` value; otherwise the Drive-operation wrapper detects a 401
+  /// and performs one refresh/retry without exposing a dialog to the user.
+  static Future<_TokenResult> _getValidGoogleToken({
+    bool forceRefresh = false,
+    List<String>? diagnostics,
+  }) async {
+    final session = Supabase.instance.client.auth.currentSession;
     final liveToken = session?.providerToken;
-    if (liveToken != null && liveToken.isNotEmpty) {
-      // Persist it for future use
-      await prefs.setString(_tokenKey, liveToken);
-      final refresh = session?.providerRefreshToken;
-      if (refresh != null && refresh.isNotEmpty) {
-        await prefs.setString(_refreshTokenKey, refresh);
-      }
-      return _TokenResult(token: liveToken);
-    }
-
-    // 2. Try the cached token
-    final cachedToken = prefs.getString(_tokenKey);
-    if (cachedToken != null && cachedToken.isNotEmpty) {
-      if (await _isTokenValid(cachedToken)) {
-        return _TokenResult(token: cachedToken);
-      }
-      // Token is expired — try refreshing via Google's OAuth endpoint
-    }
-
-    // 3. Try refreshing via Supabase GoTrue REST API (which proxies Google
-    //    token refresh server-side) and/or the SDK's refreshSession().
-    final refreshToken = prefs.getString(_refreshTokenKey) ?? '';
-    final newToken = await _refreshGoogleAccessToken(refreshToken);
-    if (newToken != null) {
-      await prefs.setString(_tokenKey, newToken);
-      return _TokenResult(token: newToken);
-    }
-
-    // All attempts failed
-    if (session == null) {
-      return _TokenResult(
-        error: 'Not signed in. Please sign in with Google first.',
-        needsRelogin: true,
+    final liveRefresh = session?.providerRefreshToken;
+    if ((liveToken?.isNotEmpty ?? false) || (liveRefresh?.isNotEmpty ?? false)) {
+      await _storeGoogleTokens(
+        accessToken: liveToken,
+        refreshToken: liveRefresh,
       );
     }
+
+    final stored = await _readGoogleTokens();
+    final token = liveToken?.isNotEmpty == true ? liveToken : stored.accessToken;
+    final expiry = stored.expiry;
+    final expired = expiry != null && !expiry.isAfter(DateTime.now().toUtc());
+    if (!forceRefresh && token != null && token.isNotEmpty && !expired) {
+      return _TokenResult(token: token);
+    }
+
+    final refresh = stored.refreshToken ?? liveRefresh;
+    final refreshResult = await _refreshGoogleAccessToken(refresh, diagnostics);
+    if (refreshResult.token != null) {
+      return _TokenResult(token: refreshResult.token);
+    }
     return _TokenResult(
-      error:
-          'Google Drive access token expired and could not be refreshed. '
-          'Please sign out and sign in again with Google to re-authorize Drive access.',
-      needsRelogin: true,
+      error: refreshResult.error ?? 'Google Drive authentication is unavailable.',
+      needsRelogin: refreshResult.needsRelogin,
     );
   }
 
-  /// Validate a Google access token by making a lightweight API call.
-  static Future<bool> _isTokenValid(String token) async {
+  /// Exchanges the Google provider refresh token for a new Drive token.
+  /// A Supabase session refresh token cannot perform this exchange and must
+  /// never be substituted for the Google provider refresh token.
+  static Future<_RefreshResult> _refreshGoogleAccessToken(
+    String? refreshToken,
+    List<String>? diagnostics,
+  ) async {
+    if (refreshToken == null || refreshToken.isEmpty) {
+      diagnostics?.add('❌ No stored Google provider refresh token');
+      return const _RefreshResult(
+        error: 'Google authorization was not granted for offline access. Please sign in again.',
+        needsRelogin: true,
+      );
+    }
+    if (_googleOAuthClientId.isEmpty) {
+      diagnostics?.add('❌ GOOGLE_OAUTH_CLIENT_ID is not configured');
+      return const _RefreshResult(
+        error: 'Google Drive refresh is not configured in this build.',
+      );
+    }
+
     try {
-      final response = await http.get(
-        Uri.parse(
-          'https://www.googleapis.com/drive/v3/about?fields=user'
-        ),
-        headers: {'Authorization': 'Bearer $token'},
-      ).timeout(const Duration(seconds: 10));
-      return response.statusCode == 200;
-    } catch (_) {
-      return false;
+      final response = await http.post(
+        Uri.parse('https://oauth2.googleapis.com/token'),
+        headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {
+          'client_id': _googleOAuthClientId,
+          'grant_type': 'refresh_token',
+          'refresh_token': refreshToken,
+        },
+      ).timeout(const Duration(seconds: 15));
+      final body = response.body;
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(body) as Map<String, dynamic>;
+        final accessToken = payload['access_token'] as String?;
+        if (accessToken == null || accessToken.isEmpty) {
+          return const _RefreshResult(error: 'Google did not return an access token.');
+        }
+        final expiresIn = payload['expires_in'];
+        final expiry = expiresIn is num
+            ? DateTime.now().toUtc().add(Duration(seconds: expiresIn.toInt()))
+            : null;
+        await _storeGoogleTokens(accessToken: accessToken, expiry: expiry);
+        diagnostics?.add('✅ Google Drive token refreshed silently');
+        return _RefreshResult(token: accessToken);
+      }
+
+      final failure = _DriveFailure.fromResponse(response.statusCode, body);
+      _debugDriveFailure('Google refresh', failure);
+      if (failure.invalidGrant) {
+        return const _RefreshResult(
+          error: 'Google Drive authorization was revoked or expired. Please sign in again.',
+          needsRelogin: true,
+        );
+      }
+      return _RefreshResult(error: 'Unable to refresh Google Drive access (${failure.label}).');
+    } catch (e) {
+      debugPrint('[drive-token-refresh] request failed: $e');
+      return const _RefreshResult(error: 'Could not contact Google to refresh Drive access.');
     }
   }
 
-  /// Attempt to refresh the Google access token.
-  ///
-  /// Strategy:
-  /// 1. Call Supabase GoTrue REST API directly — the raw JSON response
-  ///    contains `provider_token` even though the Dart SDK often drops it.
-  /// 2. Fall back to the Dart SDK's `refreshSession()` in case the raw
-  ///    call fails for any reason.
-  static Future<String?> _refreshGoogleAccessToken(String refreshToken) async {
-    // ── Approach 1: Call Supabase GoTrue REST API directly ──
-    // The Dart SDK's refreshSession() often discards the provider_token
-    // field from the JSON response. By calling the REST API ourselves we
-    // can extract it reliably.
-    try {
-      final supabase = Supabase.instance.client;
-      final supabaseRefreshToken = supabase.auth.currentSession?.refreshToken;
-      if (supabaseRefreshToken != null && supabaseRefreshToken.isNotEmpty) {
-        final url = Uri.parse(
-          'https://tvrqxugomnjthqrcdaih.supabase.co/auth/v1/token?grant_type=refresh_token',
+  static Future<_StoredGoogleTokens> _readGoogleTokens() async {
+    var accessToken = await _secureStorage.read(key: _tokenKey);
+    var refreshToken = await _secureStorage.read(key: _refreshTokenKey);
+    final expiryRaw = await _secureStorage.read(key: _tokenExpiryKey);
+    DateTime? expiry;
+    if (expiryRaw != null) expiry = DateTime.tryParse(expiryRaw)?.toUtc();
+
+    // One-time migration from the legacy insecure SharedPreferences keys.
+    if (accessToken == null || refreshToken == null) {
+      final prefs = await SharedPreferences.getInstance();
+      accessToken ??= prefs.getString(_tokenKey);
+      refreshToken ??= prefs.getString(_refreshTokenKey);
+      if (accessToken != null || refreshToken != null) {
+        await _storeGoogleTokens(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+          expiry: expiry,
+          removeLegacy: false,
         );
-        // The anon key from Supabase initialization
-        const apiKey = 'sb_publishable_AmHw2HDm_ZpxRt4jOlb-EA_vaVRTSG_';
-        final response = await http.post(
-          url,
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': apiKey,
-          },
-          body: jsonEncode({'refresh_token': supabaseRefreshToken}),
-        ).timeout(const Duration(seconds: 15));
-
-        if (response.statusCode == 200) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-          final providerToken = body['provider_token'] as String?;
-          final providerRefresh = body['provider_refresh_token'] as String?;
-
-          // Also update the Supabase SDK's internal session so future calls
-          // to refreshSession() use the latest refresh_token from GoTrue.
-          final newRefresh = body['refresh_token'] as String?;
-          final newAccess = body['access_token'] as String?;
-          if (newAccess != null && newRefresh != null) {
-            try {
-              await supabase.auth.setSession(newRefresh);
-            } catch (_) {
-              // setSession may fail on some SDK versions — non-fatal
-            }
-          }
-
-          // Persist the new Google refresh token if provided
-          if (providerRefresh != null && providerRefresh.isNotEmpty) {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString(_refreshTokenKey, providerRefresh);
-          }
-
-          if (providerToken != null && providerToken.isNotEmpty) {
-            return providerToken;
-          }
-        }
       }
-    } catch (_) {
-      // Fall through to approach 2
+      await prefs.remove(_tokenKey);
+      await prefs.remove(_refreshTokenKey);
     }
+    return _StoredGoogleTokens(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      expiry: expiry,
+    );
+  }
 
-    // ── Approach 2: SDK refreshSession() fallback ──
-    try {
-      final auth = Supabase.instance.client.auth;
-      final supabaseSession = auth.currentSession;
-      if (supabaseSession?.refreshToken != null) {
-        final refreshResult = await auth.refreshSession();
-        final newProviderToken = refreshResult.session?.providerToken;
-        if (newProviderToken != null && newProviderToken.isNotEmpty) {
-          return newProviderToken;
-        }
-      }
-    } catch (_) {
-      // Both approaches failed
+  static Future<void> _storeGoogleTokens({
+    String? accessToken,
+    String? refreshToken,
+    DateTime? expiry,
+    bool removeLegacy = true,
+  }) async {
+    if (accessToken != null && accessToken.isNotEmpty) {
+      await _secureStorage.write(key: _tokenKey, value: accessToken);
     }
-
-    return null;
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await _secureStorage.write(key: _refreshTokenKey, value: refreshToken);
+    }
+    if (expiry != null) {
+      await _secureStorage.write(
+        key: _tokenExpiryKey,
+        value: expiry.toUtc().toIso8601String(),
+      );
+    }
+    if (removeLegacy) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tokenKey);
+      await prefs.remove(_refreshTokenKey);
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -1037,6 +1047,92 @@ class DriveSyncService {
         text.contains('unauthorized') ||
         text.contains('insufficient');
   }
+
+  static Future<T> _withDriveAuthRetry<T>(
+    Future<T> Function(drive.DriveApi driveApi) operation,
+    List<String> log,
+  ) async {
+    var tokenResult = await _getValidGoogleToken(diagnostics: log);
+    if (tokenResult.error != null) {
+      throw drive.DetailedApiRequestError(401, tokenResult.error!);
+    }
+
+    var client = GoogleAuthClient(tokenResult.token!);
+    var driveApi = drive.DriveApi(client);
+
+    try {
+      return await operation(driveApi);
+    } catch (e) {
+      if (e is drive.DetailedApiRequestError && e.status == 401) {
+        log.add('⚠️ API request failed with 401. Attempting token refresh...');
+        client.close();
+
+        final refreshResult = await _getValidGoogleToken(forceRefresh: true, diagnostics: log);
+        if (refreshResult.error != null) {
+          log.add('❌ Token refresh failed during retry: ${refreshResult.error}');
+          throw drive.DetailedApiRequestError(401, refreshResult.error!);
+        }
+
+        log.add('🔄 Retrying operation with refreshed access token...');
+        client = GoogleAuthClient(refreshResult.token!);
+        driveApi = drive.DriveApi(client);
+        try {
+          return await operation(driveApi);
+        } catch (retryError) {
+          client.close();
+          rethrow;
+        }
+      } else {
+        client.close();
+        rethrow;
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  static bool _needsReloginForError(Object e) {
+    if (e is drive.DetailedApiRequestError) {
+      return e.status == 401;
+    }
+    final text = e.toString().toLowerCase();
+    if (text.contains('invalid_grant')) {
+      return true;
+    }
+    return text.contains('401');
+  }
+
+  static String _driveErrorMessage(String prefix, Object e) {
+    if (e is drive.DetailedApiRequestError) {
+      if (e.status == 401) {
+        return '$prefix: Google Drive session expired. Please sign out and sign in again.';
+      }
+      if (e.status == 403) {
+        final message = e.message ?? '';
+        if (message.toLowerCase().contains('disabled') || message.toLowerCase().contains('not enabled')) {
+          return '$prefix: Google Drive API has not been enabled in your Google Console project. Please enable it in the Google Cloud Console.';
+        }
+        return '$prefix: Access denied (403 Forbidden). Check your Google account permissions or scopes.';
+      }
+      if (e.status == 429) {
+        return '$prefix: Google Drive API rate limit exceeded (429 Too Many Requests). Please retry in a few minutes.';
+      }
+      return '$prefix: Google Drive API error (${e.status}): ${e.message}';
+    }
+    return '$prefix: ${e.toString()}';
+  }
+
+  static void _appendDriveFailure(List<String> log, String context, Object e) {
+    if (e is drive.DetailedApiRequestError) {
+      log.add('❌ $context failed (HTTP ${e.status}): ${e.message}');
+    } else {
+      log.add('❌ $context failed: $e');
+    }
+  }
+
+  static void _debugDriveFailure(String context, _DriveFailure failure) {
+    debugPrint('[drive-sync] $context failure: ${failure.label} (invalidGrant: ${failure.invalidGrant})');
+  }
 }
 
 /// Internal result type for token acquisition.
@@ -1046,3 +1142,62 @@ class _TokenResult {
   final String? error;
   final bool needsRelogin;
 }
+
+class _BackupLookup {
+  const _BackupLookup({required this.folderId, this.existing});
+  final String folderId;
+  final drive.File? existing;
+}
+
+class _StoredGoogleTokens {
+  const _StoredGoogleTokens({this.accessToken, this.refreshToken, this.expiry});
+  final String? accessToken;
+  final String? refreshToken;
+  final DateTime? expiry;
+}
+
+class _RefreshResult {
+  const _RefreshResult({this.token, this.error, this.needsRelogin = false});
+  final String? token;
+  final String? error;
+  final bool needsRelogin;
+}
+
+class _DriveFailure {
+  const _DriveFailure({
+    required this.statusCode,
+    required this.message,
+    this.invalidGrant = false,
+  });
+
+  final int statusCode;
+  final String message;
+  final bool invalidGrant;
+
+  String get label => 'HTTP $statusCode: $message';
+
+  factory _DriveFailure.fromResponse(int statusCode, String body) {
+    bool isInvalidGrant = false;
+    String errMsg = body;
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final err = decoded['error'];
+        final desc = decoded['error_description'] ?? decoded['message'];
+        if (err != null) {
+          errMsg = '$err${desc != null ? ": $desc" : ""}';
+          if (err.toString().toLowerCase() == 'invalid_grant' ||
+              desc.toString().toLowerCase().contains('invalid_grant')) {
+            isInvalidGrant = true;
+          }
+        }
+      }
+    } catch (_) {}
+    return _DriveFailure(
+      statusCode: statusCode,
+      message: errMsg,
+      invalidGrant: isInvalidGrant,
+    );
+  }
+}
+

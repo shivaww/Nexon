@@ -46,6 +46,9 @@ class ServerLifecycleManager:
         # Ensure lock directory exists
         os.makedirs(os.path.dirname(LOCK_FILE_PATH), exist_ok=True)
 
+        # Register sig handlers on the main thread during import
+        self._register_signals()
+
     def ensure_server(self, model_path: str, endpoint: str) -> bool:
         """Cooperatively ensure llama-server is online and healthy."""
         # 1. Grab file lock to prevent concurrent spawns
@@ -110,8 +113,6 @@ class ServerLifecycleManager:
                     if self._idle_thread is None or not self._idle_thread.is_alive():
                         self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True)
                         self._idle_thread.start()
-                    if not self._registered_signals:
-                        self._register_signals()
                 return True
             else:
                 logger.error("Spawned llama-server failed to become ready.")
@@ -187,7 +188,7 @@ class ServerLifecycleManager:
             # Bypass system proxy configurations
             proxy_handler = urllib.request.ProxyHandler({})
             opener = urllib.request.build_opener(proxy_handler)
-            req = urllib.request.Request(url, method="GET")
+            req = urllib.request.Request(url, headers={"Connection": "close"}, method="GET")
             with opener.open(req, timeout=0.5) as response:
                 return response.status < 300
         except Exception:
