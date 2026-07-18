@@ -20,26 +20,25 @@ bool detectMalformedTags(String responseText, List searchMatches, List readUrlMa
   return isMalformed;
 }
 
+// getModelContextSize: purely structural — reads context size from the model
+// name itself.  No hardcoded vendor/brand names so any user-chosen model is
+// accepted without restriction.  Used only as an advisory hint; no feature is
+// ever blocked based on this value.
 int getModelContextSize(String model) {
   final name = model.toLowerCase();
+  // 1. Trailing bare number encodes the context window, e.g. "llama3-8b-8192" → 8192.
+  final trailingCtxMatch = RegExp(r'-(\d{4,7})$').firstMatch(name);
+  if (trailingCtxMatch != null) {
+    final val = int.tryParse(trailingCtxMatch.group(1)!);
+    if (val != null) return val;
+  }
+  // 2. "Nk" suffix, e.g. "custom-model-32k" → 32 000.
   final kMatch = RegExp(r'(\d+)k\b').firstMatch(name);
   if (kMatch != null) {
     final val = int.tryParse(kMatch.group(1)!);
     if (val != null) return val * 1000;
   }
-  if (name.contains('gemini')) return 1048576;
-  if (name.contains('claude')) return 200000;
-  if (name.contains('gpt-4') || name.contains('o1') || name.contains('o3')) return 128000;
-  if (name.contains('gpt-3.5')) return 16384;
-  if (name.contains('deepseek') || 
-      name.contains('llama-3.3') || 
-      name.contains('llama-3.1') || 
-      name.contains('qwen-2.5') ||
-      name.contains('qwen2.5')) {
-    return 128000;
-  }
-  if (name.contains('llama-3')) return 8192;
-  if (name.contains('llama-2') || name.contains('llama2')) return 4096;
+  // 3. Safe generous default — never blocks the user.
   return 32768;
 }
 
@@ -62,12 +61,11 @@ void main() {
   assert(detectMalformedTags(r3, [1], [], null) == false);
   print("detectMalformedTags assertions passed!");
 
-  assert(getModelContextSize("gemini-1.5-pro") == 1048576);
-  assert(getModelContextSize("claude-3-opus") == 200000);
-  assert(getModelContextSize("gpt-4o-mini") == 128000);
-  assert(getModelContextSize("llama3-8b-8192") == 8192);
-  assert(getModelContextSize("custom-model-32k") == 32000);
-  assert(getModelContextSize("unknown-custom-model") == 32768);
+  // Structural heuristics only — no hardcoded vendor/brand names.
+  assert(getModelContextSize("llama3-8b-8192") == 8192);      // trailing number
+  assert(getModelContextSize("custom-model-32k") == 32000);   // Nk suffix
+  assert(getModelContextSize("unknown-custom-model") == 32768); // safe default
+  assert(getModelContextSize("mymodel-128k-8192") == 8192);   // trailing number beats Nk
   print("getModelContextSize assertions passed!");
 
   print("All plain Dart tests passed successfully!");

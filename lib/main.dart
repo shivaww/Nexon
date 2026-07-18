@@ -4616,42 +4616,26 @@ For every project, maintain a README.md at the project root.
         }
 
         // ── Minimum-viable-evidence guard ─────────────────────────────────
+        // When the budget is so small that no chunks fit, emit a warning but
+        // still proceed with the single most-relevant chunk so the user always
+        // gets a result.  Never block the user from running deep research.
         if (allChunks.isNotEmpty && acceptedChunks.isEmpty) {
-          // Even the single highest-relevance chunk doesn't fit.
           final smallestChunk = allChunks.first['text'] as String;
           final smallestWords = smallestChunk.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
           final smallestTokenEst = (smallestWords * 1.3).ceil();
           executionIssues.add({
             'step': 'Evidence budget',
-            'status': 'failed',
-            'error': 'Your configured context budget ($userBudget tokens) is too small '
-                'to fit even the most relevant source (estimated $smallestTokenEst tokens). '
-                'The reserve of $reserve tokens (18%) is held back for instructions and output. '
-                'Consider raising the Writer context budget in Settings.',
+            'status': 'warning',
+            'error': '⚠️ Context budget ($userBudget tokens) is very small — '
+                'the most relevant source alone needs ~$smallestTokenEst tokens. '
+                'Consider raising the Writer context budget in Settings for better results. '
+                'Proceeding with the best available evidence anyway.',
           });
-          // Fail with a clear report rather than silently producing garbage.
-          stateMap['status'] = 'completed';
-          stateMap['final_report'] =
-              '# Research Report — Budget Too Small\n\n'
-              '⚠️ **Your configured context budget ($userBudget tokens) is too small to fit '
-              'even the most relevant research source** (requires approximately $smallestTokenEst tokens '
-              'for evidence alone, after reserving ${(userBudget * 0.18).round()} tokens for '
-              'instructions and output).\n\n'
-              'Please raise the **Writer context budget** in Settings to at least '
-              '${(smallestTokenEst / 0.82).ceil()} tokens and re-run the research task.';
-          if (mounted) {
-            setState(() {
-              final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-              msgs[messageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-                reasoning: msgs[messageIndex].reasoning,
-              );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
-            });
-          }
-          return;
+          // Accept at least the single highest-relevance chunk so a report is produced.
+          acceptedChunks.add(allChunks.first);
+          currentTokenCount += smallestTokenEst;
         }
+
 
         // ── Truncation disclosure ──────────────────────────────────────────
         if (truncatedCount > 0) {
@@ -10942,6 +10926,41 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   fontStyle: FontStyle.italic,
                 ),
               ),
+              // Soft advisory — shown only when the budget is very low.
+              // This is purely informational; deep research will still run.
+              if (_writerContextBudget <= 8192)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8E1),
+                      border: Border.all(color: const Color(0xFFFFCC02)),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 1, right: 8),
+                          child: Icon(Icons.info_outline, size: 16, color: Color(0xFFF9A825)),
+                        ),
+                        Expanded(
+                          child: Text(
+                            'Low context budget: Deep Research works best with at least '
+                            '16 000 tokens. With $_writerContextBudget tokens, only a small '
+                            'amount of evidence will fit and report quality may be reduced. '
+                            'You can still run it — this is only a heads-up.',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF6D4C00),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
