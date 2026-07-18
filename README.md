@@ -1,6 +1,6 @@
 # Nexon
 
-An AI coding assistant and agentic workspace that runs entirely on your Android phone via Termux — no cloud, no laptop required.
+An AI-powered mobile coding IDE and agentic workspace that runs entirely on your Android phone via Termux — no cloud, no laptop required.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-private%20%2F%20in%20development-red.svg)](https://github.com/shivaww/Nexon)
@@ -12,115 +12,137 @@ An AI coding assistant and agentic workspace that runs entirely on your Android 
 
 ---
 
-## Architecture
+## System Architecture
 
 Nexon integrates a high-performance Flutter-based UI with a local Python Bridge Server that acts as a secure Model Context Protocol (MCP) gateway. The deep research pipeline utilizes a local `llama-server` instance to execute hierarchical retrieval and document ingestion directly on-device.
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                          Nexon Flutter App                             │
-│                                                                        │
-│   ┌────────────────────────┐          ┌────────────────────────────┐   │
-│   │    Chat Interface      │          │     ResearchPlanWidget     │   │
-│   │  (Active Chat View)    │          │  (Live Status / Edit Plan) │   │
-│   └───────────┬────────────┘          └─────────────┬──────────────┘   │
-│               │                                     │                  │
-│               │ Streams XML Tool Calls              │ Streams Events   │
-│               ▼                                     ▼                  │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │                   XML Parser & Circuit Breakers                │   │
-│   │     (detectMalformedTags, zeroNoveltyStreak, loopCount < 30)   │   │
-│   └───────────────────────────────┬────────────────────────────────┘   │
-└───────────────────────────────────┼────────────────────────────────────┘
-                                    │ HTTP / WebSocket Requests
++------------------------------------------------------------------------+
+|                          Nexon Flutter App                             |
+|                                                                        |
+|  [Left Sidebar: File Explorer/Agents] [Right Sidebar: Context/Memory]  |
+|                                                                        |
+|  [Center Tabs: Chat Screen | Code Editor | Terminal Emulator | Todos]  |
+|                                                                        |
+|  [Specialized Widgets: ResearchPlanWidget (Deep Research Lifecycle)]   |
++───────────────────────────────────┬────────────────────────────────────+
+                                    │
+                                    │ Streams XML Tool Calls
                                     ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Python Bridge Server                            │
-│           (termux_forge_bridge.py / mcp_server.py gateway)             │
-│                                                                        │
-│   ┌───────────────────────────────────┬────────────────────────────┐   │
-│   │         WebSocket Server          │        HTTP Server         │   │
-│   │            (Port 8765)            │        (Port 8390)         │   │
-│   └─────────────────┬─────────────────┴─────────────┬──────────────┘   │
-│                     │                               │                  │
-│                     ▼                               ▼                  │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │                 Deep Research RAG Orchestrator                 │   │
-│   │              (deep_research.orchestrator)                      │   │
-│   └────────┬────────────────────────────────────────────────┬──────┘   │
-│            │                                                │          │
-│            ▼                                                ▼          │
-│   ┌─────────────────┐                              ┌─────────────────┐ │
-│   │  Agentic Loop   ├────── Tavily Search ────────►│  Document Ingest│ │
-│   │  (agentic_loop) │    (Escalation / Web Search) │ (lightrag_ingest) │ │
-│   └────────┬────────┘                              └────────┬────────┘ │
-│            │                                                │          │
-│            │ Evaluates Sufficiency                          │ Splits,  │
-│            ▼ (reflect / reformulate)                        ▼ Filters  │
-│   ┌────────────────────────┐                      ┌──────────────────┐ │
-│   │   Hybrid Retriever     │                      │ SQLite RAG Store │ │
-│   │   (hybrid_retriever)   │◄──── Query/Fetch ───►│    (store.py)    │ │
-│   │ (document->section->   │                      │  (WAL Mode /     │ │
-│   │  chunk narrowing &     │                      │  Cascade Delete) │ │
-│   │  numpy cosine similarity)                     └────────┬─────────┘ │
-│   └────────┬───────────────┘                               │           │
-│            │                                               │           │
-│            │ Embeds Query/Chunk Texts                      │           │
-│            ▼                                               ▼           │
-│   ┌────────────────────────────────────────────────────────────────┐   │
-│   │             Local Embedder Process (llama-server)              │   │
-│   │        (Managed via embedder_lifecycle.py - Port 8080)         │   │
-│   │      [Model: EmbeddingGemma (embeddinggemma-300m-Q4_0.gguf)]   │   │
-│   └────────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Exports
++────────────────────────────────────────────────────────────────────────+
+|                   XML Tool Parser & Circuit Breakers                   |
+|   (detectMalformedTags, zeroNoveltyStreak, getModelContextSize, etc.)  |
++───────────────────────────────────┬────────────────────────────────────+
+                                    │
+                                    │ HTTP (:8390) / WebSocket (:8765)
                                     ▼
-                      ┌───────────────────────────┐
-                      │    Markdown / DOCX File   │
-                      │ (MarkdownParser / python- │
-                      │ docx / generate_docx.py)  │
-                      └───────────────────────────┘
++────────────────────────────────────────────────────────────────────────+
+|                    Python Bridge Server Gateway                        |
+|          (termux_forge_bridge.py / mcp_server.py wrapper)              |
++───────────────────────────────────┬────────────────────────────────────+
+                                    │
+                                    │ Coordinates
+                                    ▼
++────────────────────────────────────────────────────────────────────────+
+|                   Deep Research RAG Orchestration                      |
+|                                                                        |
+|    +───────────────────+   Tavily Web Search   +──────────────────+    |
+|    |   Agentic Loop    |──────────────────────►| Document Ingest  |    |
+|    |  (agentic_loop)   |                       | (lightrag_build) |    |
+|    +─────────┬─────────+                       +────────┬─────────+    |
+|              │ sufficiency                              │              |
+|              │ check                                    │ splits &     |
+|              ▼                                          ▼ filters      |
+|    +───────────────────+                       +──────────────────+    |
+|    | Hybrid Retriever  |◄──── Query/Fetch ────►| SQLite RAG Store |    |
+|    | (document->       |                       | (store.py database|    |
+|    |  section->chunk)  |                       | with WAL mode)   |    |
+|    +─────────┬─────────+                       +──────────────────+    |
+|              │                                                         |
+|              │ Embeds Query & Chunk Texts                              |
+|              ▼                                                         |
+|    +──────────────────────────────────────────────────────────────+    |
+|    |            Local Embedder Manager (llama-server)             |    |
+|    |       (embedder_lifecycle.py - EmbeddingGemma - Port 8080)   |    |
+|    +──────────────────────────────────────────────────────────────+    |
++───────────────────────────────────┬────────────────────────────────────+
+                                    │
+                                    │ Element Render & Export
+                                    ▼
++────────────────────────────────────────────────────────────────────────+
+|                     Word DOCX / Markdown Export                        |
+|       (generate_docx.py -> Android native file download dialog)        |
++------------------------------------------------------------------------+
 ```
 
 ---
 
-## Detailed Features List
+## Core IDE Workstation & UI Features
 
-### 🔍 On-Device Hierarchical RAG (Retrieval-Augmented Generation)
-*   **Hierarchical Narrowing Strategy**: Rather than performing expensive global search traversals on low-resource mobile hardware, the system splits documents into sections and sections into chunks (`lightrag_builder.py`). Ingestion and retrieval (`hybrid_retriever.py`) first identify relevant document-level nodes, narrow search scopes down to sections within those documents, and finally fetch candidate chunk-level leaf nodes. This prevents context pollution and speeds up local operations.
-*   **Dynamic Query Routing**: Features a rule-based query classifier (`classify_query()`) that analyzes keyword densities and query lengths to select the optimal retrieval path:
-    *   `document_first`: Tailored for synthesis, history, or comparison queries (e.g. containing terms like *versus*, *compare*, *overview*), narrowing candidate documents before looking at contents.
-    *   `section_first`: Ideal for structural, procedural, or implementation-oriented queries (e.g. *how to*, *guide*, *architecture*).
-    *   `direct`: Retrieves chunks directly across the database for exact factual lookups (e.g. *what is*, *code*, *error logs*).
-*   **Vectorized Numpy Cosine Similarity**: In place of heavy external C++ vector libraries (like `sqlite-vec`) which suffer compile-time and runtime wheel incompatibilities on ARM64 Termux, Nexon uses plain SQLite BLOBs to store raw `float32` vector arrays (`store.py`). Candidates are loaded into memory and compared in a single, high-performance vectorized operation using 2D `numpy` matrix-vector multiplications (`_cosine_batch()`), yielding desktop-level retrieval speeds on Android.
-*   **Text Cleaning & Quality Heuristics**: Ingested content is sanitized through a regex-based `TextCleaner` pipeline. Chunks are evaluated using a custom heuristic function (`_assess_chunk_quality()`) that calculates a quality score from `0.0` (junk) to `1.0` (high quality). It penalizes word repetition (to filter spam) and checks boilerplate term densities (e.g. cookies, login details, copyright footers) to ensure only valuable evidence is indexed.
+Nexon transforms a mobile screen into a multi-pane development environment using collapsible panels, responsive layouts, and glassmorphism styling:
 
-### 🤖 Agentic Search & Reflection Loop
-*   **Sufficiency Reflection**: An autonomous agentic controller wrapper (`agentic_loop.py`) evaluates the relevance and completeness of retrieved chunks against the original request. The system makes a local LLM or API call (`_reflect()`) returning a structured JSON decision:
-    *   `sufficient`: The current evidence is complete; it proceeds directly to answer synthesis.
-    *   `reformulate`: The search query was too broad or off-target; it rewrites the query and queries the retriever again.
-    *   `broader_search`: The local RAG database lacks relevant data; it triggers a search engine escalation.
-*   **Web Search Ingestion Escalation**: Upon reaching a `broader_search` decision, the engine calls a web search API (Tavily search fallback), fetches the top matching page results, cleans and splits their text layers, extracts novel chunks, and writes them directly into the active SQLite stage database on-the-fly. The retrieval loop then queries the updated database to pull in fresh, grounded context.
-*   **Resource Guardrails**: Built for mobile constraints, the reflection loop checks available RAM using `psutil`. If virtual memory falls below a strict safety threshold (`RAM_HEADROOM_MB_THRESHOLD = 300MB`), reflection is bypassed entirely to avoid Out-Of-Memory (OOM) terminations by the Android OS. The loop also tracks token budget usage and terminates after 3 iterations by default.
+*   **Multi-Pane collapsible IDE layout**: Collapsible left sidebar (File Explorer + active agents rail), collapsible right sidebar (Context panel / Active memory / Cost tracker / settings), center tabbed pane (Chat view and inline file editor), and collapsible bottom terminal emulator.
+*   **Onboarding Setup Wizard**: A 5-step onboarding screen (`onboarding_screen.dart`) that handles API provider credentials, local bridge connectivity verification, default reasoning model configurations, and target workspace mapping.
+*   **Agent Observability Dashboard**: A tabbed analytics dashboard (`agent_observability_screen.dart`) showing active/idle agent counts, runtime stopwatches, API call cost accumulation, and real-time execution activity logs per agent.
+*   **Interactive Todo Dashboard**: A priority-coded dashboard (`todo_dashboard_screen.dart`) supporting subtask tracking, completion percentages, assigned agent indicators, and status filtering (Pending, In Progress, Completed, Blocked).
+*   **Inline File Explorer & Code Editor**: Integrated workspace browser supporting directory expansions, code syntax styling, and floating quick-command triggers.
+*   **Local Terminal Emulator**: Full shell interface with Termux access, executing builds, running compilers, and monitoring background scripts.
 
-### 🛡️ Safety & Execution Circuit Breakers
-*   **Malformed Tag Interception**: A parser check in the Flutter app (`detectMalformedTags`) monitors LLM output text in real-time. If the model outputs a tool tag (like `<search_request>` or `<read_url>`) but fails to close it or formats it improperly, the system halts generation, throws a recovery error, and prevents the model from generating trailing garbage.
-*   **Evidence Saturation Guard**: To prevent the model from wasting network bandwidth on repetitive web queries, the system calculates a cosine novelty check against existing embeddings (with a similarity threshold of `0.95`). If subsequent fetches add no new information, a system warning is injected into the prompt at 4 consecutive zero-novelty fetches, and the step is aborted at 8 fetches.
-*   **Context Window Auto-Inference**: Rather than hardcoding context size limits for specific models, `getModelContextSize` inspects model names using structural regex rules (e.g., extracting trailing numbers like `-8192` or k-suffixes like `32k`). If it cannot resolve the name, it provides a safe, generous default of `32768` tokens to avoid blocking the user.
-*   **Turn and Time Ceilings**: Enforces an absolute limit of 30 tool calls per stage, alongside global time budget tracking (`globalTimeBudget`) that monitors elapsed execution time to prevent infinite runaways.
+---
 
-### 🔌 Single-Instance Embedder Process Manager
-*   **Race-Free Process Spawning**: Spawning the background `llama-server` is synchronized using cooperative Unix file locking (`fcntl.flock` on `~/.termux_forge_embedder.lock`), preventing race conditions if multiple tasks try to wake the server at the same time.
-*   **Stale Port Auditing & Reaping**: Prior to launching the embedder, the manager checks port 8080. If another process is holding the port, it reads the recorded PID from `~/.termux_forge_embedder.pid` and reaps any stale `llama-server` process using `psutil`.
-*   **Zero-Polling Idle Timeout**: The manager maintains a daemon thread (`_idle_loop()`) that sleeps using a thread event wait. Any client activity triggers `touch()`, extending the server's lifespan. If no requests are received for 120 seconds, the server terminates the `llama-server` process, freeing up memory when the app is idle.
+## The 11 Operational Modes
 
-### 🖥️ Native Permission Dialogs & Workspace Sandboxing
-*   **Granular Command Approval**: Offers four levels of permission persistence (Allow Once, Allow for Chat, Always Allow, Block) managed via Flutter `SharedPreferences` (`shell_permission_v1`), giving the user absolute control over shell commands.
-*   **Workspace Constraints**: The Python bridge normalizes incoming paths (`resolve_path()`) and relative directories to prevent double-prefixing errors. It executes commands inside the designated workspace root (`_agenticWorkspace`) to ensure operations remain sandboxed.
+Nexon maps the user interaction loop into 11 specialized modes depending on the task:
 
-### 🗂️ Interactive Research UI & Multi-Format Export
-*   **Progressive Lifecycle UI**: Integrates a clean, event-driven timeline showing the research pipeline. Events pulse during execution and transition smoothly between states. Users can click individual event rows to inspect execution payloads, tool inputs, or system warnings.
-*   **Export Pipeline**: Generates structured Markdown text from the completed research plan or converts it into a Word Document (`.docx`) using a markdown-to-element parser and the `python-docx` library. It triggers native Android save dialogs via the Flutter `file_picker` package.
+| Mode | Key | Icon | Description |
+| :--- | :--- | :--- | :--- |
+| **Code** | `code` | `Icons.code_rounded` | Write, edit, refactor, and generate code files with AI assistance. |
+| **Architect** | `architect` | `Icons.architecture_rounded` | Design software architecture, outline class diagrams, and structure folders. |
+| **Debug** | `debug` | `Icons.bug_report_rounded` | Perform systematic trace logs analysis and provide fixes for errors. |
+| **Ask** | `ask` | `Icons.question_answer_rounded` | General developer Q&A, documentation lookups, and conceptual questions. |
+| **Review** | `review` | `Icons.rate_review_rounded` | Perform code reviews, detect bottlenecks, and suggest best practices. |
+| **Deploy** | `deploy` | `Icons.rocket_launch_rounded` | Run builds, run tests, and execute release deployments (e.g. Firebase). |
+| **Research** | `research` | `Icons.biotech_rounded` | Execute linear deep RAG pipelines over local project files and web sources. |
+| **Test** | `test` | `Icons.science_rounded` | Generate, edit, execute, and verify unit and widget test suites. |
+| **Document** | `document` | `Icons.description_rounded` | Document codebases, write READMEs, and generate comments. |
+| **Security** | `security` | `Icons.shield_rounded` | Audit command permissions, check for destructive code, and scan dependencies. |
+| **Battle** | `battle` | `Icons.compare_arrows_rounded` | Compare reasoning models side-by-side in real-time. |
+
+---
+
+## Deep Research & RAG Architecture
+
+When operating in **Research** mode, Nexon triggers a linear, high-performance RAG pipeline on-device:
+
+### 1. Hierarchical Narrowing Strategy
+*   **Doc → Section → Chunk Tiers**: Instead of executing heavy global graph traversals, the system splits documents into sections and sections into chunks (`lightrag_builder.py`).
+*   **Semantic Routing**: It uses a classifier (`classify_query()`) in `hybrid_retriever.py` to route queries:
+    *   `document_first`: Tailored for broad synthesis and comparison queries.
+    *   `section_first`: Tailored for procedural guides or implementation details.
+    *   `direct`: Retrieves chunks directly across the store for exact factual matching (highest precision).
+
+### 2. Pure On-Device Vector Store
+*   **Plain SQLite BLOB storage**: Vector embeddings are stored as little-endian `float32` byte arrays in a local SQLite database (`store.py`).
+*   **Vectorized Numpy Similarity**: During retrieval, candidate vectors are stacked into a 2D `numpy` array, and a vectorized batch dot product (`_cosine_batch()`) computes similarities instantly in one operation, avoiding per-row Python loop overhead.
+
+### 3. Agentic Search & Reflection Loop
+*   **Sufficiency checks**: The agentic controller wrapper (`agentic_loop.py`) evaluates retrieved chunks. If the context is insufficient, it reformulates the query (`_reflect()`) or triggers a Tavily search escalation.
+*   **Ingestion Pipeline**: Web results are parsed, cleaned, and ingested back into the active stage database.
+*   **OOM Safeguard**: Bypasses reflection if available virtual memory (`psutil`) falls below 300MB, protecting Android from OOM process termination.
+
+### 4. Managed Embedder Process Manager
+*   **Process Control**: The manager (`embedder_lifecycle.py`) launches `llama-server` with `EmbeddingGemma` (`embeddinggemma-300m-Q4_0.gguf`).
+*   **Concurrency Guard**: Prevents concurrent spawn conflicts using file locking (`fcntl.flock`).
+*   **Timeout Daemon**: Shuts down the local embedder after 120 seconds of inactivity to conserve phone battery.
+
+---
+
+## Safety & Execution Circuit Breakers
+
+*   **Malformed Tag Interception**: Real-time parsing (`detectMalformedTags`) in the Flutter app intercepts malformed XML tool tags (unclosed or misaligned), halting generation to save token limits.
+*   **Evidence Saturation Guard**: Triggers warning messages at 4 consecutive redundant fetches (evaluated via `0.95` similarity thresholds) and halts RAG ingestion completely at 8.
+*   **Model Name Window Inference**: `getModelContextSize` extracts the model context sizes structurally (e.g. `llama3-8b-8192` → 8,192), avoiding hardcoded API vendor blocks.
+*   **Hard Loop Ceilings**: Enforces an absolute ceiling of 30 tool calls per stage, alongside global time budget tracking (`globalTimeBudget`).
 
 ---
 
