@@ -12,101 +12,140 @@ An AI-powered mobile coding IDE and agentic workspace that runs entirely on your
 
 ---
 
-## System Architecture
+## Workspace Architecture
 
 Nexon integrates a high-performance Flutter-based UI with a local Python Bridge Server that acts as a secure Model Context Protocol (MCP) gateway. The deep research pipeline utilizes a local `llama-server` instance to execute hierarchical retrieval and document ingestion directly on-device.
 
 ```text
-+------------------------------------------------------------------------+
-|                          Nexon Flutter App                             |
-|                                                                        |
-|  [Left Sidebar: File Explorer/Agents] [Right Sidebar: Context/Memory]  |
-|                                                                        |
-|  [Center Tabs: Chat Screen | Code Editor | Terminal Emulator | Todos]  |
-|                                                                        |
-|  [Specialized Widgets: ResearchPlanWidget (Deep Research Lifecycle)]   |
-+───────────────────────────────────┬────────────────────────────────────+
-                                    │
-                                    │ Streams XML Tool Calls
-                                    ▼
-+────────────────────────────────────────────────────────────────────────+
-|                   XML Tool Parser & Circuit Breakers                   |
-|   (detectMalformedTags, zeroNoveltyStreak, getModelContextSize, etc.)  |
-+───────────────────────────────────┬────────────────────────────────────+
-                                    │
-                                    │ HTTP (:8390) / WebSocket (:8765)
-                                    ▼
-+────────────────────────────────────────────────────────────────────────+
-|                    Python Bridge Server Gateway                        |
-|          (termux_forge_bridge.py / mcp_server.py wrapper)              |
-+───────────────────────────────────┬────────────────────────────────────+
-                                    │
-                                    │ Coordinates
-                                    ▼
-+────────────────────────────────────────────────────────────────────────+
-|                   Deep Research RAG Orchestration                      |
-|                                                                        |
-|    +───────────────────+   Tavily Web Search   +──────────────────+    |
-|    |   Agentic Loop    |──────────────────────►| Document Ingest  |    |
-|    |  (agentic_loop)   |                       | (lightrag_build) |    |
-|    +─────────┬─────────+                       +────────┬─────────+    |
-|              │ sufficiency                              │              |
-|              │ check                                    │ splits &     |
-|              ▼                                          ▼ filters      |
-|    +───────────────────+                       +──────────────────+    |
-|    | Hybrid Retriever  |◄──── Query/Fetch ────►| SQLite RAG Store |    |
-|    | (document->       |                       | (store.py database|    |
-|    |  section->chunk)  |                       | with WAL mode)   |    |
-|    +─────────┬─────────+                       +──────────────────+    |
-|              │                                                         |
-|              │ Embeds Query & Chunk Texts                              |
-|              ▼                                                         |
-|    +──────────────────────────────────────────────────────────────+    |
-|    |            Local Embedder Manager (llama-server)             |    |
-|    |       (embedder_lifecycle.py - EmbeddingGemma - Port 8080)   |    |
-|    +──────────────────────────────────────────────────────────────+    |
-+───────────────────────────────────┬────────────────────────────────────+
-                                    │
-                                    │ Element Render & Export
-                                    ▼
-+────────────────────────────────────────────────────────────────────────+
-|                     Word DOCX / Markdown Export                        |
-|       (generate_docx.py -> Android native file download dialog)        |
-+------------------------------------------------------------------------+
+=========================================================================================
+                                NEXON MOBILE WORKSTATION
+=========================================================================================
+
+  +-----------------------------------------------------------------------------------+
+  |                             Flutter UI (TermuxForge)                              |
+  |                                                                                   |
+  |  +--------------------+  +----------------------+  +---------------------------+  |
+  |  |    IDE Toolsets    |  |     Visualizers      |  |    Artifact Renderer      |  |
+  |  |                    |  |                      |  |                           |  |
+  |  |  * Inline Chat     |  |  * SvgDiagramWidget  |  |  * HtmlArtifactWidget     |  |
+  |  |  * Code Editor     |  |    (Pinch & Zoom /   |  |  * FileArtifactWidget     |  |
+  |  |  * Termux Shell    |  |     Copy Code)       |  |  * DocxArtifactWidget     |  |
+  |  |  * File Explorer   |  |  * Latex Math Equations|  |  * MdArtifactWidget       |  |
+  |  |  * Todo Dashboard  |  |  * Interactive Charts|  |    (Native Android Save)  |  |
+  |  |  * Observability   |  |                      |  |                           |  |
+  |  +---------┬----------+  +----------------------+  +---------------------------+  |
+  |            │                                                                      |
+  |            │ Streams Chat Response (XML Tag Interception)                         |
+  |            ▼                                                                      |
+  |  +-----------------------------------------------------------------------------+  |
+  |  |                        XML Parser & Safety circuit breakers                 |  |
+  |  |    (detectMalformedTags, zeroNoveltyStreak, loopCount, globalTimeBudget)    |  |
+  |  +-------------------------------------┬---------------------------------------+  |
+  +────────────────────────────────────────┼──────────────────────────────────────────+
+                                           │ WebSocket (:8765) / HTTP (:8390)
+                                           ▼
+  +───────────────────────────────────────────────────────────────────────────────────+
+  |                           Python Bridge Server Gateway                            |
+  |                         (termux_forge_bridge.py Main)                             |
+  |                                                                                   |
+  |  +-----------------------------------------------------------------------------+  |
+  |  |                             XML Tool Tag Execution                          |  |
+  |  |                                                                             |  |
+  |  |   <tool_request>  ===>  Methods: file_read, file_write, str_replace,        |  |
+  |  |                         find_paths, run_command, git_status, etc.           |  |
+  |  +─────────────────────────────────────┬───────────────────────────────────────+  |
+  |                                        │
+  |                                        │ Coordinates
+  |                                        ▼
+  |  +─────────────────────────────────────────────────────────────────────────────+  |
+  |  |                       Deep Research RAG Pipelines                           |  |
+  |  |                                                                             |  |
+  |  |   * LangGraphRAGOrchestrator: Linear pipeline controller                    |  |
+  |  |   * Agentic Loop: Reflect / Reformulate / Ingest (Tavily search escalation) |  |
+  |  |   * Hybrid Retriever: Dynamic Query Routing (doc -> section -> chunk)       |  |
+  |  |   * ResearchStore: SQLite metadata and numpy matrix dot-product similarity   |  |
+  |  |   * Ingestion Layer: Boilerplate text cleaning and novelty validation       |  |
+  |  +─────────────────────────────────────┬───────────────────────────────────────+  |
+  |                                        │
+  |                                        │ Embeds Queries/Text Elements
+  |                                        ▼
+  |  +─────────────────────────────────────────────────────────────────────────────+  |
+  |  |                         Managed Embedder Lifecycle                          |  |
+  |  |                                                                             |  |
+  |  |   * ServerLifecycleManager: flock concurrency locks, orphan reaping         |  |
+  |  |   * Local Server: llama-server process (Port 8080) with 120s idle shutdown  |  |
+  |  |   * Embeddings Model: EmbeddingGemma (embeddinggemma-300m-Q4_0.gguf)        |  |
+  |  +─────────────────────────────────────────────────────────────────────────────+  |
+  +────────────────────────────────────────┬──────────────────────────────────────────+
+                                           │ Exports File
+                                           ▼
+                             +───────────────────────────+
+                             |    Markdown / Word DOCX   |
+                             | (Android Downloads folder)|
+                             +───────────────────────────+
 ```
 
 ---
 
-## Core IDE Workstation & UI Features
+## Detailed Features
 
-Nexon transforms a mobile screen into a multi-pane development environment using collapsible panels, responsive layouts, and glassmorphism styling:
+### 🎨 Fully Fullscreen SVGs & Interactive Visuals
+*   **SvgDiagramWidget Rendering**: Intercepts ````svg ... ```` blocks from the chat stream, cleans and normalizes height/width constraints to `100%`, strips raw text surrounding the tags, and renders vector diagrams natively using `flutter_svg`.
+*   **Pinch-to-Zoom & Pan Viewers**: Wraps rendered SVGs in a Flutter `InteractiveViewer` supporting multi-touch pinch-to-zoom scaling, scroll-panning, and fullscreen overlay view modes.
+*   **Inline Code Inspection**: Provides copy-to-clipboard code tools directly on the visual panel to copy the raw SVG source code.
+*   **Latex Equation Rendering**: Automatically compiles and renders complex math, statistical, and workflow formula diagrams in markdown blocks using LaTeX notation.
 
-*   **Multi-Pane collapsible IDE layout**: Collapsible left sidebar (File Explorer + active agents rail), collapsible right sidebar (Context panel / Active memory / Cost tracker / settings), center tabbed pane (Chat view and inline file editor), and collapsible bottom terminal emulator.
-*   **Onboarding Setup Wizard**: A 5-step onboarding screen (`onboarding_screen.dart`) that handles API provider credentials, local bridge connectivity verification, default reasoning model configurations, and target workspace mapping.
-*   **Agent Observability Dashboard**: A tabbed analytics dashboard (`agent_observability_screen.dart`) showing active/idle agent counts, runtime stopwatches, API call cost accumulation, and real-time execution activity logs per agent.
-*   **Interactive Todo Dashboard**: A priority-coded dashboard (`todo_dashboard_screen.dart`) supporting subtask tracking, completion percentages, assigned agent indicators, and status filtering (Pending, In Progress, Completed, Blocked).
-*   **Inline File Explorer & Code Editor**: Integrated workspace browser supporting directory expansions, code syntax styling, and floating quick-command triggers.
-*   **Local Terminal Emulator**: Full shell interface with Termux access, executing builds, running compilers, and monitoring background scripts.
+### 🗂️ Artifact Rendering & Management System
+*   **HtmlArtifactWidget**: Renders sandboxed HTML, CSS, and Javascript previews in a local web view, enabling live design prototyping directly on the phone.
+*   **FileArtifactWidget**: Displays proposed file additions or code edits with color syntax highlighting.
+*   **DocxArtifactWidget & MdArtifactWidget**: Displays report drafts, code reviews, and project documentation. Clicking downloads transfers the output files directly to the Android `Downloads` directory.
+
+### 🖥️ Core IDE Workstation Tools
+*   **Inline Chat**: Stateful streaming assistant pane with provider routing (Anthropic, OpenAI, Google Gemini, OpenRouter) and custom model selections.
+*   **Code Editor**: Clean file editor displaying text content, editing lines, saving changes locally, and integrating with git.
+*   **Termux Shell & Command Terminal**: Collapsible console panel that launches safe bash processes inside Termux, displaying stdout/stderr in real-time.
+*   **File Explorer**: Sidebar navigation rail supporting file and folder lookups, tree views, and creation/deletion.
+*   **Todo Dashboard**: Track tasks by priority (Low, Medium, High, Critical) and status (Pending, In Progress, Completed, Blocked), progress bars per task based on completed subtasks, agent assignment dropdowns, and dynamic filter controls.
+*   **Agent Observability**: Track active agents (Orchestrator, Coder, Architect, Debugger, Reviewer, Background Worker, Security), active models, total session API cost, tool count metrics, execution runtimes, and real-time execution logs.
 
 ---
 
-## The 11 Operational Modes
+## Operational Modes
 
-Nexon maps the user interaction loop into 11 specialized modes depending on the task:
+Nexon maps the user interaction loop into 6 primary operational modes:
 
-| Mode | Key | Icon | Description |
-| :--- | :--- | :--- | :--- |
-| **Code** | `code` | `Icons.code_rounded` | Write, edit, refactor, and generate code files with AI assistance. |
-| **Architect** | `architect` | `Icons.architecture_rounded` | Design software architecture, outline class diagrams, and structure folders. |
-| **Debug** | `debug` | `Icons.bug_report_rounded` | Perform systematic trace logs analysis and provide fixes for errors. |
-| **Ask** | `ask` | `Icons.question_answer_rounded` | General developer Q&A, documentation lookups, and conceptual questions. |
-| **Review** | `review` | `Icons.rate_review_rounded` | Perform code reviews, detect bottlenecks, and suggest best practices. |
-| **Deploy** | `deploy` | `Icons.rocket_launch_rounded` | Run builds, run tests, and execute release deployments (e.g. Firebase). |
-| **Research** | `research` | `Icons.biotech_rounded` | Execute linear deep RAG pipelines over local project files and web sources. |
-| **Test** | `test` | `Icons.science_rounded` | Generate, edit, execute, and verify unit and widget test suites. |
-| **Document** | `document` | `Icons.description_rounded` | Document codebases, write READMEs, and generate comments. |
-| **Security** | `security` | `Icons.shield_rounded` | Audit command permissions, check for destructive code, and scan dependencies. |
-| **Battle** | `battle` | `Icons.compare_arrows_rounded` | Compare reasoning models side-by-side in real-time. |
+1.  **Code** (`code`): Write, edit, refactor, and generate code files with AI assistance.
+2.  **Architect** (`architect`): Design software architecture, outline class diagrams, and structure folders.
+3.  **Debug** (`debug`): Perform systematic trace logs analysis and provide fixes for errors.
+4.  **Ask** (`ask`): General developer Q&A, documentation lookups, and conceptual questions.
+5.  **Review** (`review`): Perform code reviews, detect bottlenecks, and suggest best practices.
+6.  **Plan** (`plan`): Break down tasks, estimate effort, and create actionable plans.
+
+---
+
+## XML Tool Tag Protocol
+
+Nexon uses structured XML tags inside standard LLM text completions to trigger local device tool executions. The model outputs exactly one tool request per turn, halts generation, and waits for results.
+
+### Expected XML Syntax
+```xml
+<tool_request>
+  <method>file_read</method>
+  <path>lib/main.dart</path>
+  <start_line>1</start_line>
+  <end_line>50</end_line>
+</tool_request>
+```
+Nexon's parser is highly robust and automatically extracts tags like `<method>`, `<path>`, `<query>`, `<start_line>`, `<end_line>`, `<pattern>`, and `<command>`. It also includes fallback parsers to capture `<PARAM name="key">value</PARAM>` and `<parameter name="key">value</parameter>` syntax if generated by older models.
+
+Supported tool methods include:
+*   `dir_list` — List folder contents.
+*   `file_read` — View lines within a specific range.
+*   `file_write` — Overwrite or write content to a file path.
+*   `str_replace` — Find and replace contiguous string blocks.
+*   `find_paths` — Case-insensitive search for files or directories by pattern.
+*   `run_command` — Safely execute bash shell commands inside Termux.
+*   `git_status` / `git_diff` — Version control state.
 
 ---
 
@@ -123,7 +162,7 @@ When operating in **Research** mode, Nexon triggers a linear, high-performance R
 
 ### 2. Pure On-Device Vector Store
 *   **Plain SQLite BLOB storage**: Vector embeddings are stored as little-endian `float32` byte arrays in a local SQLite database (`store.py`).
-*   **Vectorized Numpy Similarity**: During retrieval, candidate vectors are stacked into a 2D `numpy` array, and a vectorized batch dot product (`_cosine_batch()`) computes similarities instantly in one operation, avoiding per-row Python loop overhead.
+*   **Vectorized Numpy Similarity**: During retrieval, candidate vectors are loaded into memory, stacked into a 2D `numpy` array, and a vectorized batch dot product (`_cosine_batch()`) computes similarities instantly in one operation, avoiding per-row Python loop overhead.
 
 ### 3. Agentic Search & Reflection Loop
 *   **Sufficiency checks**: The agentic controller wrapper (`agentic_loop.py`) evaluates retrieved chunks. If the context is insufficient, it reformulates the query (`_reflect()`) or triggers a Tavily search escalation.
