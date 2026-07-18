@@ -15,39 +15,39 @@ An AI-powered IDE and research assistant that runs natively on your Android phon
 Nexon split-processes operations between the Dart/Flutter application (which renders the visual IDE panels and manages state) and a Python Bridge background server running in the Termux userland environment.
 
 ```text
-┌──────────────────────────────────────────────────────────────────────┐
-│                        Flutter App (Android)                         │
-│                                                                      │
-│ ┌─────────────┐ ┌──────────────┐ ┌─────────────┐ ┌─────────────────┐ │
-│ │ Chat/IDE UI │ │  Artifacts   │ │Memory System│ │Deep Research UI │ │
-│ │(Tool routing) │(SVG/MD Render) │ (JSON File) │ │(3-State UI)     │ │
-│ └──────┬──────┘ └──────────────┘ └─────────────┘ └───────┬─────────┘ │
-│        │                                                 │           │
-│        │    ┌───────────────────────────────┐            │           │
-│        │    │      Google Drive Backup      │            │           │
-│        │    │ (Syncs Chats, Settings, Keys) │            │           │
-│        │    └──────────────┬────────────────┘            │           │
-└────────┼───────────────────┼─────────────────────────────┼───────────┘
-         │                   │                             │
-         │ WebSocket :8765 / │ HTTP :8390                  │
-         v                   │                             v
-┌────────────────────────────┼─────────────────────────────────────────┐
-│                            │    python_bridge Server                 │
-│ ┌────────────────────────┐ │  ┌────────────────────────────────────┐ │
-│ │ IDE / Shell Exec Layer │ │  │ Deep Research Engine               │ │
-│ │ (hybrid_tools.py)      │ │  │ - Embedder Lifecycle Management    │ │
-│ │ - File Read/Write/Edit │ │  │ - Hierarchical RAG                 │ │
-│ │ - Arbitrary Termux Cmds│ │  │ - SQLite + Numpy Vector Store      │ │
-│ └─────────┬──────────────┘ │  └──────────────────┬─────────────────┘ │
-└───────────┼────────────────┴─────────────────────┼───────────────────┘
-            │                                      │
++----------------------------------------------------------------------+
+|                        Flutter App (Android)                         |
+|                                                                      |
+| +-------------+ +--------------+ +-------------+ +-----------------+ |
+| | Chat/IDE UI | |  Artifacts   | |Memory System| |Deep Research UI | |
+| |(Tool routing) |(SVG/MD Render) | (JSON File) | |(3-State UI)     | |
+| +------+------+ +--------------+ +-------------+ +-------+---------+ |
+|        |                                                 |           |
+|        |    +-------------------------------+            |           |
+|        |    |      Google Drive Backup      |            |           |
+|        |    | (Syncs Chats, Settings, Keys) |            |           |
+|        |    +---------------+---------------+            |           |
++--------+--------------------+----------------------------+-----------+
+         |                    |                            |
+         | WebSocket :8765 /  | HTTP :8390                 |
+         v                    |                            v
++-----------------------------+----------------------------------------+
+|                             |    python_bridge Server                |
+| +------------------------+  |  +-----------------------------------+ |
+| | IDE / Shell Exec Layer |  |  | Deep Research Engine              | |
+| | (hybrid_tools.py)      |  |  | - Embedder Lifecycle Management   | |
+| | - File Read/Write/Edit |  |  | - Hierarchical RAG                | |
+| | - Arbitrary Termux Cmds|  |  | - SQLite + Numpy Vector Store     | |
+| +---------+--------------+  |  +-----------------+-----------------+ |
++-----------+-----------------+--------------------+-------------------+
+            |                                      |
             v                                      v
-┌────────────────────────┐         ┌───────────────────────────────────┐
-│     Termux Runtime     │         │      External Services & APIs     │
-│ - Bash shell           │         │ - Google Drive API (OAuth Backup) │
-│ - GCC, git, python     │         │ - Tavily Search API (Web Search)  │
-└────────────────────────┘         │ - LLM Providers (OpenAI, Anthropic)│
-                                   └───────────────────────────────────┘
++------------------------+         +-----------------------------------+
+|     Termux Runtime     |         |      External Services & APIs     |
+| - Bash shell           |         | - Google Drive API (OAuth Backup) |
+| - GCC, git, python     |         | - Tavily Search API (Web Search)  |
++------------------------+         | - LLM Providers (OpenAI, Anthropic)|
+                                   +-----------------------------------+
 ```
 
 ---
