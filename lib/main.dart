@@ -3352,6 +3352,10 @@ For every project, maintain a README.md at the project root.
             consecutiveMalformedTags = 0;
           }
 
+          final completeMatch = RegExp(
+            r'<step_complete/?>',
+            caseSensitive: false,
+          ).firstMatch(responseText);
           if (completeMatch != null) {
             final contentClean = responseText
                 .replaceAll(
@@ -3891,7 +3895,8 @@ For every project, maintain a README.md at the project root.
               params['active_llm_provider'] = provider.id;
               params['active_llm_model'] = model;
               params['active_llm_api_key'] = activeKey;
-              params['active_llm_base_url'] = _baseUrl(provider, settings);
+              final rawBase = settings.baseUrl.trim().isEmpty ? provider.baseUrl : settings.baseUrl.trim();
+              params['active_llm_base_url'] = rawBase.replaceAll(RegExp(r'/+$'), '');
               parsed['params'] = params;
              jsonString = jsonEncode(parsed);
            } catch (_) {}
@@ -4452,7 +4457,8 @@ For every project, maintain a README.md at the project root.
               params['active_llm_provider'] = provider.id;
               params['active_llm_model'] = model;
               params['active_llm_api_key'] = activeKey;
-              params['active_llm_base_url'] = _baseUrl(provider, settings);
+              final rawBase2 = settings.baseUrl.trim().isEmpty ? provider.baseUrl : settings.baseUrl.trim();
+              params['active_llm_base_url'] = rawBase2.replaceAll(RegExp(r'/+$'), '');
               parsed['params'] = params;
               jsonString = jsonEncode(parsed);
             } catch (_) {}
@@ -9373,6 +9379,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.artifactsEnabled,
     required this.svgVisualsEnabled,
     required this.deepResearchEnabled,
+    required this.writerContextBudget,
     required this.agenticWorkspace,
     required this.customMcpUrl,
     required this.onSearchSettingsChanged,
@@ -10785,7 +10792,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Setup is complete, but the Python bridge process isn\\'t currently running. Please start it in Termux:'),
+                              const Text("Setup is complete, but the Python bridge process isn't currently running. Please start it in Termux:"),
                               const SizedBox(height: 12),
                               Container(
                                 padding: const EdgeInsets.all(8),

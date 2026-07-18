@@ -289,7 +289,7 @@ class DriveSyncService {
             await driveApi.files.create(
               drive.File()
                 ..name = _backupFileName
-                ..parents = [folderId],
+                ..parents = [folderId!],
               uploadMedia: upload,
             );
           }
