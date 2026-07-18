@@ -1,215 +1,190 @@
 # Nexon
 
-> **An AI-powered mobile coding workstation and agentic workspace** that transforms your Android device into a full-featured development workspace — powered by Flutter, Termux, and intelligent local tool routing.
+An AI coding assistant and agentic workspace that runs entirely on your Android phone via Termux — no cloud, no laptop required.
 
-[![Build](https://github.com/shivaww/Nexon/actions/workflows/build.yml/badge.svg)](https://github.com/shivaww/Nexon/actions/workflows/build.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
+[![Status](https://img.shields.io/badge/status-private%20%2F%20in%20development-red.svg)](https://github.com/shivaww/Nexon)
+[![License](https://img.shields.io/badge/license-TBD-lightgrey.svg)](https://github.com/shivaww/Nexon)
+<!-- NOTE: Using a static badge since the repository is private and live GitHub Actions / Release API badge calls will fail. This will be updated to a live shields.io counter when/if the repository goes public. -->
+[![Downloads](https://img.shields.io/badge/downloads-0--active--dev-blue.svg)](https://github.com/shivaww/Nexon)
 
----
-
-## 🆕 What's New — v1.1.0
-
-### 🛡️ Shell Command Permission System
-Before the AI executes any shell command, the app now shows a native permission dialog — just like professional IDEs (VS Code, Android Studio):
-- **Yes** — allow this one command.
-- **This chat** — allow all commands for the current session.
-- **Always ✓** — remember and never ask again (saved to device storage).
-- **No** — block execution, AI receives a denial error and can recover.
-
-Permission preference is persisted via `SharedPreferences` (`shell_permission_v1`) and loaded on every app start.
-
-### 🔧 Python Bridge: `<command>` XML Support
-The MCP server (`python_bridge/mcp_server.py`) now accepts raw XML `<command>` blocks directly — not just JSON:
-```xml
-<command>ls lib/</command>
-<workspace_dir>/data/.../my_project</workspace_dir>
-```
-Both paths (XML and JSON RPC) are supported simultaneously.
-
-### 🗂️ Workspace-Aware Command Execution
-All shell commands now correctly run inside the **user-configured workspace directory**:
-- `cwd` is automatically injected as `_agenticWorkspace` if not explicitly set.
-- Both dispatch blocks (main chat + deep research) inject `workspace_dir` AND `cwd`.
-- Path resolution in `mcp_server.py` fixed: no more double-prefix bug when workspace is a subdirectory of Termux home.
-
-### 🧠 Upgraded Agentic System Prompt
-The agentic system prompt is now concise and structured:
-- **CORE RULE**: one `<command>` per turn, stop and wait.
-- **SHELL TOOLKIT**: full list of available Termux tool categories.
-- **QUALITY STANDARDS**: read before edit, verify after edit, no placeholders.
-- **PROJECT DOCUMENTATION**: AI automatically maintains `README.md` with a Table of Contents (line ranges) for every project.
-
-### 🔄 Path Resolution Fixes (`mcp_server.py`)
-- `~/` expands to the configured workspace (not Termux root).
-- Absolute Termux paths no longer get double-prefixed when workspace is a subdir.
-- `resolve_path()` correctly guards against remapping paths already inside the workspace.
+*Note: A live download counter will be enabled once the repository becomes public.*
 
 ---
-
-## Overview
-
-Nexon provides a beautiful Flutter-based agentic workspace that communicates directly with LLM API providers for streaming chat, while routing local tool calls to a zero-dependency Python-based Model Context Protocol (MCP) server running inside Termux.
-
-Nexon empowers LLMs to read/write files, execute commands, perform search, build code, manage git workflows, and deploy projects directly from your phone or tablet.
 
 ## Architecture
 
+Nexon integrates a high-performance Flutter-based UI with a local Python Bridge Server that acts as a secure Model Context Protocol (MCP) gateway. The deep research pipeline utilizes a local `llama-server` instance to execute hierarchical retrieval and document ingestion directly on-device.
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                          Nexon Flutter App                             │
+│                                                                        │
+│   ┌────────────────────────┐          ┌────────────────────────────┐   │
+│   │    Chat Interface      │          │     ResearchPlanWidget     │   │
+│   │  (Active Chat View)    │          │  (Live Status / Edit Plan) │   │
+│   └───────────┬────────────┘          └─────────────┬──────────────┘   │
+│               │                                     │                  │
+│               │ Streams XML Tool Calls              │ Streams Events   │
+│               ▼                                     ▼                  │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │                   XML Parser & Circuit Breakers                │   │
+│   │     (detectMalformedTags, zeroNoveltyStreak, loopCount < 30)   │   │
+│   └───────────────────────────────┬────────────────────────────────┘   │
+└───────────────────────────────────┼────────────────────────────────────┘
+                                    │ HTTP / WebSocket Requests
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Python Bridge Server                            │
+│           (termux_forge_bridge.py / mcp_server.py gateway)             │
+│                                                                        │
+│   ┌───────────────────────────────────┬────────────────────────────┐   │
+│   │         WebSocket Server          │        HTTP Server         │   │
+│   │            (Port 8765)            │        (Port 8390)         │   │
+│   └─────────────────┬─────────────────┴─────────────┬──────────────┘   │
+│                     │                               │                  │
+│                     ▼                               ▼                  │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │                 Deep Research RAG Orchestrator                 │   │
+│   │              (deep_research.orchestrator)                      │   │
+│   └────────┬────────────────────────────────────────────────┬──────┘   │
+│            │                                                │          │
+│            ▼                                                ▼          │
+│   ┌─────────────────┐                              ┌─────────────────┐ │
+│   │  Agentic Loop   ├────── Tavily Search ────────►│  Document Ingest│ │
+│   │  (agentic_loop) │    (Escalation / Web Search) │ (lightrag_ingest) │ │
+│   └────────┬────────┘                              └────────┬────────┘ │
+│            │                                                │          │
+│            │ Evaluates Sufficiency                          │ Splits,  │
+│            ▼ (reflect / reformulate)                        ▼ Filters  │
+│   ┌────────────────────────┐                      ┌──────────────────┐ │
+│   │   Hybrid Retriever     │                      │ SQLite RAG Store │ │
+│   │   (hybrid_retriever)   │◄──── Query/Fetch ───►│    (store.py)    │ │
+│   │ (document->section->   │                      │  (WAL Mode /     │ │
+│   │  chunk narrowing &     │                      │  Cascade Delete) │ │
+│   │  numpy cosine similarity)                     └────────┬─────────┘ │
+│   └────────┬───────────────┘                               │           │
+│            │                                               │           │
+│            │ Embeds Query/Chunk Texts                      │           │
+│            ▼                                               ▼           │
+│   ┌────────────────────────────────────────────────────────────────┐   │
+│   │             Local Embedder Process (llama-server)              │   │
+│   │        (Managed via embedder_lifecycle.py - Port 8080)         │   │
+│   │      [Model: EmbeddingGemma (embeddinggemma-300m-Q4_0.gguf)]   │   │
+│   └────────────────────────────────────────────────────────────────┘   │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Exports
+                                    ▼
+                      ┌───────────────────────────┐
+                      │    Markdown / DOCX File   │
+                      │ (MarkdownParser / python- │
+                      │ docx / generate_docx.py)  │
+                      └───────────────────────────┘
 ```
-┌────────────────────────────────────────────────────────────┐
-│                    Nexon Flutter App                       │
-│                                                            │
-│   ┌────────────────────────────────────────────────────┐   │
-│   │                    Chat Interface                  │   │
-│   └─────────────────────────┬──────────────────────────┘   │
-│                             │ Sends/streams chat requests  │
-│                             ▼                              │
-│                ┌─────────────────────────┐                 │
-│                │     LLM API Provider    │                 │
-│                │ (Gemini, OpenAI, etc.)  │                 │
-│                └────────────┬────────────┘                 │
-│                             │ Streams XML tool calls       │
-│                             ▼                              │
-│                ┌─────────────────────────┐                 │
-│                │   XML Tool Call Parser  │                 │
-│                └────────────┬────────────┘                 │
-│                             │                              │
-│                             │ HTTP POST JSON               │
-│                             │ http://127.0.0.1:8390/mcp    │
-│                             ▼                              │
-│   ┌────────────────────────────────────────────────────┐   │
-│   │           Python MCP Server (Termux Bridge)        │   │
-│   │                                                    │   │
-│   │   ┌────────────┐  ┌────────────┐  ┌────────────┐   │   │
-│   │   │  Security  │  │  Command   │  │    Git     │   │   │
-│   │   │  Filtering │  │  Executor  │  │ Operations │   │   │
-│   │   └────────────┘  └────────────┘  └────────────┘   │   │
-│   │   ┌────────────┐  ┌────────────┐                   │   │
-│   │   │ Checkpoint │  │ Workflows  │                   │   │
-│   │   │   Helper   │  │   Engine   │                   │   │
-│   │   └────────────┘  └────────────┘                   │   │
-│   └────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────┘
-```
 
-## Features
+---
 
-### 🖥️ Shell & Terminal
-- Safe bash command execution in Termux (unblocked operations).
-- Command safety scanner (automatically blocks high-risk or destructive actions).
-- Real-time command output capture and display.
+## Detailed Features List
 
-### 📁 File Management
-- Sandbox-aware folder path lookup.
-- Read, write, list, delete, and recursively search files.
-- Space-insensitive parameter extraction from LLM tool-calling nodes.
+### 🔍 On-Device Hierarchical RAG (Retrieval-Augmented Generation)
+*   **Hierarchical Narrowing Strategy**: Rather than performing expensive global search traversals on low-resource mobile hardware, the system splits documents into sections and sections into chunks (`lightrag_builder.py`). Ingestion and retrieval (`hybrid_retriever.py`) first identify relevant document-level nodes, narrow search scopes down to sections within those documents, and finally fetch candidate chunk-level leaf nodes. This prevents context pollution and speeds up local operations.
+*   **Dynamic Query Routing**: Features a rule-based query classifier (`classify_query()`) that analyzes keyword densities and query lengths to select the optimal retrieval path:
+    *   `document_first`: Tailored for synthesis, history, or comparison queries (e.g. containing terms like *versus*, *compare*, *overview*), narrowing candidate documents before looking at contents.
+    *   `section_first`: Ideal for structural, procedural, or implementation-oriented queries (e.g. *how to*, *guide*, *architecture*).
+    *   `direct`: Retrieves chunks directly across the database for exact factual lookups (e.g. *what is*, *code*, *error logs*).
+*   **Vectorized Numpy Cosine Similarity**: In place of heavy external C++ vector libraries (like `sqlite-vec`) which suffer compile-time and runtime wheel incompatibilities on ARM64 Termux, Nexon uses plain SQLite BLOBs to store raw `float32` vector arrays (`store.py`). Candidates are loaded into memory and compared in a single, high-performance vectorized operation using 2D `numpy` matrix-vector multiplications (`_cosine_batch()`), yielding desktop-level retrieval speeds on Android.
+*   **Text Cleaning & Quality Heuristics**: Ingested content is sanitized through a regex-based `TextCleaner` pipeline. Chunks are evaluated using a custom heuristic function (`_assess_chunk_quality()`) that calculates a quality score from `0.0` (junk) to `1.0` (high quality). It penalizes word repetition (to filter spam) and checks boilerplate term densities (e.g. cookies, login details, copyright footers) to ensure only valuable evidence is indexed.
 
-### 🔀 Git & GitHub Workflow Integration
-- Manage version control (status, diff, commit, push, pull).
-- GitHub CLI integration to monitor GitHub Actions build jobs, stream remote workflow execution logs, and retrieve built artifacts.
+### 🤖 Agentic Search & Reflection Loop
+*   **Sufficiency Reflection**: An autonomous agentic controller wrapper (`agentic_loop.py`) evaluates the relevance and completeness of retrieved chunks against the original request. The system makes a local LLM or API call (`_reflect()`) returning a structured JSON decision:
+    *   `sufficient`: The current evidence is complete; it proceeds directly to answer synthesis.
+    *   `reformulate`: The search query was too broad or off-target; it rewrites the query and queries the retriever again.
+    *   `broader_search`: The local RAG database lacks relevant data; it triggers a search engine escalation.
+*   **Web Search Ingestion Escalation**: Upon reaching a `broader_search` decision, the engine calls a web search API (Tavily search fallback), fetches the top matching page results, cleans and splits their text layers, extracts novel chunks, and writes them directly into the active SQLite stage database on-the-fly. The retrieval loop then queries the updated database to pull in fresh, grounded context.
+*   **Resource Guardrails**: Built for mobile constraints, the reflection loop checks available RAM using `psutil`. If virtual memory falls below a strict safety threshold (`RAM_HEADROOM_MB_THRESHOLD = 300MB`), reflection is bypassed entirely to avoid Out-Of-Memory (OOM) terminations by the Android OS. The loop also tracks token budget usage and terminates after 3 iterations by default.
 
-### 🤖 Local Zero-Dependency MCP Server
-- Operates on HTTP port `8390` inside your Termux environment.
-- Implements tools like `file_read`, `file_write`, `str_replace`, `dir_list`, `find_paths`, and `run_command`.
+### 🛡️ Safety & Execution Circuit Breakers
+*   **Malformed Tag Interception**: A parser check in the Flutter app (`detectMalformedTags`) monitors LLM output text in real-time. If the model outputs a tool tag (like `<search_request>` or `<read_url>`) but fails to close it or formats it improperly, the system halts generation, throws a recovery error, and prevents the model from generating trailing garbage.
+*   **Evidence Saturation Guard**: To prevent the model from wasting network bandwidth on repetitive web queries, the system calculates a cosine novelty check against existing embeddings (with a similarity threshold of `0.95`). If subsequent fetches add no new information, a system warning is injected into the prompt at 4 consecutive zero-novelty fetches, and the step is aborted at 8 fetches.
+*   **Context Window Auto-Inference**: Rather than hardcoding context size limits for specific models, `getModelContextSize` inspects model names using structural regex rules (e.g., extracting trailing numbers like `-8192` or k-suffixes like `32k`). If it cannot resolve the name, it provides a safe, generous default of `32768` tokens to avoid blocking the user.
+*   **Turn and Time Ceilings**: Enforces an absolute limit of 30 tool calls per stage, alongside global time budget tracking (`globalTimeBudget`) that monitors elapsed execution time to prevent infinite runaways.
 
-### ⚡ Tap-to-Stop Response Cancellation
-- Immediate streaming connection cancellation when you tap the loading indicator in the composer input bar.
+### 🔌 Single-Instance Embedder Process Manager
+*   **Race-Free Process Spawning**: Spawning the background `llama-server` is synchronized using cooperative Unix file locking (`fcntl.flock` on `~/.termux_forge_embedder.lock`), preventing race conditions if multiple tasks try to wake the server at the same time.
+*   **Stale Port Auditing & Reaping**: Prior to launching the embedder, the manager checks port 8080. If another process is holding the port, it reads the recorded PID from `~/.termux_forge_embedder.pid` and reaps any stale `llama-server` process using `psutil`.
+*   **Zero-Polling Idle Timeout**: The manager maintains a daemon thread (`_idle_loop()`) that sleeps using a thread event wait. Any client activity triggers `touch()`, extending the server's lifespan. If no requests are received for 120 seconds, the server terminates the `llama-server` process, freeing up memory when the app is idle.
 
-### 🎨 Fully Fullscreen SVGs & Interactive Visuals
-- LaTeX equations rendering via Markdown.
-- Proactive generation rules for scientific, math, data analysis, and workflow diagrams using SVGs.
-- Interactive fullscreen SVG viewer with pinch-to-zoom scaling, panning, and code copy tools.
-- Strict mind map layouts constrained to clean vertical tree structures.
-- Darker internal grids on graphs for sharp, readable values.
+### 🖥️ Native Permission Dialogs & Workspace Sandboxing
+*   **Granular Command Approval**: Offers four levels of permission persistence (Allow Once, Allow for Chat, Always Allow, Block) managed via Flutter `SharedPreferences` (`shell_permission_v1`), giving the user absolute control over shell commands.
+*   **Workspace Constraints**: The Python bridge normalizes incoming paths (`resolve_path()`) and relative directories to prevent double-prefixing errors. It executes commands inside the designated workspace root (`_agenticWorkspace`) to ensure operations remain sandboxed.
 
-### 📥 Direct Downloads Manager
-- Saves HTML sandbox pages and research reports directly into the local Android `downloads/` folder (`/data/data/com.termux/files/home/downloads/`), accompanied by success notification snackbars.
+### 🗂️ Interactive Research UI & Multi-Format Export
+*   **Progressive Lifecycle UI**: Integrates a clean, event-driven timeline showing the research pipeline. Events pulse during execution and transition smoothly between states. Users can click individual event rows to inspect execution payloads, tool inputs, or system warnings.
+*   **Export Pipeline**: Generates structured Markdown text from the completed research plan or converts it into a Word Document (`.docx`) using a markdown-to-element parser and the `python-docx` library. It triggers native Android save dialogs via the Flutter `file_picker` package.
+
+---
+
+## Tech Stack
+
+*   **Frontend UI**: Flutter (Dart), Material 3, Google Fonts
+*   **State Management**: Provider
+*   **Local Storage**: Flutter Secure Storage (credentials) & SharedPreferences (permissions)
+*   **Backend Bridge**: Python 3 (websockets, aiohttp, requests, psutil, pypdf, python-docx, numpy)
+*   **Local Embeddings**: `llama.cpp` (`llama-server`) & `EmbeddingGemma` (`embeddinggemma-300m-Q4_0.gguf`)
+*   **Vector Database**: SQLite persistence (`ResearchStore` WAL mode, Cascade Deletes) + numpy vector similarity comparison.
+    *   *Note: `sqlite-vec` was intentionally migrated away due to Termux/ARM64 wheel compilation incompatibilities. Vector comparison uses SQLite for metadata filtering and raw float32 BLOB storage, paired with numpy matrix math.*
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-- Android device running **Android 7.0+** (API 24+)
-- **[Termux](https://f-droid.org/en/packages/com.termux/)** installed from F-Droid
-- Python 3.10+ in Termux
-- Flutter SDK (to compile from source)
+*   Android device running Android 7.0+ (API 24+)
+*   **[Termux](https://f-droid.org/en/packages/com.termux/)** installed from F-Droid
+*   Python 3.10+ in Termux
+*   Flutter SDK (if compiling the APK from source)
 
-### Installation
+### Installation & Setup
 
-#### 1. Configure the Termux Environment
-Install Python, Node.js, Git, and other developer tools:
+#### 1. Install & Configure the Termux Environment
+Run the deep research environment setup script. This script updates packages, downloads the pre-built `llama.cpp` Android arm64 binaries, configures wrapper execution scripts, verifies `numpy` matrix calculations, and pulls down the `EmbeddingGemma` GGUF model:
+
 ```bash
-pkg update && pkg upgrade -y
-
-# Install required packages
-pkg install -y python git nodejs gh
-
-# Install Firebase CLI globally using npm
-npm install -g firebase-tools
-
-# Install Nexon Bridge
-curl -sL https://github.com/shivaww/Nexon/raw/main/install_bridge.sh | bash
-termux-wake-lock
+# Clone the repository and run locally:
+cd Nexon
+chmod +x install_bridge.sh
+./install_bridge.sh
 ```
 
-#### 2. Start the Local Python MCP Gateway
-```bash
-cd ~/nexon_bridge && python3 mcp_server.py
-```
-This runs the zero-dependency tool executor server on `http://127.0.0.1:8390`.
+#### 2. Start the Python Bridge Server
+Start the bridge gateway (runs the WebSocket protocol on port `8765` and legacy HTTP endpoint on port `8390` concurrently):
 
-#### 3. Install Latest APK
-Build from source or download the generated release APK directly from the [GitHub Actions Artifacts](https://github.com/shivaww/Nexon/actions) tab of your latest workflow build run.
+```bash
+cd ~/nexon_bridge
+python3 mcp_server.py
+```
+
+#### 3. Run the App
+Build Nexon from source or load the pre-built release APK onto your Android device, configure your Workspace Path in settings, and connect to the bridge.
 
 ---
 
-## Tool Calling Protocol
+## Project Status & Roadmap
 
-Nexon uses structured XML tags inside standard LLM text completions to trigger local device tool executions. The model outputs exactly one tool request per turn, halts generation, and waits for results.
-
-### Expected XML Syntax
-```xml
-<tool_request>
-  <method>file_read</method>
-  <path>lib/main.dart</path>
-  <start_line>1</start_line>
-  <end_line>50</end_line>
-</tool_request>
-```
-Nexon's parser is highly robust and automatically extracts tags like `<method>`, `<path>`, `<query>`, `<start_line>`, `<end_line>`, `<pattern>`, and `<command>`. It also includes fallback parsers to capture `<PARAM name="key">value</PARAM>` and `<parameter name="key">value</parameter>` syntax if generated by older models.
-
-### Available Tool Interfaces
-
-Nexon supports two paradigms for local device interactions:
-
-#### 1. Direct Termux Shell Execution (Primary & Preferred)
-The AI model executes commands directly using the `<command>...</command>` tags. This grants access to the full Termux ecosystem:
-- **File Manipulation**: `cat`, `sed`, `awk`, `grep`, `find`, `diff`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `wc`, `stat`.
-- **Package Management**: `pkg install`, `npm`, `pip`.
-- **Build & Version Control**: `flutter`, `dart`, `git`, `firebase`, `build_runner`.
-- **Scripting**: Inline python3 execution, shell script files.
-
-#### 2. Legacy JSON-RPC Methods
-Supported for backward compatibility or structured MCP clients:
-- **`dir_list`** — List folder contents.
-- **`file_read`** — View lines within a specific range.
-- **`file_write`** — Overwrite or write content to a file path.
-- **`str_replace`** — Find and replace contiguous string blocks.
-- **`find_paths`** — Case-insensitive search for files or directories by pattern.
-- **`run_command`** — Safely execute bash shell commands.
-- **`git_status`** / **`git_diff`** — Version control state.
-
----
-
-## Tech Stack
-- **Frontend UI**: Flutter 3.x, Material 3, Google Fonts
-- **State Management**: Provider catalog state
-- **Local Storage**: Flutter Secure Storage (safe API keys) & SharedPreferences
-- **Backend Bridge**: Python 3 Standard Library
-- **Tool Protocol**: HTTP POST JSON-RPC payloads
-- **CI/CD**: GitHub Actions Build Workflows
+Nexon is currently in active private development by a solo developer.
+Key upcoming roadmap items:
+*   [ ] Memory footprint and speed optimizations for low-end Android hardware.
+*   [ ] Integration of broader local model choices for on-device reasoning/reflection.
+*   [ ] Enhanced terminal session sharing and persistent task runtimes.
 
 ---
 
 ## License
-Nexon is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+License: **TBD** (Undecided / Under evaluation for future open-source release)
+
+---
+
+## Contributing
+
+Not currently accepting external contributions. The repository is private.
