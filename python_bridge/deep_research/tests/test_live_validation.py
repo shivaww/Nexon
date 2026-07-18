@@ -13,7 +13,7 @@ from pathlib import Path
 import psutil
 
 # Ensure python_bridge is on sys.path
-BRIDGE_DIR = Path(__file__).resolve().parents[1]
+BRIDGE_DIR = Path(__file__).resolve().parents[2]
 import sys
 if str(BRIDGE_DIR) not in sys.path:
     sys.path.insert(0, str(BRIDGE_DIR))

@@ -5,7 +5,7 @@ import io
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-BRIDGE_DIR = Path(__file__).resolve().parents[1]
+BRIDGE_DIR = Path(__file__).resolve().parents[2]
 if str(BRIDGE_DIR) not in sys.path:
     sys.path.insert(0, str(BRIDGE_DIR))
 
