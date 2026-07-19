@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from typing import Iterable, Any
+import contextlib
+from typing import Iterable, Any, Generator
 
 import numpy as np
 
@@ -62,7 +63,27 @@ class ResearchStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path)
         self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=NORMAL")
+
+        # Run migrations before foreign keys are enabled (so we can alter/recreate tables freely)
+        self._run_migrations()
+
         self.connection.execute("PRAGMA foreign_keys = ON")
+
+        # 0. Sources Table
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sources (
+                url_hash TEXT PRIMARY KEY,
+                source_url TEXT NOT NULL,
+                stage_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sources_url_hash ON sources(url_hash)"
+        )
 
         # 1. Document Level Table
         self.connection.execute(
@@ -71,7 +92,7 @@ class ResearchStore:
                 stage_id TEXT NOT NULL,
                 source_url TEXT NOT NULL,
                 content TEXT NOT NULL,
-                embedding BLOB NOT NULL,
+                embedding BLOB,
                 metadata TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY (stage_id, source_url)
             )
@@ -88,7 +109,7 @@ class ResearchStore:
                 section_index INTEGER NOT NULL,
                 title TEXT,
                 content TEXT NOT NULL,
-                embedding BLOB NOT NULL,
+                embedding BLOB,
                 metadata TEXT NOT NULL DEFAULT '{}',
                 FOREIGN KEY (stage_id, source_url) REFERENCES documents(stage_id, source_url) ON DELETE CASCADE
             )
@@ -105,8 +126,11 @@ class ResearchStore:
                 section_id INTEGER NOT NULL,
                 chunk_index INTEGER NOT NULL,
                 content TEXT NOT NULL,
-                embedding BLOB NOT NULL,
+                embedding BLOB,
                 metadata TEXT NOT NULL DEFAULT '{}',
+                embed_status TEXT DEFAULT 'pending',
+                embed_attempts INTEGER DEFAULT 0,
+                last_embed_error TEXT,
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
             )
             """
@@ -141,12 +165,144 @@ class ResearchStore:
         )
         self.connection.commit()
 
+    def _run_migrations(self) -> None:
+        """Run self-healing SQLite database schema migrations if necessary."""
+        # 1. Migration for chunks table
+        try:
+            cursor = self.connection.execute("PRAGMA table_info(chunks)")
+            chunks_cols = {col[1]: col for col in cursor.fetchall()}
+        except Exception:
+            chunks_cols = {}
+
+        if chunks_cols and ('embed_status' not in chunks_cols or chunks_cols['embedding'][3] == 1):
+            self.connection.execute("BEGIN TRANSACTION")
+            try:
+                self.connection.execute("ALTER TABLE chunks RENAME TO chunks_old")
+                self.connection.execute(
+                    """
+                    CREATE TABLE chunks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        stage_id TEXT NOT NULL,
+                        source_url TEXT NOT NULL,
+                        section_id INTEGER NOT NULL,
+                        chunk_index INTEGER NOT NULL,
+                        content TEXT NOT NULL,
+                        embedding BLOB,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        embed_status TEXT DEFAULT 'pending',
+                        embed_attempts INTEGER DEFAULT 0,
+                        last_embed_error TEXT,
+                        FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                self.connection.execute(
+                    """
+                    INSERT INTO chunks (id, stage_id, source_url, section_id, chunk_index, content, embedding, metadata, embed_status)
+                    SELECT id, stage_id, source_url, section_id, chunk_index, content, embedding, metadata, 'done'
+                    FROM chunks_old
+                    """
+                )
+                self.connection.execute("DROP TABLE chunks_old")
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+
+        # 2. Migration for sections table
+        try:
+            cursor = self.connection.execute("PRAGMA table_info(sections)")
+            sections_cols = {col[1]: col for col in cursor.fetchall()}
+        except Exception:
+            sections_cols = {}
+
+        if sections_cols and sections_cols['embedding'][3] == 1:
+            self.connection.execute("BEGIN TRANSACTION")
+            try:
+                self.connection.execute("ALTER TABLE sections RENAME TO sections_old")
+                self.connection.execute(
+                    """
+                    CREATE TABLE sections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        stage_id TEXT NOT NULL,
+                        source_url TEXT NOT NULL,
+                        section_index INTEGER NOT NULL,
+                        title TEXT,
+                        content TEXT NOT NULL,
+                        embedding BLOB,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        FOREIGN KEY (stage_id, source_url) REFERENCES documents(stage_id, source_url) ON DELETE CASCADE
+                    )
+                    """
+                )
+                self.connection.execute(
+                    """
+                    INSERT INTO sections (id, stage_id, source_url, section_index, title, content, embedding, metadata)
+                    SELECT id, stage_id, source_url, section_index, title, content, embedding, metadata
+                    FROM sections_old
+                    """
+                )
+                self.connection.execute("DROP TABLE sections_old")
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+
+        # 3. Migration for documents table
+        try:
+            cursor = self.connection.execute("PRAGMA table_info(documents)")
+            docs_cols = {col[1]: col for col in cursor.fetchall()}
+        except Exception:
+            docs_cols = {}
+
+        if docs_cols and docs_cols['embedding'][3] == 1:
+            self.connection.execute("BEGIN TRANSACTION")
+            try:
+                self.connection.execute("ALTER TABLE documents RENAME TO documents_old")
+                self.connection.execute(
+                    """
+                    CREATE TABLE documents (
+                        stage_id TEXT NOT NULL,
+                        source_url TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        embedding BLOB,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        PRIMARY KEY (stage_id, source_url)
+                    )
+                    """
+                )
+                self.connection.execute(
+                    """
+                    INSERT INTO documents (stage_id, source_url, content, embedding, metadata)
+                    SELECT stage_id, source_url, content, embedding, metadata
+                    FROM documents_old
+                    """
+                )
+                self.connection.execute("DROP TABLE documents_old")
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+
+    @contextlib.contextmanager
+    def transaction(self) -> Generator[None, None, None]:
+        """Wrap database operations in a transaction block."""
+        self.connection.execute("BEGIN TRANSACTION")
+        try:
+            yield
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+
     @staticmethod
     def _encode_vector(vector: list[float]) -> bytes:
         return np.asarray(vector, dtype=EMBEDDING_DTYPE).tobytes()
 
     @staticmethod
-    def _decode_vector(value: bytes) -> list[float]:
+    def _decode_vector(value: bytes | None) -> list[float]:
+        if value is None:
+            return []
         return np.frombuffer(value, dtype=EMBEDDING_DTYPE).tolist()
 
     @staticmethod
@@ -186,7 +342,6 @@ class ResearchStore:
                 json.dumps(metadata or {}, separators=(",", ":")),
             ),
         )
-        self.connection.commit()
 
     def replace_source(self, stage_id: str, source_url: str) -> None:
         """Remove a source's old document, sections, and chunks (via Cascade Delete)."""
@@ -195,21 +350,83 @@ class ResearchStore:
             f"DELETE FROM documents WHERE stage_id IN ({placeholders}) AND source_url = ?",
             (*stage_ids, source_url),
         )
-        self.connection.commit()
 
     def replace_stage_summary(self, stage_id: str) -> None:
         """Compatibility stub."""
         pass
+
+    def has_source_hash(self, url_hash: str) -> bool:
+        """Check if a source with the given URL hash exists in the database."""
+        row = self.connection.execute(
+            "SELECT 1 FROM sources WHERE url_hash = ?", (url_hash,)
+        ).fetchone()
+        return row is not None
+
+    def add_source_hash(self, url_hash: str, source_url: str, stage_id: str) -> None:
+        """Record a source URL and its hash in the sources table."""
+        self.connection.execute(
+            "INSERT OR REPLACE INTO sources (url_hash, source_url, stage_id) VALUES (?, ?, ?)",
+            (url_hash, source_url, stage_id),
+        )
+
+    def get_source_status(self, url_hash: str) -> dict[str, Any] | None:
+        """Get the embedding status of a source by URL hash."""
+        source = self.connection.execute(
+            "SELECT source_url FROM sources WHERE url_hash = ?", (url_hash,)
+        ).fetchone()
+        if not source:
+            return None
+        source_url = source[0]
+
+        row = self.connection.execute(
+            """
+            SELECT 
+                COUNT(*),
+                SUM(CASE WHEN embed_status = 'done' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN embed_status = 'failed' THEN 1 ELSE 0 END),
+                MAX(last_embed_error)
+            FROM chunks
+            WHERE source_url = ?
+            """,
+            (source_url,),
+        ).fetchone()
+
+        if not row or row[0] == 0:
+            return {
+                "source_hash": url_hash,
+                "status": "pending",
+                "chunks_total": 0,
+                "chunks_embedded": 0,
+                "last_error": None
+            }
+
+        total, done, failed, last_error = row[0], row[1] or 0, row[2] or 0, row[3]
+
+        if done == total:
+            status = "done"
+        elif done + failed == total:
+            status = "failed"
+        else:
+            status = "pending"
+
+        return {
+            "source_hash": url_hash,
+            "status": status,
+            "chunks_total": total,
+            "chunks_embedded": done,
+            "last_error": last_error
+        }
 
     def add_document(
         self,
         stage_id: str,
         source_url: str,
         content: str,
-        embedding: list[float],
+        embedding: list[float] | None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         stage_id = normalize_stage_id(stage_id)
+        encoded_emb = self._encode_vector(embedding) if embedding is not None else None
         self.connection.execute(
             """
             INSERT OR REPLACE INTO documents (stage_id, source_url, content, embedding, metadata)
@@ -219,11 +436,10 @@ class ResearchStore:
                 stage_id,
                 source_url,
                 content,
-                self._encode_vector(embedding),
+                encoded_emb,
                 json.dumps(metadata or {}, separators=(",", ":")),
             ),
         )
-        self.connection.commit()
 
     def add_section(
         self,
@@ -232,10 +448,11 @@ class ResearchStore:
         section_index: int,
         title: str | None,
         content: str,
-        embedding: list[float],
+        embedding: list[float] | None,
         metadata: dict[str, Any] | None = None,
     ) -> int:
         stage_id = normalize_stage_id(stage_id)
+        encoded_emb = self._encode_vector(embedding) if embedding is not None else None
         cursor = self.connection.execute(
             """
             INSERT INTO sections (stage_id, source_url, section_index, title, content, embedding, metadata)
@@ -247,11 +464,10 @@ class ResearchStore:
                 section_index,
                 title,
                 content,
-                self._encode_vector(embedding),
+                encoded_emb,
                 json.dumps(metadata or {}, separators=(",", ":")),
             ),
         )
-        self.connection.commit()
         return int(cursor.lastrowid)
 
     def add_chunk(
@@ -261,14 +477,18 @@ class ResearchStore:
         section_id: int,
         chunk_index: int,
         content: str,
-        embedding: list[float],
+        embedding: list[float] | None,
         metadata: dict[str, Any] | None = None,
+        embed_status: str | None = None,
     ) -> int:
         stage_id = normalize_stage_id(stage_id)
+        encoded_emb = self._encode_vector(embedding) if embedding is not None else None
+        if embed_status is None:
+            embed_status = "done" if embedding is not None else "pending"
         cursor = self.connection.execute(
             """
-            INSERT INTO chunks (stage_id, source_url, section_id, chunk_index, content, embedding, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks (stage_id, source_url, section_id, chunk_index, content, embedding, metadata, embed_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 stage_id,
@@ -276,11 +496,11 @@ class ResearchStore:
                 section_id,
                 chunk_index,
                 content,
-                self._encode_vector(embedding),
+                encoded_emb,
                 json.dumps(metadata or {}, separators=(",", ":")),
+                embed_status,
             ),
         )
-        self.connection.commit()
         return int(cursor.lastrowid)
 
     def all_documents(self, stage_id: str) -> list[DocumentNode]:

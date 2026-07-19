@@ -41,8 +41,8 @@ class DeepResearchOrchestrator:
         self.chunk_words = int(os.getenv("DR_CHUNK_WORDS", "220"))
         self.overlap_words = int(os.getenv("DR_OVERLAP_WORDS", "30"))
         # Batch size: amortise per-request HTTP overhead across multiple chunks.
-        # Default of 12 means ~4 HTTP calls for a 49-chunk source instead of 49.
-        self.embedding_batch_size = int(os.getenv("DR_EMBEDDING_BATCH_SIZE", "12"))
+        # Default of 2 is safe for mobile hardware to prevent OOM/timeouts.
+        self.embedding_batch_size = int(os.getenv("DR_EMBEDDING_BATCH_SIZE", "2"))
         self.doc_top_k = int(os.getenv("DR_DOCUMENT_TOP_K", "3"))
         self.section_top_k = int(os.getenv("DR_SECTION_TOP_K", "5"))
         self.chunk_top_k = int(os.getenv("DR_CHUNK_TOP_K", os.getenv("DR_VECTOR_TOP_K", "8")))
@@ -152,7 +152,7 @@ class DeepResearchOrchestrator:
 
         try:
             async with self._ingest_gate:
-                result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
+                result: IngestResult = await self.lightrag._ingest_and_embed_sync(stage_id, query_id, source_url, text)
 
             if result and getattr(result, "new_chunks_added", 0) >= 0:
                 self.run_ingested_urls.add(norm_url)
@@ -214,7 +214,7 @@ class DeepResearchOrchestrator:
         start_time = time.perf_counter()
 
         try:
-            result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
+            result: IngestResult = await self.lightrag._ingest_and_embed_sync(stage_id, query_id, source_url, text)
 
             if result and getattr(result, "new_chunks_added", 0) >= 0:
                 self.run_ingested_urls.add(norm_url)
@@ -240,6 +240,13 @@ class DeepResearchOrchestrator:
                 "failed": True,
                 "error": error_preview
             }
+
+    async def ingest_fast(self, stage_id: str, query_id: str, source_url: str, text: str) -> dict[str, Any]:
+        """Index content lazily and perform background embedding."""
+        if not all(isinstance(value, str) and value.strip() for value in (stage_id, query_id, source_url, text)):
+            raise ValueError("stage_id, query_id, source_url, and text are required")
+        stage_id = normalize_stage_id(stage_id)
+        return await self.lightrag.ingest_fast(stage_id, query_id, source_url, text)
 
     async def retrieve(self, stage_id: str, query: str) -> dict[str, int | float]:
         if not stage_id.strip() or not query.strip():

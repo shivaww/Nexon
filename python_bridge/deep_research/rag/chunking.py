@@ -104,3 +104,19 @@ def chunk_text(text: str, config: ChunkingConfig | None = None) -> list[str]:
     """Legacy compatibility: chunks text directly."""
     cfg = config or ChunkingConfig()
     return chunk_section(text, cfg.chunk_words, cfg.overlap_words, cfg.min_chunk_words)
+
+
+def truncate_to_tokens(text: str, max_tokens: int = 512) -> str:
+    """Truncate text to a conservative character length approximating max_tokens."""
+    max_chars = max_tokens * 3
+    if len(text) > max_chars:
+        orig_len = len(text)
+        truncated = text[:max_chars] + " [...]"
+        import logging
+        logger = logging.getLogger("termux_forge.deep_research")
+        logger.warning(
+            f"Truncated text from {orig_len} to {max_chars} chars (>{max_tokens} tokens estimated)"
+        )
+        return truncated
+    return text
+

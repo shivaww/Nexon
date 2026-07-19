@@ -171,6 +171,7 @@ class TermuxForgeBridge:
         # State
         self._clients: set[WebSocketServerProtocol] = set()
         self._approval_queue: dict[str, dict[str, Any]] = {}
+        self._INGESTED_THIS_SESSION: set[str] = set()
         self._server: Any = None
         self._shutdown_event = asyncio.Event()
 
@@ -238,6 +239,7 @@ class TermuxForgeBridge:
 
         # ── Deep research ────────────────────────────────────────────
         r.register("deep_research.ingest", self._deep_research_ingest)
+        r.register("deep_research.status", self._deep_research_status)
         r.register("deep_research.retrieve", self._deep_research_retrieve)
         r.register("deep_research.export_temp", self._deep_research_export_temp)
         r.register("web_search", self._web_search)
@@ -922,22 +924,30 @@ class TermuxForgeBridge:
     ) -> dict:
         """Index already-cleaned content, used internally by ``web_fetch`` and tests.
 
-        Timeout decoupling: the bridge's 110s MCP_HTTP_TIMEOUT_SECONDS applies
-        only to *actual embedding/storage work*, not to queue-wait time.  A
-        request queued behind others waits indefinitely for its slot (bounded
-        only by the Flutter session-level wall-clock budget), then starts its
-        own 110s processing clock once it gains the semaphore.
+        Asynchronous flow: calls deep_research.ingest_fast which parses, chunks, and
+        stores raw chunks into SQLite, returning immediately within 3s.
         """
-        # Step 1: acquire slot — no timeout here, so queue wait never triggers 504.
         await self.deep_research.acquire_ingest_slot()
         try:
-            # Step 2: run real work under whatever timeout the MCP HTTP handler
-            # imposes.  The 110s clock starts only now, not during queue wait.
-            return await self.deep_research.ingest_work(
+            res = await self.deep_research.ingest_fast(
                 stage_id, query_id, source_url, text
             )
+            # Add to session in-memory dedup set if accepted
+            source_hash = res.get("source_hash")
+            if source_hash and res.get("status") == "accepted":
+                self._INGESTED_THIS_SESSION.add(source_hash)
+            return res
         finally:
             self.deep_research.release_ingest_slot()
+
+    async def _deep_research_status(self, source_hash: str = "") -> dict:
+        """Query background embedding task progress by source URL hash."""
+        if not source_hash:
+            return {"error": "source_hash parameter is required"}
+        status_info = self.deep_research.store.get_source_status(source_hash)
+        if not status_info:
+            return {"error": f"No status found for source_hash: {source_hash}"}
+        return status_info
 
     async def _deep_research_retrieve(self, stage_id: str, query: str) -> dict:
         """Write ranked chunks to temp.json and return confirmation metadata only."""
@@ -994,6 +1004,29 @@ class TermuxForgeBridge:
             return {"error": "Fetch failed: URL is required."}
         if not target_url.startswith("http"):
             target_url = "https://" + target_url
+
+        import hashlib
+        url_hash = hashlib.sha256(target_url.encode("utf-8")).hexdigest()[:16]
+
+        if url_hash in self._INGESTED_THIS_SESSION:
+            return {
+                "status": "already_exists",
+                "reason": "in_memory_cache",
+                "source_hash": url_hash,
+                "url": target_url,
+                "new_chunks_added": 0,
+                "novelty_ratio": 0.0,
+            }
+
+        if self.deep_research.store.has_source_hash(url_hash):
+            return {
+                "status": "already_exists",
+                "reason": "database",
+                "source_hash": url_hash,
+                "url": target_url,
+                "new_chunks_added": 0,
+                "novelty_ratio": 0.0,
+            }
 
         is_pdf = target_url.lower().endswith(".pdf")
         text = ""
@@ -1077,17 +1110,35 @@ class TermuxForgeBridge:
             return {"error": f"Fetch failed: {e}"}
 
         try:
-            res = await self.deep_research.ingest(stage_id, query_id, target_url, text)
-            if res.get("failed") == True:
-                return {"error": "Ingest failed: " + str(res.get("error", "Unknown ingestion error"))}
+            res = await self.deep_research.ingest_fast(stage_id, query_id, target_url, text)
+            if res.get("status") == "rejected":
+                return {
+                    "parse_format": "pdf" if is_pdf else "html",
+                    "new_chunks_added": 0,
+                    "novelty_ratio": 0.0,
+                    "total_chunks_stage": 0,
+                    "stage": stage_id,
+                    "content": text[:200],
+                    "url": target_url,
+                    "status": "rejected",
+                    "reason": res.get("reason"),
+                    "source_hash": res.get("source_hash")
+                }
+            # Success / accepted status
+            source_hash = res.get("source_hash")
+            if source_hash:
+                self._INGESTED_THIS_SESSION.add(source_hash)
+
             return {
                 "parse_format": "pdf" if is_pdf else "html",
-                "new_chunks_added": res.get("new_chunks_added", 0),
-                "novelty_ratio": res.get("novelty_ratio", 0.0),
-                "total_chunks_stage": res.get("total_chunks_stage", 0),
+                "new_chunks_added": res.get("added", 0),
+                "novelty_ratio": 1.0,
+                "total_chunks_stage": res.get("added", 0),
                 "stage": stage_id,
                 "content": text[:200],
-                "url": target_url
+                "url": target_url,
+                "status": "accepted",
+                "source_hash": source_hash
             }
         except Exception as e:
             return {"error": f"Ingest failed: {e}"}
@@ -2387,6 +2438,9 @@ class TermuxForgeBridge:
         self._http_site = web.TCPSite(self._http_runner, self.host, 8390)
         await self._http_site.start()
 
+        # Spawn the background embedding queue worker task
+        self._embed_worker_task = asyncio.create_task(self.deep_research.lightrag._embed_worker_loop())
+
         logger.info("Bridge servers running.")
 
         # Wait for shutdown signal
@@ -2395,6 +2449,14 @@ class TermuxForgeBridge:
     async def shutdown(self) -> None:
         """Gracefully shut down the servers."""
         logger.info("Shutting down bridge servers…")
+
+        # Cancel background embed task
+        if hasattr(self, '_embed_worker_task'):
+            self._embed_worker_task.cancel()
+            try:
+                await self._embed_worker_task
+            except asyncio.CancelledError:
+                pass
 
         # Save history
         self._save_history()

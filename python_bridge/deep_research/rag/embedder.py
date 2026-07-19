@@ -65,6 +65,9 @@ class LlamaCppEmbedder:
         if not texts:
             return []
 
+        # Defense-in-depth: cap any chunk to 1536 characters
+        texts = [t[:1536] if len(t) > 1536 else t for t in texts]
+
         embeddings_map: dict[str, list[float]] = {}
         to_embed: list[str] = []
         pending_texts: set[str] = set()
@@ -132,18 +135,23 @@ class LlamaCppEmbedder:
                 )
 
             # Store in caches
-            for text, vector in zip(to_embed, new_embeddings):
-                self._cache[text] = vector
-                if self.store is not None:
-                    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                    self.store.save_cached_embedding(
-                        content_hash,
-                        self.model_name,
-                        len(text),
-                        vector,
-                        {"source": "ingest_run"},
-                    )
-                embeddings_map[text] = vector
+            if self.store is not None:
+                with self.store.transaction():
+                    for text, vector in zip(to_embed, new_embeddings):
+                        self._cache[text] = vector
+                        content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                        self.store.save_cached_embedding(
+                            content_hash,
+                            self.model_name,
+                            len(text),
+                            vector,
+                            {"source": "ingest_run"},
+                        )
+                        embeddings_map[text] = vector
+            else:
+                for text, vector in zip(to_embed, new_embeddings):
+                    self._cache[text] = vector
+                    embeddings_map[text] = vector
 
         return [embeddings_map[t] for t in texts]
 
@@ -194,7 +202,7 @@ class LlamaCppEmbedder:
         preview = text[:60] + "..." if len(text) > 60 else text
 
         result = subprocess.run(
-            [binary, "-m", str(self.model_path), "--embd-output-format", "json", "-p", text],
+            [binary, "-m", str(self.model_path), "-c", "512", "--embd-output-format", "json", "-p", text],
             capture_output=True, text=True, check=False, timeout=120,
         )
         if result.returncode:
