@@ -49,6 +49,12 @@ class ServerLifecycleManager:
         # Register sig handlers on the main thread during import
         self._register_signals()
 
+        # Proactively clean up any stale llama-server processes on startup
+        try:
+            self._proactive_cleanup()
+        except Exception as e:
+            logger.warning(f"Failed to perform proactive startup cleanup: {e}")
+
     def ensure_server(self, model_path: str, endpoint: str) -> bool:
         """Cooperatively ensure llama-server is online and healthy."""
         # 1. Grab file lock to prevent concurrent spawns
@@ -195,11 +201,11 @@ class ServerLifecycleManager:
             return False
 
     def _wait_for_server(self, endpoint: str) -> bool:
-        """Wait up to 6 seconds for server readiness."""
-        for _ in range(30):
+        """Wait up to 30 seconds for server readiness."""
+        for _ in range(60):
             if self._is_server_online(endpoint):
                 return True
-            time.sleep(0.2)
+            time.sleep(0.5)
         return False
 
     def _is_port_held(self, port: int) -> bool:
@@ -213,6 +219,45 @@ class ServerLifecycleManager:
         except socket.error:
             s.close()
             return True
+
+    def _proactive_cleanup(self) -> None:
+        """Proactively kill any existing llama-server processes on startup to avoid stale binds."""
+        logger.info("Performing proactive startup cleanup of any stale llama-server processes...")
+        # 1. Read PID file if it exists, terminate it
+        if os.path.exists(PID_FILE_PATH):
+            try:
+                with open(PID_FILE_PATH, "r") as f:
+                    pid = int(f.read().strip())
+                if psutil.pid_exists(pid):
+                    proc = psutil.Process(pid)
+                    if proc.name() in ("llama-server", "llama-server.bin"):
+                        logger.info(f"Killing stale llama-server process {pid} from PID file")
+                        proc.terminate()
+                        proc.wait(timeout=1.0)
+            except Exception:
+                pass
+            finally:
+                try:
+                    os.remove(PID_FILE_PATH)
+                except Exception:
+                    pass
+
+        # 2. Sweep by process name
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                if proc.info["name"] in ("llama-server", "llama-server.bin"):
+                    logger.info(f"Killing stale llama-server process {proc.pid} by name")
+                    proc.terminate()
+                    proc.wait(timeout=1.0)
+            except Exception:
+                pass
+
+        # 3. Specific pkill fallback
+        try:
+            subprocess.run(["pkill", "-f", "/data/data/com.termux/files/usr/bin/llama-server"], capture_output=True)
+            subprocess.run(["pkill", "-f", "/data/data/com.termux/files/usr/bin/llama-server.bin"], capture_output=True)
+        except Exception:
+            pass
 
     def _reap_stale_processes(self, endpoint: str) -> None:
         """Find and terminate stale processes holding the target port (Android safe)."""
@@ -243,10 +288,11 @@ class ServerLifecycleManager:
                 except Exception:
                     pass
 
-            # 2. Target any process named "llama-server"
+            # 2. Target any process named "llama-server" or "llama-server.bin"
             for proc in psutil.process_iter(["pid", "name"]):
                 try:
-                    if proc.info["name"] == "llama-server":
+                    name = proc.info["name"]
+                    if name in ("llama-server", "llama-server.bin"):
                         targets_to_kill.add(proc.pid)
                     else:
                         # Fallback check if platform permissions allow connection inspection
@@ -275,15 +321,26 @@ class ServerLifecycleManager:
                 except Exception:
                     pass
 
+            # 3. Robust pkill fallback if targets couldn't be resolved or killed
+            if not killed_any or self._is_port_held(port):
+                logger.warning(f"Port {port} held, but target process couldn't be resolved or killed. Trying broad pkill sweep...")
+                try:
+                    subprocess.run(["pkill", "-f", "/data/data/com.termux/files/usr/bin/llama-server"], capture_output=True)
+                    subprocess.run(["pkill", "-f", "/data/data/com.termux/files/usr/bin/llama-server.bin"], capture_output=True)
+                    time.sleep(1.0)
+                    killed_any = not self._is_port_held(port)
+                except Exception as e:
+                    logger.error(f"Error during pkill sweep: {e}")
+
             if not killed_any:
-                logger.warning(f"Port {port} held, but target process couldn't be resolved.")
+                logger.warning(f"Port {port} held, and broad sweep couldn't free it.")
         else:
             # Port is free, but if the recorded process is still running, clean it up
             if pid is not None:
                 try:
                     if psutil.pid_exists(pid):
                         proc = psutil.Process(pid)
-                        if proc.name() == "llama-server":
+                        if proc.name() in ("llama-server", "llama-server.bin"):
                             logger.warning(f"Recorded PID={pid} is active but port is free. Terminating...")
                             proc.terminate()
                             proc.wait(timeout=2)

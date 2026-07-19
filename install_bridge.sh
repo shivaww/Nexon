@@ -60,8 +60,9 @@ else
     chmod +x "$PREFIX/bin/llama-server.bin" 
     [ -n "$EMBED_BIN" ] && chmod +x "$PREFIX/bin/llama-embedding.bin"
     
-    # Copy all shared libraries to PREFIX/lib so the executables can find them
+    # Copy all shared libraries to PREFIX/lib and PREFIX/bin so the executables can find them
     find "$HOME/nexon_bridge/bin/llama.cpp" -name "*.so" -exec cp -f {} "$PREFIX/lib/" \;
+    find "$HOME/nexon_bridge/bin/llama.cpp" -name "*.so" -exec cp -f {} "$PREFIX/bin/" \;
     
     # Create wrapper scripts
     cat << 'EOF2' > "$PREFIX/bin/llama-server"

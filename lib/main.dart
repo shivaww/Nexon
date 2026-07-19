@@ -121,15 +121,22 @@ Output format:
 </research_plan>
 No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
 
+  // Note: Different user-selected models vary in instruction-following reliability.
+  // The parser-level catch-all in the step execution loop serves as the final safety net,
+  // but prompt hardening here reduces format violation frequency at the source.
   static const String researchSystemPrompt = """ROLE: Research agent. You are running one phase of a multi-step research plan.
 Your task is to gather enough relevant information to fully address the phase's prompt.
 You have the following tools available:
 1. Web Search: Output <search_request>your query</search_request> to get a list of search results.
+   Example: <search_request>termux git setup tutorial</search_request>
 2. Fetch Page: Output <read_url>URL</read_url> to fetch page content. Note that when Deep Research is enabled, fetching a page automatically ingests the content into a local RAG database, and you will only see ingestion stats (like new_chunks_added and novelty_ratio) rather than the raw page text to preserve context space.
+   Example: <read_url>https://example.com/git-guide</read_url>
 
 CRITICAL DIRECTIVE: You MUST maximize the use of the Fetch Page (<read_url>) tool. Do NOT rely solely on search snippets. For every search query you run, you must fetch and read the contents of multiple relevant URLs using `<read_url>` to build a deep, high-coverage knowledge base. Aim to read as many source links as reasonable before marking a phase complete.
 
 CRITICAL FORMATTING RULE: You MUST always invoke web_search and read_url tools using the dedicated <search_request> and <read_url> tags respectively. Never wrap them in <mcp_request> tags. Only use <mcp_request> for other methods (like deep_research.retrieve).
+
+NEGATIVE RULE: Do NOT invent alternative tool-call syntaxes such as call:read_url{url: "..."} or call:web_search{query: "..."} or any other curly-brace or prefix-based format. Use ONLY the exact XML tag formats demonstrated in the examples above.
 
 You must run searches and fetches iteratively.
 If the novelty ratio of your fetches is consistently low (e.g. less than 0.15), it means you have saturated this query angle and should try a different search query or wrap up.
@@ -2709,6 +2716,123 @@ For every project, maintain a README.md at the project root.
     return oldText.substring(0, startIdx) + newStateStr + oldText.substring(endIdx + 17);
   }
 
+  String _preprocessUnrecognizedToolCalls(String text, List<Map<String, dynamic>> unrecognizedErrors) {
+    final pattern = RegExp(r'\b([a-zA-Z_][a-zA-Z0-9_\.:]*)\s*\{');
+    var offset = 0;
+    var result = text;
+    while (true) {
+      if (offset >= result.length) break;
+      final match = pattern.firstMatch(result.substring(offset));
+      if (match == null) break;
+      final matchStart = offset + match.start;
+      final name = match.group(1)!.trim();
+      final braceStart = offset + match.end - 1;
+      int braceEnd = -1;
+      int depth = 1;
+      for (int j = braceStart + 1; j < result.length; j++) {
+        if (result[j] == '{') {
+          depth++;
+        } else if (result[j] == '}') {
+          depth--;
+          if (depth == 0) {
+            braceEnd = j;
+            break;
+          }
+        }
+      }
+      if (braceEnd == -1) {
+        offset = braceStart + 1;
+        continue;
+      }
+      final paramsText = result.substring(braceStart + 1, braceEnd).trim();
+      final fullMatchText = result.substring(matchStart, braceEnd + 1);
+      final nameLower = name.toLowerCase();
+      bool isKnownTool = false;
+      String? mappedTool;
+      if (nameLower.contains('read_url') || nameLower.contains('readurl') || nameLower.contains('fetch')) {
+        isKnownTool = true;
+        mappedTool = 'read_url';
+      } else if (nameLower.contains('web_search') || nameLower.contains('search_web') || nameLower.contains('search_request') || (nameLower.contains('search') && !nameLower.contains('research'))) {
+        isKnownTool = true;
+        mappedTool = 'search_request';
+      } else if (nameLower.contains('mcp_request') || nameLower.contains('mcp_call') || (nameLower.contains('mcp') && !nameLower.contains('mcp_server'))) {
+        isKnownTool = true;
+        mappedTool = 'mcp_request';
+      }
+      if (isKnownTool) {
+        bool reinterpreted = false;
+        String replacement = '';
+        if (mappedTool == 'read_url') {
+          final urlRegex = RegExp(r'https?://[^\s"\'\}]+');
+          final urlMatch = urlRegex.firstMatch(paramsText);
+          if (urlMatch != null) {
+            final url = urlMatch.group(0)!;
+            replacement = '<read_url>$url</read_url>';
+            reinterpreted = true;
+          }
+        } else if (mappedTool == 'search_request') {
+          final queryRegex1 = RegExp(r'(?:query|q)[:\s="']+\s*["']([^"']+)["']');
+          final queryRegex2 = RegExp(r'(?:query|q)[:\s="']+\s*([^\s"\'}]+)');
+          final quotedRegex = RegExp(r'["']([^"']+)["']');
+          String? query;
+          final mq1 = queryRegex1.firstMatch(paramsText);
+          if (mq1 != null) {
+            query = mq1.group(1);
+          } else {
+            final mq2 = queryRegex2.firstMatch(paramsText);
+            if (mq2 != null) {
+              query = mq2.group(1);
+            } else {
+              final mqQuoted = quotedRegex.firstMatch(paramsText);
+              if (mqQuoted != null) {
+                query = mqQuoted.group(1);
+              } else if (paramsText.isNotEmpty) {
+                query = paramsText;
+              }
+            }
+          }
+          if (query != null && query.trim().isNotEmpty) {
+            replacement = '<search_request>${query.trim()}</search_request>';
+            reinterpreted = true;
+          }
+        } else if (mappedTool == 'mcp_request') {
+          String finalJson = paramsText;
+          if (!paramsText.startsWith('{')) {
+            finalJson = '{$paramsText}';
+          }
+          try {
+            jsonDecode(finalJson);
+            replacement = '<mcp_request>$finalJson</mcp_request>';
+            reinterpreted = true;
+          } catch (_) {
+            replacement = '<mcp_request>$finalJson</mcp_request>';
+            reinterpreted = true;
+          }
+        }
+        if (reinterpreted) {
+          result = result.substring(0, matchStart) + replacement + result.substring(braceEnd + 1);
+          offset = matchStart + replacement.length;
+        } else {
+          unrecognizedErrors.add({
+            'tool': name,
+            'error': 'Unrecognized tool call syntax with unparseable parameters: $fullMatchText',
+          });
+          offset = braceEnd + 1;
+        }
+      } else {
+        final isGenericCallShape = name.contains(':') || nameLower.startsWith('call') || nameLower.startsWith('tool') || nameLower.startsWith('request');
+        if (isGenericCallShape) {
+          unrecognizedErrors.add({
+            'tool': name,
+            'error': 'Generic tool call attempt in unrecognized format: $fullMatchText',
+          });
+        }
+        offset = braceEnd + 1;
+      }
+    }
+    return result;
+  }
+
   Future<void> _autoIngestSearchResults({
     required String stageId,
     required String queryId,
@@ -3291,21 +3415,24 @@ For every project, maintain a README.md at the project root.
           totalLlmMs += llmMs;
           final toolWatch = Stopwatch()..start();
 
+          final unrecognizedErrors = <Map<String, dynamic>>[];
+          final preprocessedText = _preprocessUnrecognizedToolCalls(responseText, unrecognizedErrors);
+
           final searchMatches = RegExp(
             r'<search_request>\s*([\s\S]*?)\s*</search_request>',
             caseSensitive: false,
             dotAll: true,
-          ).allMatches(responseText).toList();
+          ).allMatches(preprocessedText).toList();
           final readUrlMatches = RegExp(
             r'<read_url>\s*([\s\S]*?)\s*</read_url>',
             caseSensitive: false,
             dotAll: true,
-          ).allMatches(responseText).toList();
-          final mcpMatch = _findMcpMatch(responseText);
-          bool isMalformed = false;
-          final hasRawSearchTag = responseText.contains('<search_request') || responseText.contains('</search_request');
-          final hasRawReadTag = responseText.contains('<read_url') || responseText.contains('</read_url');
-          final hasRawMcpTag = responseText.contains('<mcp_request') || responseText.contains('</mcp_request');
+          ).allMatches(preprocessedText).toList();
+          final mcpMatch = _findMcpMatch(preprocessedText);
+          bool isMalformed = unrecognizedErrors.isNotEmpty;
+          final hasRawSearchTag = preprocessedText.contains('<search_request') || preprocessedText.contains('</search_request');
+          final hasRawReadTag = preprocessedText.contains('<read_url') || preprocessedText.contains('</read_url');
+          final hasRawMcpTag = preprocessedText.contains('<mcp_request') || preprocessedText.contains('</mcp_request');
           if ((hasRawSearchTag && searchMatches.isEmpty) ||
               (hasRawReadTag && readUrlMatches.isEmpty) ||
               (hasRawMcpTag && mcpMatch == null)) {
@@ -3326,11 +3453,14 @@ For every project, maintain a README.md at the project root.
               kind: 'error',
               tool: 'malformed_tag',
             );
+            final String errMessage = unrecognizedErrors.isNotEmpty
+                ? unrecognizedErrors.map((e) => e['error']?.toString() ?? '').join('; ')
+                : 'Malformed tool call tag syntax detected in assistant response.';
             finishResearchEvent(
               eventId,
               status: 'error',
               stopwatch: eventWatch,
-              error: 'Malformed tool call tag syntax detected in assistant response.',
+              error: errMessage,
             );
             if (consecutiveMalformedTags >= 3) {
               stepDone = true;
@@ -4288,8 +4418,37 @@ For every project, maintain a README.md at the project root.
         'overhead=${stepWatch.elapsedMilliseconds - totalLlmMs - totalToolMs}ms '
         'turns=$loopCount status=${stepFailed ? "failed" : "ok"}',
       );
-      steps[i]['status'] = stepFailed ? 'failed' : 'completed';
-      if (stepFailed) steps[i]['error'] = stepFailure;
+      final stepEvents = steps[i]['events'] as List? ?? [];
+      int totalIngests = 0;
+      int failedIngests = 0;
+      final failedUrls = <String>[];
+
+      for (final ev in stepEvents) {
+        if (ev is Map) {
+          final isReadUrl = ev['tool'] == 'read_url' || ev['kind'] == 'fetch';
+          if (isReadUrl) {
+            totalIngests++;
+            if (ev['status'] == 'error') {
+              failedIngests++;
+              final url = ev['url']?.toString() ?? 'unknown URL';
+              failedUrls.add(url);
+            }
+          }
+        }
+      }
+
+      final bool hasIngestionIssues = totalIngests > 0 && (failedIngests / totalIngests) >= 0.5;
+
+      steps[i]['status'] = stepFailed
+          ? 'failed'
+          : (hasIngestionIssues ? 'completed_with_issues' : 'completed');
+
+      if (stepFailed) {
+        steps[i]['error'] = stepFailure;
+      } else if (hasIngestionIssues) {
+        steps[i]['error'] = 'Embedding/ingestion was unavailable during this step; the following claimed sources were NOT actually indexed into evidence: [${failedUrls.join(', ')}].';
+      }
+
       steps[i]['content'] = stepContent;
       if (mounted) {
         setState(() {
@@ -4320,7 +4479,7 @@ For every project, maintain a README.md at the project root.
             ),
           )
           .toList();
-      if (step['status'] == 'failed' || eventErrors.isNotEmpty) {
+      if (step['status'] == 'failed' || step['status'] == 'completed_with_issues' || eventErrors.isNotEmpty) {
         executionIssues.add({
           'step': step['title']?.toString() ?? 'Research step',
           'status': step['status']?.toString() ?? 'completed_with_tool_errors',
@@ -4328,7 +4487,7 @@ For every project, maintain a README.md at the project root.
             step['error']?.toString() ??
                 (eventErrors.isNotEmpty
                     ? eventErrors.join('; ')
-                    : 'Step did not complete.'),
+                    : 'Step completed with issues.'),
             500,
           ),
         });
@@ -4706,8 +4865,10 @@ For every project, maintain a README.md at the project root.
         ChatMessage(
           role: MessageRole.user,
           text: "Here is the retrieved content from the database (temp.json):\n$tempJsonContent\n\n"
-              "Execution issues that must be disclosed in the report. Do not invent facts to fill these gaps; add an explicit limitation or failed-section marker where relevant:\n"
+              "Execution issues that must be disclosed in the report:\n"
               "${jsonEncode(executionIssues)}\n\n"
+              "CRITICAL CONSTRAINT FOR REPORT WRITING:\n"
+              "If any step indicates that embedding/ingestion was unavailable, you MUST either omit specific claims sourced only from those failed ingestions, or explicitly caveat them in the report as unverified/from search snippets only rather than full-text sources. Do not invent facts or present evidence from failed sources as if they were successfully processed. Add an explicit limitation or failed-section marker where relevant.\n\n"
               "Please write the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.",
         ),
       ];
@@ -14614,7 +14775,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
               child: LinearProgressIndicator(
-                value: steps.where((step) => step['status'] == 'completed').length / steps.length,
+                value: steps.where((step) => step['status'] == 'completed' || step['status'] == 'completed_with_issues').length / steps.length,
                 backgroundColor: const Color(0xFFCFE0EE),
                 color: const Color(0xFF2C5282),
                 minHeight: 5,
@@ -14634,6 +14795,9 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
             } else if (stepStatus == 'completed') {
               statusIcon = Icons.check_circle;
               statusColor = Colors.green;
+            } else if (stepStatus == 'completed_with_issues') {
+              statusIcon = Icons.warning_amber;
+              statusColor = Colors.orange;
             }
 
             return Column(
@@ -14660,10 +14824,10 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                           child: Text(
                             (step['title'] as String?) ?? 'Step ${idx + 1}',
                             style: TextStyle(
-                              decoration: stepStatus == 'completed'
+                              decoration: (stepStatus == 'completed' || stepStatus == 'completed_with_issues')
                                   ? TextDecoration.lineThrough
                                   : null,
-                              color: stepStatus == 'completed'
+                              color: (stepStatus == 'completed' || stepStatus == 'completed_with_issues')
                                   ? Colors.grey
                                   : Colors.black87,
                               fontWeight: stepStatus == 'running'
