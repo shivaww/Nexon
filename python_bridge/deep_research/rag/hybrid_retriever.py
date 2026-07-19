@@ -348,7 +348,9 @@ class HybridRetriever:
         return fused
 
     @staticmethod
-    def _cosine_batch(query_vector: list[float], embeddings: list[list[float]]) -> list[float]:
+    def _cosine_batch(
+        query_vector: list[float], embeddings: list[list[float] | None]
+    ) -> list[float]:
         """Vectorized cosine similarity of one query against many candidates.
 
         Stacks the candidate embeddings into a single 2-D numpy array and
@@ -364,11 +366,36 @@ class HybridRetriever:
         q_norm = float(np.linalg.norm(q))
         if q_norm == 0.0:
             return [0.0] * len(embeddings)
-        matrix = np.asarray(embeddings, dtype=np.float32)  # shape (n, d)
+
+        # Find the dimension of a valid embedding in the list
+        dim = 0
+        for emb in embeddings:
+            if emb is not None and len(emb) > 0:
+                dim = len(emb)
+                break
+        if dim == 0:
+            return [0.0] * len(embeddings)
+
+        # Construct safe list of embeddings where None or mismatching sizes are filled with zeros
+        safe_embs = []
+        for emb in embeddings:
+            if emb is not None and len(emb) == dim:
+                safe_embs.append(emb)
+            else:
+                safe_embs.append([0.0] * dim)
+
+        matrix = np.asarray(safe_embs, dtype=np.float32)  # shape (n, d)
         norms = np.linalg.norm(matrix, axis=1)
         safe_norms = np.where(norms == 0.0, 1.0, norms)
         sims = (matrix @ q) / (safe_norms * q_norm)
-        return sims.tolist()
+        
+        # Zero out similarity for candidates with missing embeddings
+        sims_list = sims.tolist()
+        for idx, emb in enumerate(embeddings):
+            if emb is None or len(emb) != dim:
+                sims_list[idx] = 0.0
+                
+        return sims_list
 
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:

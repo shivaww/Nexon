@@ -108,7 +108,7 @@ def chunk_text(text: str, config: ChunkingConfig | None = None) -> list[str]:
 
 def truncate_to_tokens(text: str, max_tokens: int = 512) -> str:
     """Truncate text to a conservative character length approximating max_tokens."""
-    max_chars = max_tokens * 3
+    max_chars = int(max_tokens * 2.0)
     if len(text) > max_chars:
         orig_len = len(text)
         truncated = text[:max_chars] + " [...]"

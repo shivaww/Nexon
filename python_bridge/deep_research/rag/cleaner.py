@@ -16,10 +16,7 @@ class TextCleaner:
     # HTML tags
     _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
-    # CSS curly brace declarations (sometimes leaked during scrapings)
-    _CSS_DECLARATION_RE = re.compile(
-        r"(?:[a-z0-9_\-\.\#\s\>\+\:\,\*]+)\s*\{[^\}]*\}", re.DOTALL | re.IGNORECASE
-    )
+
 
     # Common navigation boilerplate list patterns:
     # e.g., "Home | About | Products | Contact" or "Login • Register • Blog"
@@ -52,25 +49,16 @@ class TextCleaner:
         cleaned = self._JS_BLOCK_RE.sub(" ", cleaned)
         cleaned = self._STYLE_ATTR_RE.sub(" ", cleaned)
 
-        # 2. Strip raw CSS styling declarations left outside tags
-        if "{" in cleaned:
-            cleaned = self._CSS_DECLARATION_RE.sub(" ", cleaned)
+
 
         # 3. Strip HTML tags
         cleaned = self._HTML_TAG_RE.sub(" ", cleaned)
 
-        # 4. Remove navigation panels, copyright footers, related article links
-        cleaned = self._NAV_LINKS_RE.sub("", cleaned)
-        cleaned = self._COPYRIGHT_RE.sub("", cleaned)
-        cleaned = self._RELATED_RE.sub("", cleaned)
-
-        # 5. Normalize control characters
+        # 4. Normalize control characters
         cleaned = self._CONTROL_CHARS_RE.sub(" ", cleaned)
 
-        # 6. Normalize spacing & newlines
-        # Split into lines to clean line by line
+        # 5. Split into lines to clean line by line (safe from backtracking on long lines)
         lines = [line.strip() for line in cleaned.splitlines()]
-        # Remove consecutive blank lines and lines that are pure noise (e.g. only separators like ----)
         filtered_lines = []
         consecutive_blanks = 0
 
@@ -79,12 +67,22 @@ class TextCleaner:
                 consecutive_blanks += 1
                 if consecutive_blanks <= 1:  # Allow at most one empty line between blocks
                     filtered_lines.append("")
-            else:
-                consecutive_blanks = 0
-                # Filter lines containing just menu separator symbols
-                if len(line) < 10 and all(c in " -_+=*|·•" for c in line):
+                continue
+            
+            # Apply nav/copyright filters only to shorter lines to avoid catastrophic backtracking
+            if len(line) < 500:
+                if self._NAV_LINKS_RE.search(line):
                     continue
-                filtered_lines.append(line)
+                if self._COPYRIGHT_RE.search(line):
+                    continue
+                if self._RELATED_RE.search(line):
+                    continue
+
+            consecutive_blanks = 0
+            # Filter lines containing just menu separator symbols
+            if len(line) < 10 and all(c in " -_+=*|·•" for c in line):
+                continue
+            filtered_lines.append(line)
 
         # Reconstruct text and normalize multiple inline spaces
         reconstructed = "\n".join(filtered_lines).strip()
