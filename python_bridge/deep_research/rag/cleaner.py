@@ -53,7 +53,8 @@ class TextCleaner:
         cleaned = self._STYLE_ATTR_RE.sub(" ", cleaned)
 
         # 2. Strip raw CSS styling declarations left outside tags
-        cleaned = self._CSS_DECLARATION_RE.sub(" ", cleaned)
+        if "{" in cleaned:
+            cleaned = self._CSS_DECLARATION_RE.sub(" ", cleaned)
 
         # 3. Strip HTML tags
         cleaned = self._HTML_TAG_RE.sub(" ", cleaned)

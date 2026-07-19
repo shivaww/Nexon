@@ -149,19 +149,29 @@ class LlamaCppEmbedder:
     # ── Embedding Request Primitives ──────────────────────────────────
 
     async def _embed_http(self, texts: list[str]) -> list[list[float]]:
+        # Timeout: 90s covers a 12-chunk batch at ~5s/chunk with variance.
+        # A batch of 12 x 500-word chunks should complete in <30s on typical
+        # mobile hardware; 90s gives 3x headroom for cold-model startup.
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{self.endpoint}/embedding",
                 json={"content": texts},
                 headers={"Connection": "close"},
-                timeout=aiohttp.ClientTimeout(total=30)
+                timeout=aiohttp.ClientTimeout(total=90)
             ) as response:
                 if response.status >= 300:
                     body = (await response.text())[:500]
-                    raise ValueError(f"HTTP server returned status {response.status}: {body}")
+                    # Include chunk stats to aid diagnosis of content-triggered
+                    # failures (e.g. malformed/oversized text from PDF extraction).
+                    lengths = [len(t) for t in texts]
+                    stats = f"batch_size={len(texts)}, len_min={min(lengths)}, len_max={max(lengths)}"
+                    raise ValueError(
+                        f"HTTP server returned status {response.status} [{stats}]: {body}"
+                    )
                 # Refresh idle timer in lifecycle manager
                 touch()
                 return self._parse_response(await response.json())
+
 
     async def _embed_cli_batched(self, texts: list[str]) -> list[list[float]]:
         if self.model_path is None:

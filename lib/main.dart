@@ -199,8 +199,18 @@ class _ChatHomePageState extends State<ChatHomePage> {
   /// User-configured token budget for writer-phase evidence (set in settings).
   int _writerContextBudget = 32000;
   static const int maxConcurrentFetchCalls = 6;
-  static const int maxConcurrentIngestCalls = 1;
+  // Bounded by fetch limit since backend is now decoupled and parallelised
+  static const int maxConcurrentIngestCalls = 6;
   final SimpleSemaphore _ingestSemaphore = SimpleSemaphore(maxConcurrentIngestCalls);
+  final Map<String, Map<String, dynamic>> _runUrlCache = {};
+
+  String _normalizeQueryOrUrl(String input) {
+    return input
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^\w\s\-\.\:\/]'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
 
   Future<int> _getSystemAvailableRamBytes() async {
     final endpoint = _customMcpUrl.isNotEmpty ? _customMcpUrl : 'http://127.0.0.1:8390/mcp';
@@ -2855,6 +2865,12 @@ For every project, maintain a README.md at the project root.
         try {
           var targetUrl = url.trim();
           if (targetUrl.isEmpty) return;
+          final normUrl = _normalizeQueryOrUrl(targetUrl);
+          if (_runUrlCache.containsKey(normUrl)) {
+            debugPrint("Auto-ingest skipped duplicate URL in run cache: $targetUrl");
+            return;
+          }
+
           if (!targetUrl.startsWith('http')) {
             targetUrl = 'https://$targetUrl';
           }
@@ -2888,12 +2904,17 @@ For every project, maintain a README.md at the project root.
             }
 
             if (text.isNotEmpty) {
-              await _ingestDeepResearch(
+              final result = await _ingestDeepResearch(
                 stageId: stageId,
                 queryId: queryId,
                 sourceUrl: targetUrl,
                 text: text,
               );
+              _runUrlCache[normUrl] = {
+                'text': text,
+                'isPdf': isPdf,
+                'result': result,
+              };
             }
           }
         } catch (e) {
@@ -3193,6 +3214,7 @@ For every project, maintain a README.md at the project root.
     required ProviderSettings settings,
     required String model,
   }) async {
+    _runUrlCache.clear();
     try {
       final steps = stateMap['steps'] as List;
     final fileName = _getResearchFileName(_sessions[sessionIndex].title);
@@ -3259,17 +3281,11 @@ For every project, maintain a README.md at the project root.
       String? stepFailure;
 
       final Map<String, String> stepSearchCache = {};
-      final Map<String, Map<String, dynamic>> stepUrlCache = {};
+      final Map<String, Map<String, dynamic>> stepUrlCache = _runUrlCache;
       int zeroNoveltyStreak = 0;
       int consecutiveMalformedTags = 0;
 
-      String normalizeQueryOrUrl(String input) {
-        return input
-            .toLowerCase()
-            .replaceAll(RegExp(r'[^\w\s\-\.\:\/]'), '')
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
-      }
+      String normalizeQueryOrUrl(String input) => _normalizeQueryOrUrl(input);
       final stepEvents = steps[i]['events'] as List;
       var nextEventSequence = stepEvents.length;
 
@@ -3682,6 +3698,30 @@ For every project, maintain a README.md at the project root.
 
             bool batchAnyNovel = false;
             int batchZeroNovelties = 0;
+
+            // Pre-populate stepUrlCache with a sentinel for every URL in this
+            // parallel batch BEFORE launching Future.wait().  Without this,
+            // two identical URLs in the same batch both pass the isDup check
+            // simultaneously (the cache is empty when both goroutines read it),
+            // and both execute a full fetch+ingest pass (Part 6 fix).
+            final Map<String, int> _batchUrlIndices = {};
+            for (int k = 0; k < urls.length; k++) {
+              final normK = normalizeQueryOrUrl(urls[k]);
+              if (!stepUrlCache.containsKey(normK)) {
+                if (_batchUrlIndices.containsKey(normK)) {
+                  // Second+ occurrence of the same URL in this batch: mark as
+                  // duplicate so the parallel task short-circuits.
+                  stepUrlCache[normK] = <String, dynamic>{
+                    'text': '',
+                    'isPdf': false,
+                    'result': null,
+                    '_sentinel': true, // will be replaced by first completer
+                  };
+                } else {
+                  _batchUrlIndices[normK] = k;
+                }
+              }
+            }
 
             await Future.wait(Iterable<int>.generate(urls.length).map((idx) async {
               final url = urls[idx];

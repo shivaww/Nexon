@@ -94,10 +94,10 @@ class ServerLifecycleManager:
                 "-m", model_path,
                 "--port", port,
                 "--embedding",
-                "--threads", "4",
+                "--threads", str(os.cpu_count() or 4),
                 "--ctx-size", "2048",
                 "--parallel", "1",
-                "--batch-size", "2048",
+                "--batch-size", "2048",   # Sufficient for DR_EMBEDDING_BATCH_SIZE=12 chunks
                 "--ubatch-size", "2048",
             ]
 

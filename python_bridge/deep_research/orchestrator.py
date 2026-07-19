@@ -27,7 +27,7 @@ from .rag.chunking import ChunkingConfig
 from .schemas import IngestResult, RetrieveResult
 
 logger = logging.getLogger("termux_forge.deep_research")
-DEFAULT_INGEST_CONCURRENCY = 1
+DEFAULT_INGEST_CONCURRENCY = 6
 
 
 class DeepResearchOrchestrator:
@@ -40,7 +40,9 @@ class DeepResearchOrchestrator:
         # Config knobs (chunk size / top-k / batch size / rerank depth).
         self.chunk_words = int(os.getenv("DR_CHUNK_WORDS", "220"))
         self.overlap_words = int(os.getenv("DR_OVERLAP_WORDS", "30"))
-        self.embedding_batch_size = int(os.getenv("DR_EMBEDDING_BATCH_SIZE", "2"))
+        # Batch size: amortise per-request HTTP overhead across multiple chunks.
+        # Default of 12 means ~4 HTTP calls for a 49-chunk source instead of 49.
+        self.embedding_batch_size = int(os.getenv("DR_EMBEDDING_BATCH_SIZE", "12"))
         self.doc_top_k = int(os.getenv("DR_DOCUMENT_TOP_K", "3"))
         self.section_top_k = int(os.getenv("DR_SECTION_TOP_K", "5"))
         self.chunk_top_k = int(os.getenv("DR_CHUNK_TOP_K", os.getenv("DR_VECTOR_TOP_K", "8")))
@@ -74,6 +76,16 @@ class DeepResearchOrchestrator:
         self.agent.lightrag = self.lightrag
         self._lock = asyncio.Lock()
         self._ingest_gate = asyncio.Semaphore(self.ingest_concurrency)
+        self.run_ingested_urls = set()
+        self._last_stage = None
+
+    def _normalize_url(self, url: str) -> str:
+        import re
+        url = url.strip().lower()
+        url = re.sub(r'^https?://', '', url)
+        url = re.sub(r'^www\.', '', url)
+        url = url.rstrip('/')
+        return url
 
     @property
     def temp_path(self) -> Path:
@@ -93,6 +105,25 @@ class DeepResearchOrchestrator:
             "ingest_concurrency": self.ingest_concurrency,
         }
 
+    async def acquire_ingest_slot(self) -> None:
+        """Acquire the ingestion semaphore slot without starting a timeout clock.
+
+        Callers that want to apply a timeout only to *real work* (not queue
+        wait time) should:
+
+            await orchestrator.acquire_ingest_slot()          # wait indefinitely
+            try:
+                async with asyncio.timeout(N):                # time real work
+                    result = await orchestrator.ingest_work(...)
+            finally:
+                orchestrator.release_ingest_slot()
+        """
+        await self._ingest_gate.acquire()
+
+    def release_ingest_slot(self) -> None:
+        """Release the ingestion semaphore slot."""
+        self._ingest_gate.release()
+
     async def ingest(self, stage_id: str, query_id: str, source_url: str, text: str) -> dict[str, int | float]:
         if not all(isinstance(value, str) and value.strip() for value in (stage_id, query_id, source_url, text)):
             raise ValueError("stage_id, query_id, source_url, and text are required")
@@ -101,13 +132,30 @@ class DeepResearchOrchestrator:
         import time
         import hashlib
 
+        norm_url = self._normalize_url(source_url)
+        if stage_id == "stage1":
+            if getattr(self, "_last_stage", None) != "stage1":
+                self.run_ingested_urls.clear()
+        self._last_stage = stage_id
+
+        if norm_url in self.run_ingested_urls:
+            logger.info("URL already ingested in this run: %s. Short-circuiting.", source_url)
+            return {
+                "new_chunks_added": 0,
+                "novelty_ratio": 0.0,
+                "total_chunks_stage": self.store.leaf_count(stage_id),
+                "already_attempted": True
+            }
+
         source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         start_time = time.perf_counter()
 
         try:
             async with self._ingest_gate:
-                async with self._lock:
-                    result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
+                result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
+
+            if result and getattr(result, "new_chunks_added", 0) >= 0:
+                self.run_ingested_urls.add(norm_url)
 
             elapsed = time.perf_counter() - start_time
             logger.info(
@@ -124,6 +172,67 @@ class DeepResearchOrchestrator:
                 elapsed, stage_id, source_url, source_hash, error_preview
             )
             # Return graceful failure response to allow the overall process to proceed
+            return {
+                "new_chunks_added": 0,
+                "novelty_ratio": 0.0,
+                "total_chunks_stage": self.store.leaf_count(stage_id),
+                "failed": True,
+                "error": error_preview
+            }
+
+    async def ingest_work(self, stage_id: str, query_id: str, source_url: str, text: str) -> dict[str, int | float]:
+        """Run the actual ingest work *without* acquiring the gate.
+
+        Must only be called while the caller already holds a gate slot obtained
+        via ``acquire_ingest_slot()``.  This separation lets the bridge apply a
+        processing-only timeout, independent of how long the request waited in
+        queue.
+        """
+        if not all(isinstance(value, str) and value.strip() for value in (stage_id, query_id, source_url, text)):
+            raise ValueError("stage_id, query_id, source_url, and text are required")
+        stage_id = normalize_stage_id(stage_id)
+
+        import time
+        import hashlib
+
+        norm_url = self._normalize_url(source_url)
+        if stage_id == "stage1":
+            if getattr(self, "_last_stage", None) != "stage1":
+                self.run_ingested_urls.clear()
+        self._last_stage = stage_id
+
+        if norm_url in self.run_ingested_urls:
+            logger.info("URL already ingested in this run: %s. Short-circuiting.", source_url)
+            return {
+                "new_chunks_added": 0,
+                "novelty_ratio": 0.0,
+                "total_chunks_stage": self.store.leaf_count(stage_id),
+                "already_attempted": True
+            }
+
+        source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        start_time = time.perf_counter()
+
+        try:
+            result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
+
+            if result and getattr(result, "new_chunks_added", 0) >= 0:
+                self.run_ingested_urls.add(norm_url)
+
+            elapsed = time.perf_counter() - start_time
+            logger.info(
+                "Ingested deep-research source successfully in %.3fs | stage=%s | added=%d | url=%s | hash=%s",
+                elapsed, stage_id, result.new_chunks_added, source_url, source_hash
+            )
+            return result.to_dict()
+
+        except Exception as e:
+            elapsed = time.perf_counter() - start_time
+            error_preview = str(e)[:100] + "..." if len(str(e)) > 100 else str(e)
+            logger.error(
+                "Ingestion CIRCUIT BREAKER triggered after %.3fs | stage=%s | url=%s | hash=%s | error=%s",
+                elapsed, stage_id, source_url, source_hash, error_preview
+            )
             return {
                 "new_chunks_added": 0,
                 "novelty_ratio": 0.0,

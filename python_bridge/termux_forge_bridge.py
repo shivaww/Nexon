@@ -920,14 +920,24 @@ class TermuxForgeBridge:
     async def _deep_research_ingest(
         self, stage_id: str = "", query_id: str = "", source_url: str = "", text: str = ""
     ) -> dict:
-        """Index already-cleaned content, used internally by ``web_fetch`` and tests."""
-        ingest_stage_id = stage_id
-        ingest_query_id = query_id
-        ingest_source_url = source_url
-        ingest_text = text
-        return await self.deep_research.ingest(
-            ingest_stage_id, ingest_query_id, ingest_source_url, ingest_text
-        )
+        """Index already-cleaned content, used internally by ``web_fetch`` and tests.
+
+        Timeout decoupling: the bridge's 110s MCP_HTTP_TIMEOUT_SECONDS applies
+        only to *actual embedding/storage work*, not to queue-wait time.  A
+        request queued behind others waits indefinitely for its slot (bounded
+        only by the Flutter session-level wall-clock budget), then starts its
+        own 110s processing clock once it gains the semaphore.
+        """
+        # Step 1: acquire slot — no timeout here, so queue wait never triggers 504.
+        await self.deep_research.acquire_ingest_slot()
+        try:
+            # Step 2: run real work under whatever timeout the MCP HTTP handler
+            # imposes.  The 110s clock starts only now, not during queue wait.
+            return await self.deep_research.ingest_work(
+                stage_id, query_id, source_url, text
+            )
+        finally:
+            self.deep_research.release_ingest_slot()
 
     async def _deep_research_retrieve(self, stage_id: str, query: str) -> dict:
         """Write ranked chunks to temp.json and return confirmation metadata only."""
@@ -2261,10 +2271,33 @@ class TermuxForgeBridge:
             # Dispatch as internal JSON-RPC
             rpc_req = JsonRpcRequest(method=method, params=params, id="http-req", jsonrpc="2.0")
             try:
-                rpc_resp = await asyncio.wait_for(
-                    self.router.dispatch(rpc_req),
-                    timeout=MCP_HTTP_TIMEOUT_SECONDS,
-                )
+                # For deep_research.ingest the semaphore is acquired BEFORE the
+                # timeout starts, so queue-wait time never eats into the 110s
+                # processing budget (fixes the 504/656749ms failure from logs).
+                if method == "deep_research.ingest":
+                    # Phase 1: acquire the ingest slot — no timeout clock running.
+                    await self.deep_research.acquire_ingest_slot()
+                    try:
+                        # Phase 2: run real work — now start the timeout.
+                        resolved_params = dict(params)
+                        rpc_resp = await asyncio.wait_for(
+                            self.deep_research.ingest_work(
+                                resolved_params.get("stage_id", ""),
+                                resolved_params.get("query_id", ""),
+                                resolved_params.get("source_url", ""),
+                                resolved_params.get("text", ""),
+                            ),
+                            timeout=MCP_HTTP_TIMEOUT_SECONDS,
+                        )
+                        # Wrap raw dict result in JsonRpcResponse format
+                        rpc_resp = JsonRpcResponse(id="http-req", result=rpc_resp)
+                    finally:
+                        self.deep_research.release_ingest_slot()
+                else:
+                    rpc_resp = await asyncio.wait_for(
+                        self.router.dispatch(rpc_req),
+                        timeout=MCP_HTTP_TIMEOUT_SECONDS,
+                    )
             except asyncio.TimeoutError:
                 logger.error("MCP HTTP request timed out: method=%s", method)
                 return web.json_response(
