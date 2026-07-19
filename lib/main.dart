@@ -3548,6 +3548,9 @@ For every project, maintain a README.md at the project root.
             final int activeIngestConcurrency = lowMemory ? 1 : 2;
             _ingestSemaphore.maxConcurrency = activeIngestConcurrency;
 
+            bool batchAnyNovel = false;
+            int batchZeroNovelties = 0;
+
             await Future.wait(Iterable<int>.generate(urls.length).map((idx) async {
               final url = urls[idx];
               final eventId = eventIds[idx];
@@ -3564,7 +3567,7 @@ For every project, maintain a README.md at the project root.
               if (isDup) {
                 final cached = stepUrlCache[normUrl]!;
                 final cachedResult = cached['result'] as Map<String, dynamic>?;
-                zeroNoveltyStreak++;
+                batchZeroNovelties++;
                 finishResearchEvent(
                   eventId,
                   status: 'done',
@@ -3685,7 +3688,7 @@ For every project, maintain a README.md at the project root.
                     }
                   } catch (e) {
                     fetchFailed = true;
-                    zeroNoveltyStreak++;
+                    batchZeroNovelties++;
                     final errStr = e.toString().contains('Extraction failed:')
                         ? e.toString()
                         : 'Fetch failed: $e';
@@ -3702,7 +3705,7 @@ For every project, maintain a README.md at the project root.
                 });
               } catch (e) {
                 fetchFailed = true;
-                zeroNoveltyStreak++;
+                batchZeroNovelties++;
                 finishResearchEvent(
                   eventId,
                   status: 'error',
@@ -3733,7 +3736,7 @@ For every project, maintain a README.md at the project root.
                   resVal = jsonEncode(result);
 
                   if (result['failed'] == true) {
-                    zeroNoveltyStreak++;
+                    batchZeroNovelties++;
                     finishResearchEvent(
                       eventId,
                       status: 'error',
@@ -3752,9 +3755,9 @@ For every project, maintain a README.md at the project root.
                   } else {
                     final int addedVal = result['new_chunks_added'] is num ? result['new_chunks_added'] as int : 0;
                     if (addedVal == 0) {
-                      zeroNoveltyStreak++;
+                      batchZeroNovelties++;
                     } else {
-                      zeroNoveltyStreak = 0;
+                      batchAnyNovel = true;
                     }
                     stepUrlCache[normUrl] = {
                       'text': text,
@@ -3777,7 +3780,7 @@ For every project, maintain a README.md at the project root.
                     );
                   }
                 } catch (e) {
-                  zeroNoveltyStreak++;
+                  batchZeroNovelties++;
                   finishResearchEvent(
                     eventId,
                     status: 'error',
@@ -3814,6 +3817,12 @@ For every project, maintain a README.md at the project root.
 
               urlResults[idx] = resVal;
             }));
+
+            if (batchAnyNovel) {
+              zeroNoveltyStreak = 0;
+            } else {
+              zeroNoveltyStreak += batchZeroNovelties;
+            }
 
             if (zeroNoveltyStreak >= 8) {
               stepDone = true;
@@ -5740,6 +5749,7 @@ class ChatSurface extends StatelessWidget {
                       animationState: state,
                       agenticWorkspace: agenticWorkspace,
                       fileName: fileName,
+                      isSending: isSending,
                       onEditUserMessage: () => onEditUserMessage(index),
                       onStartResearch: ([editedStateMap]) =>
                           onStartResearch(index, editedStateMap),
@@ -7979,6 +7989,7 @@ class MessageBubble extends StatelessWidget {
     required this.onEditUserMessage,
     required this.agenticWorkspace,
     required this.fileName,
+    required this.isSending,
     this.animationState = AvatarAnimationState.idle,
     this.onStartResearch,
     this.versionsCount = 0,
@@ -8001,6 +8012,7 @@ class MessageBubble extends StatelessWidget {
   final int versionsCount;
   final int currentVersionIndex;
   final ValueChanged<int>? onVersionChanged;
+  final bool isSending;
 
   @override
   Widget build(BuildContext context) {
@@ -8436,6 +8448,7 @@ class MessageBubble extends StatelessWidget {
               stateMap: stateMap,
               workspaceDir: agenticWorkspace,
               fileName: fileName,
+              isSending: isSending,
               onStartResearch: onStartResearch,
             );
           }
@@ -9562,6 +9575,127 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         _searchProvider = widget.searchSettings.provider;
       });
     }
+  }
+
+  Future<Map<String, dynamic>> _checkBridgeAlive() async {
+    final endpoint = widget.customMcpUrl.isNotEmpty
+        ? widget.customMcpUrl
+        : 'http://127.0.0.1:8390/mcp';
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      final request = await client
+          .postUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 3));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({'method': 'ping', 'params': {}}));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(const Duration(seconds: 3));
+      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 3));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic> && decoded['result'] is Map) {
+          final result = decoded['result'] as Map;
+          if (result['ok'] == true) return {'ok': true};
+        }
+      }
+      return {'ok': false, 'reason': 'bridge_error'};
+    } catch (_) {
+      return {'ok': false, 'reason': 'bridge_unreachable'};
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  void _showDeepResearchSetupDialog({required String reason}) {
+    final isUnreachable = reason == 'bridge_unreachable';
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            bool rechecking = false;
+            return AlertDialog(
+              title: Text(isUnreachable ? 'Bridge Not Running' : 'Deep Research Setup Required'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(isUnreachable
+                      ? "The Python bridge process isn't currently running. Please start it in Termux:"
+                      : 'Deep Research requires the Python bridge with llama.cpp and the EmbeddingGemma model. Please run this one-time setup command in Termux:'),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    color: Colors.black87,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: SelectableText(
+                            isUnreachable
+                                ? 'cd ~/nexon_bridge && python3 mcp_server.py'
+                                : 'cd ~/projects/termux_forge && ./install_bridge.sh',
+                            style: const TextStyle(color: Colors.green, fontFamily: 'monospace', fontSize: 12),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.copy, color: Colors.white, size: 20),
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(
+                              text: isUnreachable
+                                  ? 'cd ~/nexon_bridge && python3 mcp_server.py'
+                                  : 'cd ~/projects/termux_forge && ./install_bridge.sh',
+                            ));
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Copied to clipboard')),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('OK'),
+                ),
+                StatefulBuilder(
+                  builder: (ctx2, setRecheckState) {
+                    return TextButton(
+                      onPressed: rechecking
+                          ? null
+                          : () async {
+                              setRecheckState(() => rechecking = true);
+                              final result = await _checkBridgeAlive();
+                              if (!mounted) return;
+                              if (result['ok'] == true) {
+                                Navigator.of(ctx).pop();
+                                setState(() => _deepResearchEnabled = true);
+                                widget.onDeepResearchEnabledChanged(true);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Bridge is running! Deep Research enabled.')),
+                                );
+                              } else {
+                                setRecheckState(() => rechecking = false);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Bridge still not reachable. Please check it is running.')),
+                                );
+                              }
+                            },
+                      child: rechecking
+                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text('Recheck'),
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   int _getTotalDailyCap(String planTier) {
@@ -10728,103 +10862,14 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 activeColor: const Color(0xFF7B4E2E),
                 onChanged: (val) async {
                   if (val) {
-                    final llamaExists = File('/data/data/com.termux/files/usr/bin/llama-server').existsSync();
-                    final modelExists = File('/data/data/com.termux/files/home/nexon_bridge/models/embeddinggemma-300m-Q4_0.gguf').existsSync();
-                    if (!llamaExists || !modelExists) {
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('Deep Research Setup Required'),
-                          content: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Deep Research requires llama.cpp and the EmbeddingGemma model. Please run this one-time setup command in Termux:'),
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                color: Colors.black87,
-                                child: Row(
-                                  children: [
-                                    const Expanded(
-                                      child: SelectableText(
-                                        'cd ~/projects/termux_forge && ./install_bridge.sh',
-                                        style: TextStyle(color: Colors.green, fontFamily: 'monospace', fontSize: 12),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.copy, color: Colors.white, size: 20),
-                                      onPressed: () {
-                                        Clipboard.setData(const ClipboardData(text: 'cd ~/projects/termux_forge && ./install_bridge.sh'));
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: const Text('Copied to clipboard')));
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(),
-                              child: const Text('OK'),
-                            ),
-                          ],
-                        ),
-                      );
+                    final result = await _checkBridgeAlive();
+                    if (!mounted) return;
+                    if (result['ok'] != true) {
+                      final reason = result['reason']?.toString() ?? 'bridge_unreachable';
+                      _showDeepResearchSetupDialog(reason: reason);
                       setState(() => _deepResearchEnabled = false);
                       widget.onDeepResearchEnabledChanged(false);
                       return;
-                    }
-                    bool bridgeRunning = false;
-                    try {
-                      final socket = await Socket.connect('127.0.0.1', 8390, timeout: const Duration(seconds: 1));
-                      bridgeRunning = true;
-                      socket.destroy();
-                    } catch (_) {}
-                    
-                    if (!bridgeRunning) {
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          title: const Text('Bridge Not Running'),
-                          content: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text("Setup is complete, but the Python bridge process isn't currently running. Please start it in Termux:"),
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                color: Colors.black87,
-                                child: Row(
-                                  children: [
-                                    const Expanded(
-                                      child: SelectableText(
-                                        'cd ~/nexon_bridge && python3 mcp_server.py',
-                                        style: TextStyle(color: Colors.green, fontFamily: 'monospace', fontSize: 12),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.copy, color: Colors.white, size: 20),
-                                      onPressed: () {
-                                        Clipboard.setData(const ClipboardData(text: 'cd ~/nexon_bridge && python3 mcp_server.py'));
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: const Text('Copied to clipboard')));
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(),
-                              child: const Text('OK'),
-                            ),
-                          ],
-                        ),
-                      );
                     }
                   }
                   setState(() => _deepResearchEnabled = val);
@@ -14232,12 +14277,14 @@ class ResearchPlanWidget extends StatefulWidget {
     required this.stateMap,
     required this.workspaceDir,
     required this.fileName,
+    required this.isSending,
     this.onStartResearch,
     super.key,
   });
   final Map<String, dynamic> stateMap;
   final String workspaceDir;
   final String fileName;
+  final bool isSending;
   final void Function([Map<String, dynamic>? editedStateMap])?
       onStartResearch;
 
@@ -14325,13 +14372,15 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     super.initState();
     _stopwatch = Stopwatch();
     final status = widget.stateMap['status'] as String? ?? 'running';
-    if (status == 'running') {
+    final isRunning = status == 'running' && widget.isSending;
+    if (isRunning) {
       _stopwatch.start();
     }
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         final currentStatus = widget.stateMap['status'] as String? ?? 'running';
-        if (currentStatus == 'running') {
+        final currentRunning = currentStatus == 'running' && widget.isSending;
+        if (currentRunning) {
           if (!_stopwatch.isRunning) {
             _stopwatch.start();
           }
@@ -14464,6 +14513,8 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                               ? 'Deep Research Complete'
                               : status == 'pending'
                               ? 'Research Plan Ready'
+                              : (status == 'running' && !widget.isSending)
+                              ? 'Deep Research Interrupted'
                               : 'Deep Research in Progress...',
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -14476,24 +14527,30 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (status == 'pending') ...[
+                if (status == 'pending' || (status == 'running' && !widget.isSending) || status == 'failed') ...[
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      IconButton(
-                        constraints: const BoxConstraints(),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                        tooltip: 'Edit research plan',
-                        onPressed: _editPlan,
-                        icon: const Icon(Icons.edit_outlined, size: 19),
-                        color: const Color(0xFF2C5282),
-                      ),
-                      const SizedBox(width: 4),
+                      if (status == 'pending')
+                        IconButton(
+                          constraints: const BoxConstraints(),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          tooltip: 'Edit research plan',
+                          onPressed: _editPlan,
+                          icon: const Icon(Icons.edit_outlined, size: 19),
+                          color: const Color(0xFF2C5282),
+                        ),
+                      if (status == 'pending') const SizedBox(width: 4),
                       if (widget.onStartResearch != null)
                         FilledButton.icon(
                           onPressed: () => widget.onStartResearch!(widget.stateMap),
-                          icon: const Icon(Icons.play_arrow, size: 16),
-                          label: const Text('Start'),
+                          icon: Icon(
+                            status == 'running' ? Icons.play_arrow : (status == 'failed' ? Icons.replay : Icons.play_arrow),
+                            size: 16,
+                          ),
+                          label: Text(
+                            status == 'running' ? 'Resume' : (status == 'failed' ? 'Retry' : 'Start'),
+                          ),
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF2C5282),
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -14503,7 +14560,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                     ],
                   ),
                 ],
-                if (status == 'running')
+                if (status == 'running' && widget.isSending)
                   Text(
                     '${_stopwatch.elapsed.inMinutes.toString().padLeft(2, '0')}:${(_stopwatch.elapsed.inSeconds % 60).toString().padLeft(2, '0')}',
                     style: const TextStyle(
