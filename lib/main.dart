@@ -2763,7 +2763,7 @@ For every project, maintain a README.md at the project root.
         bool reinterpreted = false;
         String replacement = '';
         if (mappedTool == 'read_url') {
-          final urlRegex = RegExp(r'https?://[^\s"\'\}]+');
+          final urlRegex = RegExp('https?://[^\\s"\'\\}]+');
           final urlMatch = urlRegex.firstMatch(paramsText);
           if (urlMatch != null) {
             final url = urlMatch.group(0)!;
@@ -2771,9 +2771,9 @@ For every project, maintain a README.md at the project root.
             reinterpreted = true;
           }
         } else if (mappedTool == 'search_request') {
-          final queryRegex1 = RegExp(r'(?:query|q)[:\s="']+\s*["']([^"']+)["']');
-          final queryRegex2 = RegExp(r'(?:query|q)[:\s="']+\s*([^\s"\'}]+)');
-          final quotedRegex = RegExp(r'["']([^"']+)["']');
+          final queryRegex1 = RegExp('(?:query|q)[:\\s="\']+\\s*["\']([^"\']+)["\']');
+          final queryRegex2 = RegExp('(?:query|q)[:\\s="\']+\\s*([^\\s"\'\\}]+)');
+          final quotedRegex = RegExp('["\']([^"\']+)["\']');
           String? query;
           final mq1 = queryRegex1.firstMatch(paramsText);
           if (mq1 != null) {
