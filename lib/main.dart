@@ -4418,7 +4418,6 @@ For every project, maintain a README.md at the project root.
         'overhead=${stepWatch.elapsedMilliseconds - totalLlmMs - totalToolMs}ms '
         'turns=$loopCount status=${stepFailed ? "failed" : "ok"}',
       );
-      final stepEvents = steps[i]['events'] as List? ?? [];
       int totalIngests = 0;
       int failedIngests = 0;
       final failedUrls = <String>[];
