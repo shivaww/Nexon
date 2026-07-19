@@ -9829,7 +9829,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   Text(isUnreachable
                       ? "The Python bridge process isn't currently running. Please start it in Termux:"
-                      : 'Deep Research requires the Python bridge with llama.cpp and the EmbeddingGemma model. Please run this one-time setup command in Termux:'),
+                      : 'Deep Research requires the Python bridge with llama.cpp and the BGE-Base embedding model. Please run this one-time setup command in Termux:'),
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(8),

@@ -150,17 +150,17 @@ fi
 
 echo "[4/4] Setting up Embedding Model..."
 MODEL_DIR="$HOME/nexon_bridge/models"
-MODEL_NAME="embeddinggemma-300m-Q4_0.gguf"
+MODEL_NAME="bge-base-en-v1.5-f16.gguf"
 MODEL_PATH="$MODEL_DIR/$MODEL_NAME"
-MODEL_URL="https://huggingface.co/second-state/embeddinggemma-300m-GGUF/resolve/main/embeddinggemma-300m-Q4_0.gguf"
+MODEL_URL="https://huggingface.co/CompendiumLabs/bge-base-en-v1.5-gguf/resolve/main/bge-base-en-v1.5-f16.gguf"
 mkdir -p "$MODEL_DIR"
 
 if [ -f "$MODEL_PATH" ]; then
     echo "  -> Model already exists. Skipping download."
 else
-    echo "  -> Downloading EmbeddingGemma model..."
+    echo "  -> Downloading BGE-Base-v1.5 embedding model..."
     wget -q --show-progress "$MODEL_URL" -O "$MODEL_PATH"
-    # Basic size check (should be ~170MB to 200MB)
+    # Basic size check (should be ~220MB)
     MODEL_SIZE=$(stat -c%s "$MODEL_PATH")
     if [ "$MODEL_SIZE" -lt 100000000 ]; then
         echo "Error: Downloaded model seems too small, possibly failed. Removing..."

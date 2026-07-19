@@ -89,7 +89,7 @@ Nexon split-processes operations between the Dart/Flutter application (which ren
 | **Frontend UI** | Flutter (Dart), Material 3 Design, `flutter_markdown`, `flutter_svg` |
 | **Local Storage** | Flutter Secure Storage (OAuth tokens), SharedPreferences, local JSON |
 | **Python Bridge** | Python 3, `aiohttp`, `websockets`, `numpy`, `docx_creator` |
-| **Local Embedder** | `llama.cpp` (`llama-server`) & `EmbeddingGemma` (`embeddinggemma-300m-Q4_0.gguf`) |
+| **Local Embedder** | `llama.cpp` (`llama-server`) & `BGE-Base-v1.5` (`bge-base-en-v1.5-f16.gguf`) |
 | **Third-Party APIs**| Supabase Google Auth, Google Drive v3 REST API, Tavily Search API |
 
 ---

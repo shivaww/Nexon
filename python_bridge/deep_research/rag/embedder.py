@@ -32,7 +32,7 @@ class LlamaCppEmbedder:
 
         # Resolve model name for caching purposes
         self.model_name = os.getenv("DEEP_RESEARCH_EMBEDDING_MODEL_NAME") or (
-            self.model_path.name if self.model_path else "embeddinggemma-300m"
+            self.model_path.name if self.model_path else "bge-base-en-v1.5-f16"
         )
         self.cli_embedding_concurrency = max(
             1,
@@ -49,14 +49,15 @@ class LlamaCppEmbedder:
 
         # Check relative to projects folder (python_bridge/models/)
         pkg_dir = Path(__file__).resolve().parents[2]
-        candidates.append(pkg_dir / "models" / "embeddinggemma-300m-Q4_0.gguf")
+        candidates.append(pkg_dir / "models" / "bge-base-en-v1.5-f16.gguf")
 
         home = Path.home()
         candidates.extend([
-            home / "embeddinggemma-300m-Q4_0.gguf",
-            home / "models" / "embeddinggemma-300m-Q4_0.gguf",
-            home / "downloads" / "embeddinggemma-300m-Q4_0.gguf",
-            home / "storage" / "downloads" / "embeddinggemma-300m-Q4_0.gguf",
+            home / "bge-base-en-v1.5-f16.gguf",
+            home / "models" / "bge-base-en-v1.5-f16.gguf",
+            home / "downloads" / "bge-base-en-v1.5-f16.gguf",
+            home / "storage" / "downloads" / "bge-base-en-v1.5-f16.gguf",
+            home / "nexon_bridge" / "models" / "bge-base-en-v1.5-f16.gguf",
         ])
         return next((path for path in candidates if path.is_file()), None)
 
