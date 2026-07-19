@@ -39,6 +39,7 @@ class LlamaCppEmbedder:
             int(os.getenv("DR_CLI_EMBED_CONCURRENCY", "1")),
         )
         self._cache: dict[str, list[float]] = {}
+        self._server_ready = False
         self.subprocess_calls = 0  # Metric tracker for eval loops
 
     @staticmethod
@@ -93,7 +94,7 @@ class LlamaCppEmbedder:
         # 2. Run fallback embedding pipeline for non-cached items
         if to_embed:
             # Delegate server verification/startup to the robust lifecycle manager
-            if self.model_path:
+            if self.model_path and not self._server_ready:
                 await asyncio.to_thread(ensure_server, str(self.model_path), self.endpoint)
 
             new_embeddings = None
@@ -102,7 +103,9 @@ class LlamaCppEmbedder:
             # Fallback 1: Local HTTP embedding server
             try:
                 new_embeddings = await self._embed_http(to_embed)
+                self._server_ready = True
             except Exception as e:
+                self._server_ready = False
                 fallback_errors.append(f"HTTP server failed: {str(e)[:100]}")
 
             # Fallback 2: Local CLI subprocess (runs llama-embedding as fallback)
@@ -154,7 +157,8 @@ class LlamaCppEmbedder:
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
                 if response.status >= 300:
-                    raise ValueError(f"HTTP server returned status {response.status}")
+                    body = (await response.text())[:500]
+                    raise ValueError(f"HTTP server returned status {response.status}: {body}")
                 # Refresh idle timer in lifecycle manager
                 touch()
                 return self._parse_response(await response.json())

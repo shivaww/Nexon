@@ -40,7 +40,7 @@ class DeepResearchOrchestrator:
         # Config knobs (chunk size / top-k / batch size / rerank depth).
         self.chunk_words = int(os.getenv("DR_CHUNK_WORDS", "220"))
         self.overlap_words = int(os.getenv("DR_OVERLAP_WORDS", "30"))
-        self.embedding_batch_size = int(os.getenv("DR_EMBEDDING_BATCH_SIZE", "16"))
+        self.embedding_batch_size = int(os.getenv("DR_EMBEDDING_BATCH_SIZE", "2"))
         self.doc_top_k = int(os.getenv("DR_DOCUMENT_TOP_K", "3"))
         self.section_top_k = int(os.getenv("DR_SECTION_TOP_K", "5"))
         self.chunk_top_k = int(os.getenv("DR_CHUNK_TOP_K", os.getenv("DR_VECTOR_TOP_K", "8")))

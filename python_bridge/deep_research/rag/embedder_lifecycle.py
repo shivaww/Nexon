@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import atexit
 import fcntl
+import json
 import logging
 import os
 import re
@@ -64,8 +65,10 @@ class ServerLifecycleManager:
 
             # 2. Check if the server is already online
             if self._is_server_online(endpoint):
-                self.touch()
-                return True
+                if self._wait_for_server(endpoint):
+                    self.touch()
+                    return True
+                return False
 
             # 3. Port/Process audit: Reap any stale process holding the port
             self._reap_stale_processes(endpoint)
@@ -92,9 +95,10 @@ class ServerLifecycleManager:
                 "--port", port,
                 "--embedding",
                 "--threads", "4",
-                "--ctx-size", "1024",
-                "--batch-size", "512",
-                "--ubatch-size", "512",
+                "--ctx-size", "2048",
+                "--parallel", "1",
+                "--batch-size", "2048",
+                "--ubatch-size", "2048",
             ]
 
             logger.info(f"Spawning background server on port {port}...")
@@ -195,18 +199,34 @@ class ServerLifecycleManager:
             proxy_handler = urllib.request.ProxyHandler({})
             opener = urllib.request.build_opener(proxy_handler)
             req = urllib.request.Request(url, headers={"Connection": "close"}, method="GET")
-            with opener.open(req, timeout=0.5) as response:
+            with opener.open(req, timeout=5) as response:
                 return response.status < 300
         except Exception:
             return False
 
     def _wait_for_server(self, endpoint: str) -> bool:
-        """Wait up to 30 seconds for server readiness."""
-        for _ in range(60):
-            if self._is_server_online(endpoint):
+        """Wait up to 60 seconds for embedding readiness."""
+        for _ in range(120):
+            if self._is_embedding_ready(endpoint):
                 return True
             time.sleep(0.5)
         return False
+
+    def _is_embedding_ready(self, endpoint: str) -> bool:
+        try:
+            payload = json.dumps({"content": ["ready"]}).encode("utf-8")
+            proxy_handler = urllib.request.ProxyHandler({})
+            opener = urllib.request.build_opener(proxy_handler)
+            req = urllib.request.Request(
+                f"{endpoint}/embedding",
+                data=payload,
+                headers={"Content-Type": "application/json", "Connection": "close"},
+                method="POST",
+            )
+            with opener.open(req, timeout=5) as response:
+                return response.status < 300
+        except Exception:
+            return False
 
     def _is_port_held(self, port: int) -> bool:
         """Check if port is bound to localhost."""
