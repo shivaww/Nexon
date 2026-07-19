@@ -34,6 +34,10 @@ class LlamaCppEmbedder:
         self.model_name = os.getenv("DEEP_RESEARCH_EMBEDDING_MODEL_NAME") or (
             self.model_path.name if self.model_path else "embeddinggemma-300m"
         )
+        self.cli_embedding_concurrency = max(
+            1,
+            int(os.getenv("DR_CLI_EMBED_CONCURRENCY", "1")),
+        )
         self._cache: dict[str, list[float]] = {}
         self.subprocess_calls = 0  # Metric tracker for eval loops
 
@@ -159,7 +163,13 @@ class LlamaCppEmbedder:
         if self.model_path is None:
             raise FileNotFoundError("Local model path not found for CLI execution.")
         self.subprocess_calls += len(texts)
-        return await asyncio.gather(*(asyncio.to_thread(self._embed_local, text) for text in texts))
+        gate = asyncio.Semaphore(self.cli_embedding_concurrency)
+
+        async def embed_one(text: str) -> list[float]:
+            async with gate:
+                return await asyncio.to_thread(self._embed_local, text)
+
+        return await asyncio.gather(*(embed_one(text) for text in texts))
 
     def _embed_local(self, text: str) -> list[float]:
         binary = shutil.which("llama-embedding")

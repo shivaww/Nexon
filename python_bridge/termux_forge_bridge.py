@@ -918,10 +918,16 @@ class TermuxForgeBridge:
     # ── Deep research ─────────────────────────────────────────────────
 
     async def _deep_research_ingest(
-        self, stage_id: str, query_id: str, source_url: str, text: str
+        self, stage_id: str = "", query_id: str = "", source_url: str = "", text: str = ""
     ) -> dict:
         """Index already-cleaned content, used internally by ``web_fetch`` and tests."""
-        return await self.deep_research.ingest(stage_id, query_id, source_url, text)
+        ingest_stage_id = stage_id
+        ingest_query_id = query_id
+        ingest_source_url = source_url
+        ingest_text = text
+        return await self.deep_research.ingest(
+            ingest_stage_id, ingest_query_id, ingest_source_url, ingest_text
+        )
 
     async def _deep_research_retrieve(self, stage_id: str, query: str) -> dict:
         """Write ranked chunks to temp.json and return confirmation metadata only."""

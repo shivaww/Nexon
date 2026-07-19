@@ -345,6 +345,15 @@ class _ChatHomePageState extends State<ChatHomePage> {
     required String sourceUrl,
     required String text,
   }) async {
+    final payload = Map<String, String>.unmodifiable({
+      'stage_id': stageId,
+      'query_id': queryId,
+      'source_url': sourceUrl,
+      'text': text,
+    });
+    if (payload.values.any((value) => value.trim().isEmpty)) {
+      throw ArgumentError('stage_id, query_id, source_url, and text are required');
+    }
     return _ingestSemaphore.run(() async {
       final endpoint = _customMcpUrl.isNotEmpty
           ? _customMcpUrl
@@ -358,12 +367,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         request.headers.contentType = ContentType.json;
         final bytes = utf8.encode(jsonEncode({
           'method': 'deep_research.ingest',
-          'params': {
-            'stage_id': stageId,
-            'query_id': queryId,
-            'source_url': sourceUrl,
-            'text': text,
-          },
+          'params': payload,
         }));
         request.headers.contentLength = bytes.length;
         request.add(bytes);
@@ -3675,8 +3679,6 @@ For every project, maintain a README.md at the project root.
 
             final List<String> urlResults = List.filled(urls.length, '');
             final fetchSemaphore = SimpleSemaphore(activeFetchConcurrency);
-            final int activeIngestConcurrency = lowMemory ? 1 : 2;
-            _ingestSemaphore.maxConcurrency = activeIngestConcurrency;
 
             bool batchAnyNovel = false;
             int batchZeroNovelties = 0;
@@ -3857,11 +3859,15 @@ For every project, maintain a README.md at the project root.
                 );
 
                 try {
+                  final ingestStageId = 'stage${i + 1}';
+                  final ingestQueryId = 'query${loopCount}_$idx';
+                  final ingestSourceUrl = targetUrl;
+                  final ingestText = text;
                   final result = await _ingestDeepResearch(
-                    stageId: 'stage${i + 1}',
-                    queryId: 'query${loopCount}_$idx',
-                    sourceUrl: targetUrl,
-                    text: text,
+                    stageId: ingestStageId,
+                    queryId: ingestQueryId,
+                    sourceUrl: ingestSourceUrl,
+                    text: ingestText,
                   );
                   resVal = jsonEncode(result);
 

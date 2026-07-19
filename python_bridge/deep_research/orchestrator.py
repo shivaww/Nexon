@@ -27,6 +27,7 @@ from .rag.chunking import ChunkingConfig
 from .schemas import IngestResult, RetrieveResult
 
 logger = logging.getLogger("termux_forge.deep_research")
+DEFAULT_INGEST_CONCURRENCY = 1
 
 
 class DeepResearchOrchestrator:
@@ -46,6 +47,10 @@ class DeepResearchOrchestrator:
         self.rerank_depth = int(os.getenv("DR_RERANK_DEPTH", "6"))
         self.weak_evidence_threshold = float(os.getenv("DR_WEAK_THRESHOLD", "0.25"))
         self.max_revisions = int(os.getenv("DR_MAX_REVISIONS", "2"))
+        self.ingest_concurrency = max(
+            1,
+            int(os.getenv("DR_INGEST_CONCURRENCY", str(DEFAULT_INGEST_CONCURRENCY))),
+        )
 
         chunk_cfg = ChunkingConfig(self.chunk_words, self.overlap_words)
         self.lightrag = LightRAGBuilder(
@@ -68,6 +73,7 @@ class DeepResearchOrchestrator:
         )
         self.agent.lightrag = self.lightrag
         self._lock = asyncio.Lock()
+        self._ingest_gate = asyncio.Semaphore(self.ingest_concurrency)
 
     @property
     def temp_path(self) -> Path:
@@ -84,6 +90,7 @@ class DeepResearchOrchestrator:
             "rerank_depth": self.rerank_depth,
             "weak_evidence_threshold": self.weak_evidence_threshold,
             "max_revisions": self.max_revisions,
+            "ingest_concurrency": self.ingest_concurrency,
         }
 
     async def ingest(self, stage_id: str, query_id: str, source_url: str, text: str) -> dict[str, int | float]:
@@ -98,8 +105,9 @@ class DeepResearchOrchestrator:
         start_time = time.perf_counter()
 
         try:
-            async with self._lock:
-                result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
+            async with self._ingest_gate:
+                async with self._lock:
+                    result: IngestResult = await self.lightrag.ingest(stage_id, query_id, source_url, text)
 
             elapsed = time.perf_counter() - start_time
             logger.info(
