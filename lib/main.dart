@@ -121,44 +121,86 @@ Output format:
 </research_plan>
 No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
 
-  // Note: Different user-selected models vary in instruction-following reliability.
-  // The parser-level catch-all in the step execution loop serves as the final safety net,
-  // but prompt hardening here reduces format violation frequency at the source.
   static const String researchSystemPrompt = """ROLE: Research agent. You are running one phase of a multi-step research plan.
 Your task is to gather enough relevant information to fully address the phase's prompt.
 You have the following tools available:
 1. Web Search: Output <search_request>your query</search_request> to get a list of search results.
-   Example: <search_request>termux git setup tutorial</search_request>
-2. Fetch Page: Output <read_url>URL</read_url> to fetch page content. Note that when Deep Research is enabled, fetching a page automatically ingests the content into a local RAG database, and you will only see ingestion stats (like new_chunks_added and novelty_ratio) rather than the raw page text to preserve context space.
+   To configure search parameters, you can add optional XML attributes:
+   - topic: "general" (default) or "news" (specifically for news articles, applying recency-weighted ranking).
+   - time_range: "day" / "d", "week" / "w", "month" / "m", or "year" / "y" to limit search results to a specific timeframe.
+   - start_date / end_date: specific date bounds (e.g. YYYY-MM-DD).
+   - search_depth: "basic" (default, fast/credit-friendly) or "advanced" (thorough/expensive).
+   Examples:
+   - Recent query: <search_request time_range="month" topic="news">latest SWE-bench scores 2026</search_request>
+   - Date-bounded query: <search_request start_date="2026-07-01" end_date="2026-07-15">termux release issues</search_request>
+   - Foundational query: <search_request>how does symlink work in android termux</search_request>
+2. Fetch Page: Output <read_url>URL</read_url> to fetch page content in depth.
    Example: <read_url>https://example.com/git-guide</read_url>
 
-CRITICAL DIRECTIVE: You MUST maximize the use of the Fetch Page (<read_url>) tool. Do NOT rely solely on search snippets. For every search query you run, you must fetch and read the contents of multiple relevant URLs using `<read_url>` to build a deep, high-coverage knowledge base. Aim to read as many source links as reasonable before marking a phase complete.
+TOOL LIMITS PER PHASE:
+1. You may call web_search up to 20 times and read_url up to 5 times within a single research phase. These are hard limits enforced by the system — once reached, further calls will be rejected with a limit-reached message.
+2. Functional Difference:
+   - web_search returns short snippets across many sources cheaply. Use it for breadth/surveying to find candidate sources.
+   - read_url fetches and summarizes one full page in depth. It is expensive and capped low, so use it selectively for depth on your best 5 leads only. Do not treat them interchangeably.
+3. PDF Exclusions: PDFs are not supported by read_url and will be automatically skipped — prefer HTML sources when a choice exists.
 
-CRITICAL FORMATTING RULE: You MUST always invoke web_search and read_url tools using the dedicated <search_request> and <read_url> tags respectively. Never wrap them in <mcp_request> tags. Only use <mcp_request> for other methods (like deep_research.retrieve).
+CRITICAL DIRECTIVES:
+1. You MUST invoke web_search and read_url tools using the dedicated <search_request> and <read_url> tags.
+2. Do NOT invent alternative tool-call syntaxes. Use ONLY the exact XML tag formats shown above.
+3. You must run searches and fetches iteratively.
+4. Selection of Search parameters:
+   - For recent/current-events-flavored queries (product releases, benchmark results, pricing, "latest", "current", "2026"), default to time_range="month" or topic="news".
+   - For general/foundational/definitional queries (explaining a concept, historical background), omit time_range entirely to avoid artificially excluding older-but-still-correct foundational sources.
+5. Once you have collected enough info for this phase, output <step_complete/> to finish the phase.
+6. You can output multiple `<search_request>` tags (or multiple `<read_url>` tags) in a single response to execute them in parallel. Do not mix search and read url tags in the same message. Wait for the user response after each action.""";
 
-NEGATIVE RULE: Do NOT invent alternative tool-call syntaxes such as call:read_url{url: "..."} or call:web_search{query: "..."} or any other curly-brace or prefix-based format. Use ONLY the exact XML tag formats demonstrated in the examples above.
+  static const String summarizerSystemPrompt = """ROLE: Summarization agent.
+Extract information from the provided source. Output ONLY a valid JSON object matching the schema below.
+Rules:
+1. Extract only FACT records for numeric/named/comparable claims (such as benchmark scores, dates, prices, version numbers, named comparisons).
+   Format of each FACT record:
+   {
+     "metric": "<name>",
+     "subject": "<entity>",
+     "value": "<value>",
+     "date": "<date or null>",
+     "source": "<url>"
+   }
+2. Extract FINDING records for qualitative content (arguments, explanations, context). Each FINDING must be capped at 1-2 sentences, tightly compressed, citing the source URL.
+   Format of each FINDING record:
+   {
+     "text": "<1-2 sentences qualitative content>",
+     "source": "<url>"
+   }
+3. NEVER include a comparative claim ("better than", "outperforms", "leading", "the best", etc.) inside a single-source summary. Comparisons are only valid across multiple records sharing the exact same metric, and will be compiled later.
+4. Be strictly literal to what the source actually states — no inference, no filling gaps, no adding context.
+5. If the source is empty or has no relevant info, return empty arrays.
 
-You must run searches and fetches iteratively.
-If the novelty ratio of your fetches is consistently low (e.g. less than 0.15), it means you have saturated this query angle and should try a different search query or wrap up.
-Once you have collected enough info for this phase, output <step_complete/> to finish the phase.
-You can output multiple `<search_request>` tags (or multiple `<read_url>` tags) in a single response to execute them in parallel and speed up research. Do not mix search and read url tags in the same message. Wait for the user response after each action.""";
-
-  static const String synthesisSystemPrompt = """ROLE: Synthesis agent. You do not see raw chunk text, ever. Tool: deep_research.retrieve(stage_id, query) -> {chunks_written, avg_score} only.
-For each completed stage, generate a set of specific questions that fully cover that stage's goal (as many as needed, no cap). Call deep_research.retrieve for each question. Continue until every stage's questions are exhausted. Do not attempt to summarize or answer — your only output is the sequence of tool calls plus a final confirmation once all stages are done.
-To call the retrieve tool, emit it as an MCP tool request:
-<mcp_request>
+Expected JSON output format:
 {
-  "method": "deep_research.retrieve",
-  "params": {
-    "stage_id": "stage1",
-    "query": "your synthesis query"
-  }
+  "facts": [ ... ],
+  "findings": [ ... ]
 }
-</mcp_request>
-Once all stages have been synthesized, output <synthesis_complete/>.""";
+No other text, explanations, or Markdown code blocks outside the JSON.""";
 
-  static const String writerSystemPrompt = """ROLE: Writer. Input: full temp.json content (all stages/queries/chunks).
-Read every chunk. Decide a hierarchical document structure: Chapter per stage (or merge/split stages into logical chapters if that reads better), subsections (1.1, 1.2, ...) per sub-topic within a chapter, grounded in the actual chunks retrieved. Write the final research document as Markdown with proper chapter/subsection headers. Do not fabricate claims not supported by temp.json content. Ensure you write detailed paragraphs for each section.""";
+  static const String reflectorSystemPrompt = """ROLE: Research Sufficiency Judger.
+You are given a research phase goal and the facts & findings gathered so far in this phase.
+Your task is to judge if the gathered information is sufficient to fully address the phase goal.
+Output ONLY a JSON object:
+{
+  "sufficient": true | false,
+  "reason": "<short explanation>"
+}
+Do not include any other text or Markdown code blocks.""";
+
+  static const String writerSystemPrompt = """ROLE: Writer.
+Input: full temp.json content (all phases containing phase_title, facts, findings, skipped_pdfs, failed_fetches).
+Read all facts and findings. Decide a hierarchical document structure: Chapter per stage, subsections (1.1, 1.2, ...) per sub-topic. Write the final research document as Markdown with proper chapter/subsection headers.
+
+CRITICAL GUARDRAIL:
+You may only state a comparison between two subjects if two or more FACT records in the evidence share the exact same metric name. In that case, state only the numeric comparison as given by the records (e.g. 'X scored 92% vs Y's 88% on SWE-bench-Verified') — do not add qualitative judgment language ('significantly better', 'clearly superior') beyond what the numbers themselves show. Never invent a comparison, ranking, or superiority claim not directly supported by two or more matching FACT records. If only one data point exists for a metric, state it standalone without comparison.
+
+Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). List all sources at the end.""";
 }
 
 class ChatHomePage extends StatefulWidget {
@@ -349,62 +391,164 @@ class _ChatHomePageState extends State<ChatHomePage> {
     DriveSyncService.syncToDrive(_sessions);
   }
 
-  Future<Map<String, dynamic>> _ingestDeepResearch({
-    required String stageId,
-    required String queryId,
-    required String sourceUrl,
-    required String text,
-  }) async {
-    final payload = Map<String, String>.unmodifiable({
-      'stage_id': stageId,
-      'query_id': queryId,
-      'source_url': sourceUrl,
-      'text': text,
-    });
-    if (payload.values.any((value) => value.trim().isEmpty)) {
-      throw ArgumentError('stage_id, query_id, source_url, and text are required');
+
+
+  Future<void> _resetDeepResearch() async {
+    final endpoint = _customMcpUrl.isNotEmpty ? _customMcpUrl : 'http://127.0.0.1:8390/mcp';
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final request = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 15));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({
+        'method': 'deep_research.reset',
+        'params': <String, dynamic>{},
+      }));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(const Duration(seconds: 15));
+      await response.transform(utf8.decoder).join();
+    } catch (e) {
+      debugPrint("Failed to reset deep research on bridge: $e");
+    } finally {
+      client.close(force: true);
     }
-    return _ingestSemaphore.run(() async {
-      final endpoint = _customMcpUrl.isNotEmpty
-          ? _customMcpUrl
-          : 'http://127.0.0.1:8390/mcp';
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 120);
-      try {
-        final request = await client
-            .postUrl(Uri.parse(endpoint))
-            .timeout(const Duration(seconds: 120));
-        request.headers.contentType = ContentType.json;
-        final bytes = utf8.encode(jsonEncode({
-          'method': 'deep_research.ingest',
-          'params': payload,
-        }));
-        request.headers.contentLength = bytes.length;
-        request.add(bytes);
-        final response = await request.close().timeout(
-          const Duration(seconds: 120),
-        );
-        final body = await response
-            .transform(utf8.decoder)
-            .join()
-            .timeout(const Duration(seconds: 120));
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw HttpException('HTTP ${response.statusCode}: $body');
+  }
+
+  Future<void> _updateDeepResearchPhase({
+    required String stageId,
+    required String phaseTitle,
+    required List<dynamic> facts,
+    required List<dynamic> findings,
+    required List<dynamic> skippedPdfs,
+    required List<dynamic> failedFetches,
+  }) async {
+    final endpoint = _customMcpUrl.isNotEmpty ? _customMcpUrl : 'http://127.0.0.1:8390/mcp';
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
+    try {
+      final request = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 30));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({
+        'method': 'deep_research.update_phase',
+        'params': {
+          'stage_id': stageId,
+          'phase_title': phaseTitle,
+          'facts': facts,
+          'findings': findings,
+          'skipped_pdfs': skippedPdfs,
+          'failed_fetches': failedFetches,
+        },
+      }));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(const Duration(seconds: 30));
+      await response.transform(utf8.decoder).join();
+    } catch (e) {
+      debugPrint("Failed to update deep research phase on bridge: $e");
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>> _summarizeSourceInline({
+    required String sourceUrl,
+    required String content,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+  }) async {
+    final summarizerMessages = [
+      const ChatMessage(
+        role: MessageRole.system,
+        text: DeepResearchPrompts.summarizerSystemPrompt,
+      ),
+      ChatMessage(
+        role: MessageRole.user,
+        text: "Source URL: $sourceUrl\n\nSource Content:\n$content",
+      ),
+    ];
+    try {
+      final responseText = await _chatClient.sendChat(
+        provider: provider,
+        settings: settings,
+        model: model,
+        messages: summarizerMessages,
+      );
+      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(responseText);
+      if (jsonMatch != null) {
+        final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
+        final List<dynamic> rawFacts = parsed['facts'] is List ? parsed['facts'] : [];
+        final List<dynamic> rawFindings = parsed['findings'] is List ? parsed['findings'] : [];
+        final List<Map<String, dynamic>> facts = [];
+        for (final item in rawFacts) {
+          if (item is Map) {
+            facts.add({
+              'metric': item['metric']?.toString() ?? '',
+              'subject': item['subject']?.toString() ?? '',
+              'value': item['value']?.toString() ?? '',
+              'date': item['date']?.toString() ?? '',
+              'source': sourceUrl,
+            });
+          }
         }
-        final decoded = jsonDecode(body);
-        if (decoded is! Map<String, dynamic>) {
-          throw const FormatException('Invalid deep research response');
+        final List<Map<String, dynamic>> findings = [];
+        for (final item in rawFindings) {
+          if (item is Map) {
+            findings.add({
+              'text': item['text']?.toString() ?? '',
+              'source': sourceUrl,
+            });
+          }
         }
-        final result = decoded['result'];
-        if (result is Map<String, dynamic>) return result;
-        if (decoded['error'] != null) {
-          throw HttpException(decoded['error'].toString());
-        }
-        throw const FormatException('Missing deep research result');
-      } finally {
-        client.close(force: true);
+        return {'facts': facts, 'findings': findings};
       }
-    });
+    } catch (e) {
+      debugPrint("Inline summarization failed for $sourceUrl: $e");
+    }
+    return {'facts': [], 'findings': []};
+  }
+
+  Future<bool> _checkResearchSufficiency({
+    required String phaseGoal,
+    required List<Map<String, dynamic>> facts,
+    required List<Map<String, dynamic>> findings,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+  }) async {
+    if (facts.isEmpty && findings.isEmpty) return false;
+    final factsText = facts.map((f) => "Fact: metric=${f['metric']} | subject=${f['subject']} | value=${f['value']} | source=${f['source']}").join("\n");
+    final findingsText = findings.map((f) => "Finding: ${f['text']} (source=${f['source']})").join("\n");
+    final prompt = "Phase Goal/Prompt: $phaseGoal\n\n"
+        "Facts gathered so far:\n$factsText\n\n"
+        "Findings gathered so far:\n$findingsText\n\n"
+        "Based ONLY on the facts and findings above, have we gathered sufficient information to address the phase goal/prompt?\n"
+        "Respond with a JSON object: {\"sufficient\": true | false, \"reason\": \"<short explanation>\"}";
+    final messages = [
+      const ChatMessage(
+        role: MessageRole.system,
+        text: DeepResearchPrompts.reflectorSystemPrompt,
+      ),
+      ChatMessage(
+        role: MessageRole.user,
+        text: prompt,
+      ),
+    ];
+    try {
+      final responseText = await _chatClient.sendChat(
+        provider: provider,
+        settings: settings,
+        model: model,
+        messages: messages,
+      );
+      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(responseText);
+      if (jsonMatch != null) {
+        final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
+        return parsed['sufficient'] == true;
+      }
+    } catch (e) {
+      debugPrint("Sufficiency reflection check failed: $e");
+    }
+    return false;
   }
 
   Future<String> _exportDeepResearchTemp() async {
@@ -1787,34 +1931,18 @@ For every project, maintain a README.md at the project root.
                 text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
               }
 
-              if (_deepResearchEnabled) {
-                try {
-                  final result = await _ingestDeepResearch(
-                    stageId: 'stage1',
-                    queryId: 'query1',
-                    sourceUrl: targetUrl,
-                    text: text,
-                  );
-                  urlResult = jsonEncode(result);
-                } catch (e) {
-                  urlResult = 'Ingest failed (content was fetched successfully as ${isPdf ? "PDF" : "HTML"}): $e';
-                }
-              } else {
-                urlResult = text;
-                if (urlResult.length > 8000) {
-                  urlResult =
-                      urlResult.substring(0, 8000) +
-                      '\n\n...[truncated due to length]';
-                }
+              urlResult = text;
+              if (urlResult.length > 8000) {
+                urlResult =
+                    urlResult.substring(0, 8000) +
+                    '\n\n...[truncated due to length]';
               }
             } catch (e) {
               urlResult = 'Error fetching URL: $e';
             }
             if (mounted) setState(() => _toolStatus = '');
             toolOutputs.add(
-              _deepResearchEnabled
-                  ? "Deep research ingest for '$url':\n\n$urlResult"
-                  : "Content of URL '$url':\n\n$urlResult",
+              "Content of URL '$url':\n\n$urlResult",
             );
           }
         }
@@ -2847,82 +2975,7 @@ For every project, maintain a README.md at the project root.
     return result;
   }
 
-  Future<void> _autoIngestSearchResults({
-    required String stageId,
-    required String queryId,
-    required List<String> urls,
-  }) async {
-    final availableRam = await _getSystemAvailableRamBytes();
-    final bool lowMemory = availableRam < 300 * 1024 * 1024; // Less than 300MB
-    final int activeFetchConcurrency = lowMemory ? 1 : maxConcurrentFetchCalls;
 
-    final batchSize = activeFetchConcurrency;
-    for (var i = 0; i < urls.length; i += batchSize) {
-      final end = (i + batchSize < urls.length) ? i + batchSize : urls.length;
-      final batch = urls.sublist(i, end);
-
-      await Future.wait(batch.map((url) async {
-        try {
-          var targetUrl = url.trim();
-          if (targetUrl.isEmpty) return;
-          final normUrl = _normalizeQueryOrUrl(targetUrl);
-          if (_runUrlCache.containsKey(normUrl)) {
-            debugPrint("Auto-ingest skipped duplicate URL in run cache: $targetUrl");
-            return;
-          }
-
-          if (!targetUrl.startsWith('http')) {
-            targetUrl = 'https://$targetUrl';
-          }
-
-          final client = HttpClient()
-            ..findProxy = ((uri) => "DIRECT")
-            ..connectionTimeout = const Duration(seconds: 8);
-          final request = await client.getUrl(Uri.parse(targetUrl));
-          final response = await request.close();
-
-          if (response.statusCode >= 200 && response.statusCode < 300) {
-            final isPdf = targetUrl.toLowerCase().endsWith('.pdf') ||
-                (response.headers.contentType?.mimeType == 'application/pdf');
-
-            String text = '';
-            if (isPdf) {
-              final bytesBuilder = BytesBuilder();
-              await for (final chunk in response) {
-                bytesBuilder.add(chunk);
-              }
-              final bytes = bytesBuilder.takeBytes();
-              final PdfDocument document = PdfDocument(inputBytes: bytes);
-              text = PdfTextExtractor(document).extractText();
-              document.dispose();
-            } else {
-              text = await response.transform(utf8.decoder).join();
-              text = text.replaceAll(RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false), '');
-              text = text.replaceAll(RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false), '');
-              text = text.replaceAll(RegExp(r'<[^>]*>'), ' ');
-              text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-            }
-
-            if (text.isNotEmpty) {
-              final result = await _ingestDeepResearch(
-                stageId: stageId,
-                queryId: queryId,
-                sourceUrl: targetUrl,
-                text: text,
-              );
-              _runUrlCache[normUrl] = {
-                'text': text,
-                'isPdf': isPdf,
-                'result': result,
-              };
-            }
-          }
-        } catch (e) {
-          debugPrint("Auto-ingest failed for $url: $e");
-        }
-      }));
-    }
-  }
 
   /// Returns a human-readable status label for a tool call, e.g.:
   ///   "📖 Reading main.dart lines 10–50"
@@ -3215,1690 +3268,955 @@ For every project, maintain a README.md at the project root.
     required String model,
   }) async {
     _runUrlCache.clear();
+    final Set<String> runFetchedUrls = {};
+    final Map<String, Map<String, dynamic>> runUrlSummaries = {};
+
     try {
-      final steps = stateMap['steps'] as List;
-    final fileName = _getResearchFileName(_sessions[sessionIndex].title);
-    final currentDateStr = DateTime.now().toString().substring(0, 10);
+      await _resetDeepResearch();
 
-    String originalUserPrompt = '';
-    if (messageIndex > 0 && messageIndex - 1 < _sessions[sessionIndex].messages.length) {
-      originalUserPrompt = _sessions[sessionIndex].messages[messageIndex - 1].text;
-    }
+      final activeSession = _sessions[sessionIndex];
+      final prompt = activeSession.messages[messageIndex - 1].text;
 
-    final systemPrompt = _deepResearchEnabled
-        ? "${DeepResearchPrompts.researchSystemPrompt}\n\n"
-          "OVERALL RESEARCH GOAL & CONTEXT:\n"
-          "The user's original query/goal is:\n"
-          "\"$originalUserPrompt\"\n\n"
-          "Keep this overall objective in mind while executing the specific phase instructions. "
-          "Use the overall context to align your searches, filter irrelevant information, and ensure you do not miss requirements."
-        : "";
+      // ── STAGE 1: PLANNING ──
+      stateMap['status'] = 'planning';
+      stateMap['plan_start_ms'] = DateTime.now().millisecondsSinceEpoch;
+      _publishResearchState(sessionIndex, messageIndex, stateMap);
 
-    // We maintain a single continuous conversation context for the entire research process
-    List<ChatMessage> stepMessages = [
-      if (systemPrompt.isNotEmpty)
-        ChatMessage(role: MessageRole.system, text: systemPrompt),
-    ];
+      final List<ChatMessage> plannerMessages = [
+        const ChatMessage(
+          role: MessageRole.system,
+          text: DeepResearchPrompts.plannerSystemPrompt,
+        ),
+        ChatMessage(
+          role: MessageRole.user,
+          text: "Analyze the user's research request and output a detailed research plan. "
+              "Research Request: \"$prompt\"",
+        ),
+      ];
 
-    stateMap['plan_start_ms'] ??= DateTime.now().millisecondsSinceEpoch;
-    const Duration globalTimeBudget = Duration(minutes: 45);
-    Duration getGlobalElapsed() {
-      final start = stateMap['plan_start_ms'] as int? ?? DateTime.now().millisecondsSinceEpoch;
-      return Duration(milliseconds: DateTime.now().millisecondsSinceEpoch - start);
-    }
+      String planText = '';
+      String plannerReasoning = '';
+      final plannerStream = _chatClient.sendChatStream(
+        provider: provider,
+        settings: settings,
+        model: model,
+        messages: _compactHistoryForApi(plannerMessages, plannerMessages.length),
+      );
 
-    for (int i = 0; i < steps.length; i++) {
-      if (getGlobalElapsed() > globalTimeBudget) {
-        steps[i]['status'] = 'failed';
-        steps[i]['error'] = 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
-        continue;
+      await for (final chunk in plannerStream) {
+        if (chunk.startsWith('[REASONING]')) {
+          plannerReasoning += chunk.substring(11);
+        } else {
+          var textChunk = chunk;
+          if (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>')) {
+            textChunk = textChunk.replaceAll(RegExp(r'<think>|<reasoning>|<thought>|</think>|</reasoning>|</thought>'), '');
+          }
+          planText += textChunk;
+        }
       }
-      if (!mounted) return;
-      steps[i]['status'] = 'running';
-      steps[i]['events'] ??= <Map<String, dynamic>>[];
-      setState(() {
-        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-        msgs[messageIndex] = ChatMessage(
-          role: MessageRole.assistant,
-          text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-          reasoning: msgs[messageIndex].reasoning,
-        );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-          messages: msgs,
-        );
-      });
 
-      final stepPrompt =
-          "Research Phase ${i + 1}: ${steps[i]['title']}\nInstructions: ${steps[i]['prompt']}";
-      stepMessages.add(ChatMessage(role: MessageRole.user, text: stepPrompt));
+      final List<Map<String, dynamic>> steps = [];
+      final stepMatches = RegExp(r'<step\b[^>]*title="([^"]+)"[^>]*>(.*?)</step>', dotAll: True).allMatches(planText);
+      
+      int stepIdx = 1;
+      for (final match in stepMatches) {
+        final title = match.group(1) ?? 'Step $stepIdx';
+        final queryText = match.group(2)?.trim() ?? '';
+        steps.add({
+          'id': 'step_$stepIdx',
+          'title': title,
+          'query_text': queryText,
+          'status': 'pending',
+          'content': '',
+          'events': <Map<String, dynamic>>[],
+        });
+        stepIdx++;
+      }
 
-     String stepContent = '';
-     int loopCount = 0;
-     int consecutive429s = 0;
-     bool stepDone = false;
-      bool stepFailed = false;
-      String? stepFailure;
+      if (steps.isEmpty) {
+        steps.add({
+          'id': 'step_1',
+          'title': 'General Research',
+          'query_text': prompt,
+          'status': 'pending',
+          'content': '',
+          'events': <Map<String, dynamic>>[],
+        });
+      }
 
-      final Map<String, String> stepSearchCache = {};
-      final Map<String, Map<String, dynamic>> stepUrlCache = _runUrlCache;
-      int zeroNoveltyStreak = 0;
-      int consecutiveMalformedTags = 0;
+      stateMap['steps'] = steps;
+      stateMap['status'] = 'running';
+      _publishResearchState(sessionIndex, messageIndex, stateMap);
 
-      String normalizeQueryOrUrl(String input) => _normalizeQueryOrUrl(input);
-      final stepEvents = steps[i]['events'] as List;
-      var nextEventSequence = stepEvents.length;
+      // ── STAGE 2: MULTI-AGENT EXECUTION ──
+      final int maxConcurrentFetchCalls = _deepResearchConcurrency;
+      final Duration globalTimeBudget = Duration(minutes: _deepResearchTimeoutMinutes);
+      final DateTime startTime = DateTime.now();
 
-      // Events are written twice: once before dispatch so the UI can show a
-      // running operation, then in place when that same operation terminates.
-      String beginResearchEvent({
-        required String kind,
-        required String tool,
-        String? query,
-        String? url,
-      }) {
-        final eventId = 'step-${i + 1}-event-${++nextEventSequence}';
-        final event = <String, dynamic>{
-          'id': eventId,
-          'kind': kind,
-          'tool': tool,
-          'status': 'running',
-          if (query != null && query.isNotEmpty) 'query': query,
-          if (url != null && url.isNotEmpty) 'url': url,
+      DateTime getGlobalElapsed() {
+        return DateTime.now();
+      }
+
+      final List<Map<String, dynamic>> phaseFacts = [];
+      final List<Map<String, dynamic>> phaseFindings = [];
+      final List<Map<String, dynamic>> phaseSkippedPdfs = [];
+      final List<Map<String, dynamic>> phaseFailedFetches = [];
+
+      for (int i = 0; i < steps.length; i++) {
+        final stageId = steps[i]['id'] as String;
+        final phaseTitle = steps[i]['title'] as String;
+        final queryText = steps[i]['query_text'] as String;
+
+        if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
+          steps[i]['status'] = 'failed';
+          steps[i]['error'] = 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+          _publishResearchState(sessionIndex, messageIndex, stateMap);
+          continue;
+        }
+
+        steps[i]['status'] = 'running';
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
+
+        final String Function({
+          required String kind,
+          required String tool,
+          String? query,
+          String? url,
+        }) beginResearchEvent = ({
+          required String kind,
+          required String tool,
+          String? query,
+          String? url,
+        }) {
+          final eventId = 'evt_${DateTime.now().millisecondsSinceEpoch}_${StackTrace.current.hashCode}';
+          final newEvent = {
+            'id': eventId,
+            'kind': kind,
+            'tool': tool,
+            'status': 'running',
+            if (query != null) 'query': query,
+            if (url != null) 'url': url,
+            'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
+          };
+          
+          setState(() {
+            final idx = (stateMap['steps'] as List).indexWhere((s) => s['id'] == stageId);
+            if (idx != -1) {
+              final evts = List<Map<String, dynamic>>.from(stateMap['steps'][idx]['events'] ?? []);
+              evts.add(newEvent);
+              stateMap['steps'][idx]['events'] = evts;
+            }
+          });
+          _publishResearchState(sessionIndex, messageIndex, stateMap);
+          return eventId;
         };
-        stepEvents.add(event);
-        if (kind == 'mcp') {
-          debugPrint(
-            '[event-fallback] id=${event['id']} tool=${event['tool']} kind=${event['kind']}',
-          );
-        }
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
-        return eventId;
-      }
 
-      void finishResearchEvent(
-        String eventId, {
-        required String status,
-        required Stopwatch stopwatch,
-        Map<String, dynamic> details = const {},
-        String? error,
-      }) {
-        final event = stepEvents.cast<Map>().firstWhere(
-          (candidate) => candidate['id'] == eventId,
-        );
-        event
-          ..['status'] = status
-          ..['latency_ms'] = stopwatch.elapsedMilliseconds
-          ..addAll(details);
-        if (error != null && error.isNotEmpty) event['error'] = error;
-        if (status == 'error') {
-          debugPrint(
-            '[event-error-transition] id=${event['id']} tool=${event['tool']} error=${event['error']}',
-          );
-        }
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
-      }
+        final void Function(
+          String eventId, {
+          required String status,
+          required Stopwatch stopwatch,
+          Map<String, dynamic>? details,
+          String? error,
+        }) finishResearchEvent = (
+          String eventId, {
+          required String status,
+          required Stopwatch stopwatch,
+          Map<String, dynamic>? details,
+          String? error,
+        }) {
+          stopwatch.stop();
+          setState(() {
+            final idx = (stateMap['steps'] as List).indexWhere((s) => s['id'] == stageId);
+            if (idx != -1) {
+              final evts = List<Map<String, dynamic>>.from(stateMap['steps'][idx]['events'] ?? []);
+              final eIdx = evts.indexWhere((e) => e['id'] == eventId);
+              if (eIdx != -1) {
+                final updated = Map<String, dynamic>.from(evts[eIdx]);
+                updated['status'] = status;
+                updated['latency_ms'] = stopwatch.elapsedMilliseconds;
+                if (details != null) {
+                  updated.addAll(details);
+                }
+                if (error != null) {
+                  updated['error'] = error;
+                }
+                evts[eIdx] = updated;
+                stateMap['steps'][idx]['events'] = evts;
+              }
+            }
+          });
+          _publishResearchState(sessionIndex, messageIndex, stateMap);
+        };
 
-      void updateResearchEventStatus(
-        String eventId,
-        String status, {
-        Map<String, dynamic>? details,
-      }) {
-        final event = stepEvents.cast<Map>().firstWhere(
-          (candidate) => candidate['id'] == eventId,
-        );
-        event['status'] = status;
-        if (details != null) {
-          event.addAll(details);
-        }
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
-      }
+        final void Function(
+          String eventId,
+          String status, {
+          Map<String, dynamic>? details,
+        }) updateResearchEventStatus = (
+          String eventId,
+          String status, {
+          Map<String, dynamic>? details,
+        }) {
+          setState(() {
+            final idx = (stateMap['steps'] as List).indexWhere((s) => s['id'] == stageId);
+            if (idx != -1) {
+              final evts = List<Map<String, dynamic>>.from(stateMap['steps'][idx]['events'] ?? []);
+              final eIdx = evts.indexWhere((e) => e['id'] == eventId);
+              if (eIdx != -1) {
+                final updated = Map<String, dynamic>.from(evts[eIdx]);
+                updated['status'] = status;
+                if (details != null) {
+                  updated.addAll(details);
+                }
+                evts[eIdx] = updated;
+                stateMap['steps'][idx]['events'] = evts;
+              }
+            }
+          });
+          _publishResearchState(sessionIndex, messageIndex, stateMap);
+        };
 
-      final stepWatch = Stopwatch()..start();
-      int totalLlmMs = 0;
-      int totalToolMs = 0;
+        final List<ChatMessage> stepMessages = [
+          const ChatMessage(
+            role: MessageRole.system,
+            text: DeepResearchPrompts.researchSystemPrompt,
+          ),
+          ChatMessage(
+            role: MessageRole.user,
+            text: "Your current research stage is: \"$phaseTitle\"\n"
+                "Focus Area Instructions: $queryText\n\n"
+                "Please formulate search queries or read specific URLs to gather evidence. "
+                "Citing specific metrics, comparisons, and sources in your final response. "
+                "When you are finished, write a concise summary of your findings and emit <step_complete/>.",
+          ),
+        ];
 
-     while (!stepDone && loopCount < 30) {
-        if (getGlobalElapsed() > globalTimeBudget) {
-          stepDone = true;
-          stepFailed = true;
-          stepFailure = 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
-          break;
-        }
-        if (!mounted) return;
-        loopCount++;
+        bool stepDone = false;
+        bool stepFailed = false;
+        String? stepFailure;
+        int loopCount = 0;
+        int webSearchCount = 0;
+        int readUrlCount = 0;
+        int consecutiveMalformedTags = 0;
+        final Map<String, String> stepSearchCache = {};
+        String stepContent = '';
 
-        final turnWatch = Stopwatch()..start();
-        try {
+        while (!stepDone && loopCount < 30) {
+          if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
+            stepDone = true;
+            stepFailed = true;
+            stepFailure = 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+            break;
+          }
+          if (!mounted) return;
+          loopCount++;
+
+          final turnWatch = Stopwatch()..start();
           String responseText = '';
           String reasoningText = '';
           var isThinking = false;
 
-          final stream = _chatClient.sendChatStream(
-            provider: provider,
-            settings: settings,
-            model: model,
-            messages: _compactHistoryForApi(stepMessages, stepMessages.length),
-          );
+          try {
+            final stream = _chatClient.sendChatStream(
+              provider: provider,
+              settings: settings,
+              model: model,
+              messages: _compactHistoryForApi(stepMessages, stepMessages.length),
+            );
 
-          await for (final chunk in stream) {
-            if (chunk.startsWith('[REASONING]')) {
-              reasoningText += chunk.substring(11);
-            } else {
-              var textChunk = chunk;
-
-              if (!isThinking &&
-                  (textChunk.contains('<think>') ||
-                      textChunk.contains('<reasoning>') ||
-                      textChunk.contains('<thought>'))) {
-                final tag = textChunk.contains('<think>')
-                    ? '<think>'
-                    : textChunk.contains('<thought>')
-                    ? '<thought>'
-                    : '<reasoning>';
-                final parts = textChunk.split(tag);
-                responseText += parts[0];
-                isThinking = true;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-              }
-
-              if (isThinking &&
-                  (textChunk.contains('</think>') ||
-                      textChunk.contains('</reasoning>') ||
-                      textChunk.contains('</thought>'))) {
-                final tag = textChunk.contains('</think>')
-                    ? '</think>'
-                    : textChunk.contains('</thought>')
-                    ? '</thought>'
-                    : '</reasoning>';
-                final parts = textChunk.split(tag);
-                reasoningText += parts[0];
-                isThinking = false;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-                responseText += textChunk;
-              } else if (isThinking) {
-                reasoningText += textChunk;
+            await for (final chunk in stream) {
+              if (chunk.startsWith('[REASONING]')) {
+                reasoningText += chunk.substring(11);
               } else {
-                responseText += textChunk;
+                var textChunk = chunk;
+                if (!isThinking &&
+                    (textChunk.contains('<think>') ||
+                        textChunk.contains('<reasoning>') ||
+                        textChunk.contains('<thought>'))) {
+                  final tag = textChunk.contains('<think>')
+                      ? '<think>'
+                      : textChunk.contains('<thought>')
+                      ? '<thought>'
+                      : '<reasoning>';
+                  final parts = textChunk.split(tag);
+                  responseText += parts[0];
+                  isThinking = true;
+                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                }
+
+                if (isThinking &&
+                    (textChunk.contains('</think>') ||
+                        textChunk.contains('</reasoning>') ||
+                        textChunk.contains('</thought>'))) {
+                  final tag = textChunk.contains('</think>')
+                      ? '</think>'
+                      : textChunk.contains('</thought>')
+                      ? '</thought>'
+                      : '</reasoning>';
+                  final parts = textChunk.split(tag);
+                  reasoningText += parts[0];
+                  isThinking = false;
+                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                  responseText += textChunk;
+                } else if (isThinking) {
+                  reasoningText += textChunk;
+                } else {
+                  responseText += textChunk;
+                }
               }
             }
-          }
 
-          stepMessages.add(
-            ChatMessage(
-              role: MessageRole.assistant,
-              text: responseText,
-              reasoning: reasoningText,
-            ),
-          );
-          final llmMs = turnWatch.elapsedMilliseconds;
-          totalLlmMs += llmMs;
-          final toolWatch = Stopwatch()..start();
+            stepMessages.add(
+              ChatMessage(
+                role: MessageRole.assistant,
+                text: responseText,
+                reasoning: reasoningText,
+              ),
+            );
+            turnWatch.stop();
 
-          final unrecognizedErrors = <Map<String, dynamic>>[];
-          final preprocessedText = _preprocessUnrecognizedToolCalls(responseText, unrecognizedErrors);
+            final unrecognizedErrors = <Map<String, dynamic>>[];
+            final preprocessedText = _preprocessUnrecognizedToolCalls(responseText, unrecognizedErrors);
 
-          final searchMatches = RegExp(
-            r'<search_request>\s*([\s\S]*?)\s*</search_request>',
-            caseSensitive: false,
-            dotAll: true,
-          ).allMatches(preprocessedText).toList();
-          final readUrlMatches = RegExp(
-            r'<read_url>\s*([\s\S]*?)\s*</read_url>',
-            caseSensitive: false,
-            dotAll: true,
-          ).allMatches(preprocessedText).toList();
-          final mcpMatch = _findMcpMatch(preprocessedText);
-          bool isMalformed = unrecognizedErrors.isNotEmpty;
-          final hasRawSearchTag = preprocessedText.contains('<search_request') || preprocessedText.contains('</search_request');
-          final hasRawReadTag = preprocessedText.contains('<read_url') || preprocessedText.contains('</read_url');
-          final hasRawMcpTag = preprocessedText.contains('<mcp_request') || preprocessedText.contains('</mcp_request');
-          if ((hasRawSearchTag && searchMatches.isEmpty) ||
-              (hasRawReadTag && readUrlMatches.isEmpty) ||
-              (hasRawMcpTag && mcpMatch == null)) {
-            isMalformed = true;
-          }
-          if (mcpMatch != null) {
-            try {
-              final jsonString = mcpMatch.group(1)?.trim() ?? '';
-              jsonDecode(jsonString);
-            } catch (_) {
+            Map<String, String> parseSearchAttributes(String attrStr) {
+              final Map<String, String> attrs = {};
+              final matches = RegExp(r'(\w+)="([^"]*)"').allMatches(attrStr);
+              for (final m in matches) {
+                attrs[m.group(1)!.toLowerCase()] = m.group(2)!;
+              }
+              return attrs;
+            }
+
+            final searchMatches = RegExp(
+              r'<search_request\b([^>]*)>\s*([\s\S]*?)\s*</search_request>',
+              caseSensitive: false,
+              dotAll: true,
+            ).allMatches(preprocessedText).toList();
+
+            final readUrlMatches = RegExp(
+              r'<read_url>\s*([\s\S]*?)\s*</read_url>',
+              caseSensitive: false,
+              dotAll: true,
+            ).allMatches(preprocessedText).toList();
+
+            bool isMalformed = unrecognizedErrors.isNotEmpty;
+            final hasRawSearchTag = preprocessedText.contains('<search_request') || preprocessedText.contains('</search_request');
+            final hasRawReadTag = preprocessedText.contains('<read_url') || preprocessedText.contains('</read_url');
+
+            if ((hasRawSearchTag && searchMatches.isEmpty) || (hasRawReadTag && readUrlMatches.isEmpty)) {
               isMalformed = true;
             }
-          }
-          if (isMalformed) {
-            consecutiveMalformedTags++;
-            final eventWatch = Stopwatch()..start();
-            final eventId = beginResearchEvent(
-              kind: 'error',
-              tool: 'malformed_tag',
-            );
-            final String errMessage = unrecognizedErrors.isNotEmpty
-                ? unrecognizedErrors.map((e) => e['error']?.toString() ?? '').join('; ')
-                : 'Malformed tool call tag syntax detected in assistant response.';
-            finishResearchEvent(
-              eventId,
-              status: 'error',
-              stopwatch: eventWatch,
-              error: errMessage,
-            );
-            if (consecutiveMalformedTags >= 3) {
-              stepDone = true;
-              stepFailed = true;
-              stepFailure = 'Step failed after $consecutiveMalformedTags consecutive malformed tool calls, possible model incompatibility.';
-              stepContent = stepContent.isEmpty
-                  ? "⚠️ Step failed: $stepFailure"
-                  : "$stepContent\n\n⚠️ Step failed: $stepFailure";
-              break;
-            }
-            stepMessages.add(
-              ChatMessage(
-                role: MessageRole.user,
-                text: 'Error: Malformed or unclosed tool call tags detected. Please ensure all tags are properly formatted and closed (e.g. <search_request>query</search_request> or <read_url>URL</read_url>).',
-              ),
-            );
-            continue;
-          } else {
-            consecutiveMalformedTags = 0;
-          }
 
-          final completeMatch = RegExp(
-            r'<step_complete/?>',
-            caseSensitive: false,
-          ).firstMatch(responseText);
-          if (completeMatch != null) {
-            final contentClean = responseText
-                .replaceAll(
-                  RegExp(r'<step_complete/?>', caseSensitive: false),
-                  '',
-                )
-                .trim();
-            stepContent = stepContent.isEmpty
-                ? contentClean
-                : '$stepContent\n\n$contentClean';
-            stepDone = true;
-         } else if (searchMatches.isNotEmpty) {
-            final List<Future<String>> searchFutures = [];
-            final List<String> eventIds = [];
-            final List<Stopwatch> stopwatches = [];
-            final List<String> queries = [];
-
-            for (final match in searchMatches) {
-              final query = match.group(1)?.trim() ?? '';
-              queries.add(query);
+            if (isMalformed) {
+              consecutiveMalformedTags++;
               final eventWatch = Stopwatch()..start();
-              stopwatches.add(eventWatch);
-              final eventId = beginResearchEvent(
-                kind: 'search',
-                tool: 'web_search',
-                query: query,
-              );
-              eventIds.add(eventId);
-              stepContent = stepContent.isEmpty
-                  ? '<search_request>$query</search_request>'
-                  : '$stepContent\n\n<search_request>$query</search_request>';
-            }
-            steps[i]['content'] = stepContent;
-
-            if (mounted) {
-              setState(() {
-                final msgs = List<ChatMessage>.from(
-                  _sessions[sessionIndex].messages,
-                );
-                msgs[messageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-                  reasoning: msgs[messageIndex].reasoning,
-                );
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-                  messages: msgs,
-                );
-              });
-            }
-
-            for (var k = 0; k < searchMatches.length; k++) {
-              final query = queries[k];
-              final normQuery = normalizeQueryOrUrl(query);
-              if (stepSearchCache.containsKey(normQuery)) {
-                searchFutures.add(Future.value('Web search already attempted in this phase. (already_attempted: true)\n\n${stepSearchCache[normQuery]}'));
-              } else {
-                searchFutures.add(() async {
-                  try {
-                    final res = await _chatClient.searchWeb(
-                      query,
-                      _searchSettings.provider,
-                      [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
-                      googleCx: _searchSettings.googleCx,
-                    ).timeout(const Duration(seconds: 60));
-                    stepSearchCache[normQuery] = res;
-                    return res;
-                  } catch (e) {
-                    return 'Web search failed: $e';
-                  }
-                }());
-              }
-            }
-
-            final searchResults = await Future.wait(searchFutures);
-            final List<String> allUrls = [];
-            final StringBuffer combinedResults = StringBuffer();
-
-            for (var k = 0; k < searchMatches.length; k++) {
-              final query = queries[k];
-              final eventId = eventIds[k];
-              final eventWatch = stopwatches[k];
-              final searchResultRaw = searchResults[k];
-              final bool isDup = searchResultRaw.startsWith('Web search already attempted');
-
-              String searchResult = searchResultRaw;
-              if (searchResult.length > 4000) {
-                searchResult =
-                    searchResult.substring(0, 4000) + '\n\n...[truncated]';
-              }
-              final searchError = searchResult.startsWith('Web search failed:')
-                  ? searchResult
-                  : null;
-              final resultMatches = RegExp(
-                r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)',
-                multiLine: true,
-              ).allMatches(searchResult);
-
+              final eventId = beginResearchEvent(kind: 'error', tool: 'malformed_tag');
+              final String errMessage = unrecognizedErrors.isNotEmpty
+                  ? unrecognizedErrors.map((e) => e['error']?.toString() ?? '').join('; ')
+                  : 'Malformed tool call tag syntax detected in assistant response.';
+              
               finishResearchEvent(
                 eventId,
-                status: searchError == null ? 'done' : 'error',
-                stopwatch: isDup ? Stopwatch() : eventWatch,
-                details: {
-                  'result_count': resultMatches.length,
-                  if (isDup) 'already_attempted': true,
-                  'result_payload': _compactSearchPayload(
-                    resultMatches.map(
-                      (match) => {
-                        'title': match.group(1) ?? '',
-                        'url': match.group(2) ?? '',
-                        'snippet': match.group(3) ?? '',
-                      },
-                    ),
-                  ),
-                },
-                error: searchError,
+                status: 'error',
+                stopwatch: eventWatch,
+                error: errMessage,
               );
 
-              final List<String> urls = resultMatches
-                  .map((match) => match.group(2)?.trim() ?? '')
-                  .where((url) => url.isNotEmpty)
-                  .toList();
-              allUrls.addAll(urls);
-
-              combinedResults.writeln("Search results for '$query':\n$searchResult\n");
-            }
-
-            stepMessages.add(
-              ChatMessage(
-                role: MessageRole.user,
-                text: combinedResults.toString().trim(),
-              ),
-            );
-
-            // Fire auto-ingestion of search result URLs in background
-            // (non-blocking — overlaps with the next LLM turn)
-            if (_deepResearchEnabled && allUrls.isNotEmpty) {
-              final stageId = 'stage${i + 1}';
-              final queryId = 'query${loopCount}_autoingest';
-              // Don't await — let it run while LLM thinks
-              _autoIngestSearchResults(
-                stageId: stageId,
-                queryId: queryId,
-                urls: allUrls,
+              if (consecutiveMalformedTags >= 3) {
+                stepDone = true;
+                stepFailed = true;
+                stepFailure = 'Step failed after $consecutiveMalformedTags consecutive malformed tool calls.';
+                break;
+              }
+              stepMessages.add(
+                const ChatMessage(
+                  role: MessageRole.user,
+                  text: 'Error: Malformed or unclosed tool call tags detected. Please check tag syntax.',
+                ),
               );
-            }
-          } else if (readUrlMatches.isNotEmpty) {
-            final availableRam = await _getSystemAvailableRamBytes();
-            final bool lowMemory = availableRam < 300 * 1024 * 1024;
-            final int activeFetchConcurrency = lowMemory ? 1 : maxConcurrentFetchCalls;
-
-            final List<String> eventIds = [];
-            final List<Stopwatch> stopwatches = [];
-            final List<String> urls = [];
-
-            for (final match in readUrlMatches) {
-              final url = match.group(1)?.trim() ?? '';
-              urls.add(url);
-              final eventWatch = Stopwatch()..start();
-              stopwatches.add(eventWatch);
-              final eventId = beginResearchEvent(
-                kind: 'fetch',
-                tool: 'read_url',
-                url: url,
-              );
-              eventIds.add(eventId);
-              stepContent = stepContent.isEmpty
-                  ? '<read_url>$url</read_url>'
-                  : '$stepContent\n\n<read_url>$url</read_url>';
-            }
-            steps[i]['content'] = stepContent;
-
-            if (mounted) {
-              setState(() {
-                final msgs = List<ChatMessage>.from(
-                  _sessions[sessionIndex].messages,
-                );
-                msgs[messageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-                  reasoning: msgs[messageIndex].reasoning,
-                );
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-                  messages: msgs,
-                );
-              });
+              continue;
+            } else {
+              consecutiveMalformedTags = 0;
             }
 
-            final List<String> urlResults = List.filled(urls.length, '');
-            final fetchSemaphore = SimpleSemaphore(activeFetchConcurrency);
+            final completeMatch = RegExp(r'<step_complete/?>', caseSensitive: false).firstMatch(responseText);
 
-            bool batchAnyNovel = false;
-            int batchZeroNovelties = 0;
+            if (completeMatch != null) {
+              final contentClean = responseText.replaceAll(RegExp(r'<step_complete/?>', caseSensitive: false), '').trim();
+              stepContent = stepContent.isEmpty ? contentClean : '$stepContent\n\n$contentClean';
+              stepDone = true;
+            } else if (searchMatches.isNotEmpty) {
+              final List<Future<String>> searchFutures = [];
+              final List<String> eventIds = [];
+              final List<Stopwatch> stopwatches = [];
+              final List<String> queries = [];
+              final List<Map<String, String>> searchAttrsList = [];
 
-            // Pre-populate stepUrlCache with a sentinel for every URL in this
-            // parallel batch BEFORE launching Future.wait().  Without this,
-            // two identical URLs in the same batch both pass the isDup check
-            // simultaneously (the cache is empty when both goroutines read it),
-            // and both execute a full fetch+ingest pass (Part 6 fix).
-            final Map<String, int> _batchUrlIndices = {};
-            for (int k = 0; k < urls.length; k++) {
-              final normK = normalizeQueryOrUrl(urls[k]);
-              if (!stepUrlCache.containsKey(normK)) {
-                if (_batchUrlIndices.containsKey(normK)) {
-                  // Second+ occurrence of the same URL in this batch: mark as
-                  // duplicate so the parallel task short-circuits.
-                  stepUrlCache[normK] = <String, dynamic>{
-                    'text': '',
-                    'isPdf': false,
-                    'result': null,
-                    '_sentinel': true, // will be replaced by first completer
-                  };
+              for (final match in searchMatches) {
+                final attrsStr = match.group(1) ?? '';
+                final query = match.group(2)?.trim() ?? '';
+                queries.add(query);
+                final attrs = parseSearchAttributes(attrsStr);
+                searchAttrsList.add(attrs);
+
+                final eventWatch = Stopwatch()..start();
+                stopwatches.add(eventWatch);
+                final eventId = beginResearchEvent(
+                  kind: 'search',
+                  tool: 'web_search',
+                  query: query,
+                );
+                eventIds.add(eventId);
+                stepContent = stepContent.isEmpty
+                    ? '<search_request>$query</search_request>'
+                    : '$stepContent\n\n<search_request>$query</search_request>';
+              }
+
+              steps[i]['content'] = stepContent;
+              _publishResearchState(sessionIndex, messageIndex, stateMap);
+
+              bool searchCapHit = false;
+              for (var k = 0; k < searchMatches.length; k++) {
+                final query = queries[k];
+                final attrs = searchAttrsList[k];
+                final normQuery = normalizeQueryOrUrl(query);
+
+                // TOOL LIMITS PER PHASE:
+                // Capped at 20 web_search calls per research phase to focus the agent on high-relevance
+                // Tavily search queries rather than infinite querying loops. This matches the accuracy-over-depth
+                // priority of this project. If this limit is exceeded, we return a clear feedback message.
+                if (webSearchCount >= 20) {
+                  searchCapHit = true;
+                  final limitMsg = 'Search limit reached for this phase (20/20 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                  searchFutures.add(Future.value('Error: $limitMsg'));
+                  finishResearchEvent(eventIds[k], status: 'error', stopwatch: stopwatches[k], error: 'Web search limit exceeded.');
+                  continue;
+                }
+
+                webSearchCount++;
+                if (stepSearchCache.containsKey(normQuery)) {
+                  searchFutures.add(Future.value('Web search already attempted in this phase.\n\n${stepSearchCache[normQuery]}'));
                 } else {
-                  _batchUrlIndices[normK] = k;
+                  searchFutures.add(() async {
+                    try {
+                      final res = await _chatClient.searchWeb(
+                        query,
+                        _searchSettings.provider,
+                        [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
+                        googleCx: _searchSettings.googleCx,
+                        topic: attrs['topic'],
+                        timeRange: attrs['time_range'] ?? attrs['time-range'],
+                        startDate: attrs['start_date'] ?? attrs['start-date'],
+                        endDate: attrs['end_date'] ?? attrs['end-date'],
+                        searchDepth: attrs['search_depth'] ?? attrs['search-depth'] ?? 'basic',
+                      ).timeout(const Duration(seconds: 60));
+                      stepSearchCache[normQuery] = res;
+                      return res;
+                    } catch (e) {
+                      return 'Web search failed: $e';
+                    }
+                  }());
                 }
               }
-            }
 
-            await Future.wait(Iterable<int>.generate(urls.length).map((idx) async {
-              final url = urls[idx];
-              final eventId = eventIds[idx];
-              final eventWatch = stopwatches[idx];
-              var targetUrl = url;
-              String text = '';
-              String resVal = '';
-              bool isPdf = false;
-              bool fetchFailed = false;
+              final searchResults = await Future.wait(searchFutures);
+              final List<String> allUrls = [];
+              final StringBuffer combinedResults = StringBuffer();
 
-              final normUrl = normalizeQueryOrUrl(url);
-              final bool isDup = stepUrlCache.containsKey(normUrl);
+              for (var k = 0; k < searchMatches.length; k++) {
+                final query = queries[k];
+                final eventId = eventIds[k];
+                final eventWatch = stopwatches[k];
+                final searchResultRaw = searchResults[k];
+                final bool isCapError = searchResultRaw.startsWith('Error: Web search cap');
+                final bool isDup = searchResultRaw.startsWith('Web search already attempted');
 
-              if (isDup) {
-                final cached = stepUrlCache[normUrl]!;
-                final cachedResult = cached['result'] as Map<String, dynamic>?;
-                batchZeroNovelties++;
-                finishResearchEvent(
-                  eventId,
-                  status: 'done',
-                  stopwatch: Stopwatch(),
-                  details: {
-                    'url': targetUrl,
-                    'parse_format': cached['isPdf'] == true ? 'pdf' : 'html',
-                    'already_attempted': true,
-                    if (cachedResult != null) ...{
-                      ...cachedResult,
-                      'new_chunks_added': 0,
-                      'novelty_ratio': 0.0,
-                    },
-                    'result_payload': _compactReadUrlPayload(
-                      url: targetUrl,
-                      content: cached['text']?.toString() ?? '',
-                    ),
-                  },
-                );
-                resVal = cachedResult != null
-                    ? jsonEncode({
-                        ...cachedResult,
-                        'new_chunks_added': 0,
-                        'novelty_ratio': 0.0,
-                        'already_attempted': true
-                      })
-                    : (cached['text']?.toString() ?? '');
-                urlResults[idx] = resVal;
-                return;
-              }
+                String searchResult = searchResultRaw;
+                if (searchResult.length > 4000) {
+                  searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated]';
+                }
+                final searchError = (searchResult.startsWith('Web search failed:') || isCapError) ? searchResult : null;
+                final resultMatches = RegExp(r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)', multiLine: true).allMatches(searchResult);
 
-              try {
-                await fetchSemaphore.run(() async {
-                  if (!targetUrl.startsWith('http')) {
-                    targetUrl = 'https://$targetUrl';
-                  }
-
-                  try {
-                    final client = HttpClient()
-                      ..findProxy = ((uri) => "DIRECT")
-                      ..connectionTimeout = const Duration(seconds: 15);
-                    final request = await client.getUrl(Uri.parse(targetUrl)).timeout(const Duration(seconds: 60));
-                    final response = await request.close().timeout(const Duration(seconds: 60));
-                    if (response.statusCode < 200 || response.statusCode >= 300) {
-                      throw HttpException('HTTP ${response.statusCode}');
-                    }
-
-                    isPdf = targetUrl.toLowerCase().endsWith('.pdf') ||
-                        (response.headers.contentType?.mimeType == 'application/pdf');
-
-                    if (isPdf) {
-                      try {
-                        final bytesBuilder = BytesBuilder();
-                        await for (final chunk in response.timeout(const Duration(seconds: 60))) {
-                          bytesBuilder.add(chunk);
-                        }
-                        final bytes = bytesBuilder.takeBytes();
-                        if (bytes.isEmpty) {
-                          throw const FormatException('Empty PDF bytes');
-                        }
-                        final PdfDocument document = PdfDocument(inputBytes: bytes);
-                        text = PdfTextExtractor(document).extractText();
-                        document.dispose();
-                        if (text.trim().isEmpty) {
-                          throw const FormatException('No extractable text in PDF');
-                        }
-                      } catch (e) {
-                        throw FormatException('Extraction failed: $e');
-                      }
-                    } else {
-                      final body = await response
-                          .transform(utf8.decoder)
-                          .join()
-                          .timeout(const Duration(seconds: 60));
-                      var htmlBody = body;
-                      final bodyMatch = RegExp(
-                        r'<body[^>]*>(.*?)</body>',
-                        caseSensitive: false,
-                        dotAll: true,
-                      ).firstMatch(body);
-                      if (bodyMatch != null) {
-                        htmlBody = bodyMatch.group(1) ?? htmlBody;
-                      }
-                      htmlBody = htmlBody.replaceAll(
-                        RegExp(
-                          r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
-                          caseSensitive: false,
-                          dotAll: true,
-                        ),
-                        '',
-                      );
-                      htmlBody = htmlBody.replaceAll(
-                        RegExp(
-                          r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
-                          caseSensitive: false,
-                          dotAll: true,
-                        ),
-                        '',
-                      );
-                      htmlBody = htmlBody.replaceAll(
-                        RegExp(r'<img[^>]*>', caseSensitive: false),
-                        '',
-                      );
-                      htmlBody = htmlBody.replaceAll(
-                        RegExp(
-                          r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
-                          caseSensitive: false,
-                          dotAll: true,
-                        ),
-                        '',
-                      );
-                      htmlBody = htmlBody.replaceAll(
-                        RegExp(r'<!--.*?-->', dotAll: true),
-                        '',
-                      );
-                      text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
-                      text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-                    }
-                  } catch (e) {
-                    fetchFailed = true;
-                    batchZeroNovelties++;
-                    final errStr = e.toString().contains('Extraction failed:')
-                        ? e.toString()
-                        : 'Fetch failed: $e';
-                    finishResearchEvent(
-                      eventId,
-                      status: 'error',
-                      stopwatch: eventWatch,
-                      details: {'url': targetUrl, 'parse_format': isPdf ? 'pdf' : 'html'},
-                      error: errStr,
-                    );
-                    resVal = errStr;
-                    urlResults[idx] = resVal;
-                  }
-                });
-              } catch (e) {
-                fetchFailed = true;
-                batchZeroNovelties++;
-                finishResearchEvent(
-                  eventId,
-                  status: 'error',
-                  stopwatch: eventWatch,
-                  details: {'url': targetUrl},
-                  error: e.toString(),
-                );
-                resVal = 'Error: $e';
-                urlResults[idx] = resVal;
-              }
-
-              if (fetchFailed) return;
-
-              if (_deepResearchEnabled) {
-                updateResearchEventStatus(
-                  eventId,
-                  'ingesting',
-                  details: {'url': targetUrl, 'parse_format': isPdf ? 'pdf' : 'html'},
-                );
-
-                try {
-                  final ingestStageId = 'stage${i + 1}';
-                  final ingestQueryId = 'query${loopCount}_$idx';
-                  final ingestSourceUrl = targetUrl;
-                  final ingestText = text;
-                  final result = await _ingestDeepResearch(
-                    stageId: ingestStageId,
-                    queryId: ingestQueryId,
-                    sourceUrl: ingestSourceUrl,
-                    text: ingestText,
-                  );
-                  resVal = jsonEncode(result);
-
-                  if (result['failed'] == true) {
-                    batchZeroNovelties++;
-                    finishResearchEvent(
-                      eventId,
-                      status: 'error',
-                      stopwatch: eventWatch,
-                      details: {
-                        'url': targetUrl,
-                        'parse_format': isPdf ? 'pdf' : 'html',
-                        ...result,
-                        'result_payload': _compactReadUrlPayload(
-                          url: targetUrl,
-                          content: text,
-                        ),
-                      },
-                      error: 'Ingest failed: ' + (result['error']?.toString() ?? 'Deep research ingestion failed.'),
-                    );
-                  } else {
-                    final int addedVal = result['new_chunks_added'] is num ? result['new_chunks_added'] as int : 0;
-                    if (addedVal == 0) {
-                      batchZeroNovelties++;
-                    } else {
-                      batchAnyNovel = true;
-                    }
-                    stepUrlCache[normUrl] = {
-                      'text': text,
-                      'isPdf': isPdf,
-                      'result': result,
-                    };
-                    finishResearchEvent(
-                      eventId,
-                      status: 'done',
-                      stopwatch: eventWatch,
-                      details: {
-                        'url': targetUrl,
-                        'parse_format': isPdf ? 'pdf' : 'html',
-                        ...result,
-                        'result_payload': _compactReadUrlPayload(
-                          url: targetUrl,
-                          content: text,
-                        ),
-                      },
-                    );
-                  }
-                } catch (e) {
-                  batchZeroNovelties++;
+                if (!isCapError) {
                   finishResearchEvent(
                     eventId,
-                    status: 'error',
+                    status: searchError == null ? 'done' : 'error',
+                    stopwatch: isDup ? Stopwatch() : eventWatch,
+                    details: {
+                      'result_count': resultMatches.length,
+                      if (isDup) 'already_attempted': true,
+                      'result_payload': _compactSearchPayload(
+                        resultMatches.map((match) => {
+                          'title': match.group(1) ?? '',
+                          'url': match.group(2) ?? '',
+                          'snippet': match.group(3) ?? '',
+                        }),
+                      ),
+                    },
+                    error: searchError,
+                  );
+                }
+
+                final List<String> urls = resultMatches
+                    .map((match) => match.group(2)?.trim() ?? '')
+                    .where((url) => url.isNotEmpty)
+                    .toList();
+                allUrls.addAll(urls);
+                combinedResults.writeln("Search results for '$query':\n$searchResult\n");
+
+                if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
+                  updateResearchEventStatus(eventId, 'ingesting');
+                  final summaries = await _summarizeSourceInline(
+                    sourceUrl: "search_query:${Uri.encodeComponent(query)}",
+                    content: searchResult,
+                    provider: provider,
+                    settings: settings,
+                    model: model,
+                  );
+                  final List<dynamic> facts = summaries['facts'] ?? [];
+                  final List<dynamic> findings = summaries['findings'] ?? [];
+
+                  phaseFacts.addAll(List<Map<String, dynamic>>.from(facts));
+                  phaseFindings.addAll(List<Map<String, dynamic>>.from(findings));
+
+                  await _updateDeepResearchPhase(
+                    stageId: stageId,
+                    phaseTitle: phaseTitle,
+                    facts: phaseFacts,
+                    findings: phaseFindings,
+                    skippedPdfs: phaseSkippedPdfs,
+                    failedFetches: phaseFailedFetches,
+                  );
+
+                  finishResearchEvent(
+                    eventId,
+                    status: 'done',
                     stopwatch: eventWatch,
-                    details: {'url': targetUrl, 'parse_format': isPdf ? 'pdf' : 'html'},
-                    error: 'Ingest failed: $e',
+                    details: {
+                      'result_count': resultMatches.length,
+                      'facts_count': facts.length,
+                      'findings_count': findings.length,
+                      'result_payload': { 'summary': '${facts.length} facts, ${findings.length} findings extracted' }
+                    }
                   );
-                  resVal = 'Ingest failed: $e';
                 }
-              } else {
-                resVal = text;
-                if (resVal.length > 8000) {
-                  resVal = resVal.substring(0, 8000) + '\n\n...[truncated]';
-                }
-                stepUrlCache[normUrl] = {
-                  'text': text,
-                  'isPdf': isPdf,
-                  'result': null,
-                };
-                finishResearchEvent(
-                  eventId,
-                  status: 'done',
-                  stopwatch: eventWatch,
-                  details: {
-                    'url': targetUrl,
-                    'parse_format': isPdf ? 'pdf' : 'html',
-                    'result_payload': _compactReadUrlPayload(
-                      url: targetUrl,
-                      content: text,
-                    ),
-                  },
-                );
-              }
-
-              urlResults[idx] = resVal;
-            }));
-
-            if (batchAnyNovel) {
-              zeroNoveltyStreak = 0;
-            } else {
-              zeroNoveltyStreak += batchZeroNovelties;
-            }
-
-            if (zeroNoveltyStreak >= 8) {
-              stepDone = true;
-              stepFailed = true;
-              stepFailure = 'Evidence saturation reached: $zeroNoveltyStreak consecutive zero-novelty fetches.';
-              stepContent = stepContent.isEmpty
-                  ? "⚠️ Step failed: $stepFailure"
-                  : "$stepContent\n\n⚠️ Step failed: $stepFailure";
-            }
-
-            final StringBuffer combinedResults = StringBuffer();
-            for (var k = 0; k < urls.length; k++) {
-              combinedResults.writeln("URL: ${urls[k]}");
-              final bool isUrlDup = stepUrlCache.containsKey(normalizeQueryOrUrl(urls[k]));
-              combinedResults.writeln(_deepResearchEnabled
-                  ? "Deep research ingest${isUrlDup ? " (already_attempted: true)" : ""}:\n${urlResults[k]}"
-                  : "URL Content${isUrlDup ? " (already_attempted: true)" : ""}:\n${urlResults[k]}");
-              combinedResults.writeln();
-            }
-
-            if (zeroNoveltyStreak >= 4 && zeroNoveltyStreak < 8) {
-              combinedResults.writeln("\n[System Warning: The last $zeroNoveltyStreak sources added no new information. Consider whether this step's research question is already answered, or try a substantially different search angle.]");
-            }
-
-            stepMessages.add(
-              ChatMessage(
-                role: MessageRole.user,
-                text: combinedResults.toString().trim(),
-              ),
-            );
-          } else if (mcpMatch != null) {
-            String jsonString = mcpMatch.group(1)?.trim() ?? '';
-            jsonString = jsonString
-                .replaceAll(RegExp(r'^```json\s*'), '')
-                .replaceAll(RegExp(r'^```\s*'), '')
-                .replaceAll(RegExp(r'\s*```$'), '');
-
-            stepContent = stepContent.isEmpty
-                ? '<mcp_request>$jsonString</mcp_request>'
-                : '$stepContent\n\n<mcp_request>$jsonString</mcp_request>';
-            steps[i]['content'] = stepContent;
-            if (mounted) {
-              setState(() {
-                final msgs = List<ChatMessage>.from(
-                  _sessions[sessionIndex].messages,
-                );
-                msgs[messageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-                  reasoning: msgs[messageIndex].reasoning,
-                );
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-                  messages: msgs,
-                );
-              });
-            }
-
-            String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
-            String toolMethod = 'tool';
-            Map<String, dynamic> toolParams = {};
-            try {
-              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
-              final params = parsed['params'] as Map<String, dynamic>? ?? {};
-              toolMethod = parsed['method']?.toString() ?? 'tool';
-              toolParams = params;
-              if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
-                mcpEndpoint = _customMcpUrl;
-                params.remove('server');
-              }
-              params['workspace_dir'] = _agenticWorkspace;
-              if (!params.containsKey('cwd') ||
-                  (params['cwd'] as String?)?.isEmpty == true) {
-                params['cwd'] = _agenticWorkspace;
-              }
-              _resolveToolPaths(params, _agenticWorkspace);
-              final activeKey = settings.apiKey.isNotEmpty 
-                  ? settings.apiKey 
-                  : (settings.fallbackApiKeys.isNotEmpty ? settings.fallbackApiKeys.first : '');
-              params['active_llm_provider'] = provider.id;
-              params['active_llm_model'] = model;
-              params['active_llm_api_key'] = activeKey;
-              final rawBase = settings.baseUrl.trim().isEmpty ? provider.baseUrl : settings.baseUrl.trim();
-              params['active_llm_base_url'] = rawBase.replaceAll(RegExp(r'/+$'), '');
-              parsed['params'] = params;
-             jsonString = jsonEncode(parsed);
-           } catch (_) {}
-
-            final normalizedTool = toolMethod.toLowerCase();
-            final isWebSearch = normalizedTool == 'web_search' ||
-                normalizedTool == 'search_web' ||
-                normalizedTool == 'search';
-            final isReadUrl = normalizedTool == 'read_url' ||
-                normalizedTool == 'fetch_url' ||
-                normalizedTool == 'fetch_page';
-            final eventKind = isWebSearch
-                ? 'search'
-                : isReadUrl
-                ? 'fetch'
-                : 'mcp';
-            final eventWatch = Stopwatch()..start();
-            final eventId = beginResearchEvent(
-              kind: eventKind,
-              tool: toolMethod,
-              query: isWebSearch
-                  ? (toolParams['query'] ?? toolParams['q'])?.toString()
-                  : null,
-              url: isReadUrl
-                  ? (toolParams['url'] ?? toolParams['uri'])?.toString()
-                  : null,
-            );
-            String mcpResult = '';
-            var mcpFailed = false;
-            String? mcpError;
-            Map<String, dynamic>? mcpResultData;
-
-            final queryParam = (toolParams['query'] ?? toolParams['q'])?.toString() ?? '';
-            final urlParam = (toolParams['url'] ?? toolParams['uri'])?.toString() ?? '';
-            final normQuery = normalizeQueryOrUrl(queryParam);
-            final normUrl = normalizeQueryOrUrl(urlParam);
-
-            bool isMcpDup = false;
-            if (isWebSearch && stepSearchCache.containsKey(normQuery)) {
-              isMcpDup = true;
-              mcpResult = 'MCP Result (already_attempted: true):\n${stepSearchCache[normQuery]}';
-            } else if (isReadUrl && stepUrlCache.containsKey(normUrl)) {
-              isMcpDup = true;
-              zeroNoveltyStreak++;
-              final cached = stepUrlCache[normUrl]!;
-              final cachedResult = cached['result'] as Map<String, dynamic>?;
-              mcpResultData = cachedResult != null ? Map<String, dynamic>.from(cachedResult) : null;
-              mcpResult = jsonEncode({
-                'already_attempted': true,
-                if (cachedResult != null) ...cachedResult,
-                'parse_format': cached['isPdf'] == true ? 'pdf' : 'html',
-              });
-            }
-
-            if (isMcpDup) {
-              finishResearchEvent(
-                eventId,
-                status: 'done',
-                stopwatch: Stopwatch(),
-                details: () {
-                  final Map<String, dynamic> det = {'already_attempted': true};
-                  final dataMap = mcpResultData?['data'] is Map 
-                      ? mcpResultData!['data'] as Map 
-                      : mcpResultData;
-                  if (dataMap != null) {
-                    if (dataMap.containsKey('new_chunks_added')) {
-                      det['new_chunks_added'] = 0;
-                    }
-                    if (dataMap.containsKey('parse_format')) {
-                      det['parse_format'] = dataMap['parse_format'];
-                    }
-                    if (dataMap.containsKey('stage')) {
-                      det['stage'] = dataMap['stage'];
-                    }
-                  }
-                  det['result_payload'] = _compactMcpPayload(
-                    kind: eventKind,
-                    params: toolParams,
-                    resultData: mcpResultData,
-                    rawResult: mcpResult,
-                  );
-                  return det;
-                }(),
-              );
-
-              String userText = mcpResult;
-              if (isReadUrl && zeroNoveltyStreak >= 4 && zeroNoveltyStreak < 8) {
-                userText += "\n\n[System Warning: The last $zeroNoveltyStreak sources added no new information. Consider whether this step's research question is already answered, or try a substantially different search angle.]";
               }
 
               stepMessages.add(
                 ChatMessage(
                   role: MessageRole.user,
-                  text: userText,
+                  text: combinedResults.toString().trim(),
                 ),
               );
+            } else if (readUrlMatches.isNotEmpty) {
+              final availableRam = await _getSystemAvailableRamBytes();
+              final bool lowMemory = availableRam < 300 * 1024 * 1024;
+              final int activeFetchConcurrency = lowMemory ? 1 : maxConcurrentFetchCalls;
 
-              if (isReadUrl && zeroNoveltyStreak >= 8) {
-                stepDone = true;
-                stepFailed = true;
-                stepFailure = 'Evidence saturation reached: $zeroNoveltyStreak consecutive zero-novelty fetches.';
+              final List<String> eventIds = [];
+              final List<Stopwatch> stopwatches = [];
+              final List<String> urls = [];
+
+              for (final match in readUrlMatches) {
+                final url = match.group(1)?.trim() ?? '';
+                urls.add(url);
+                final eventWatch = Stopwatch()..start();
+                stopwatches.add(eventWatch);
+                final eventId = beginResearchEvent(
+                  kind: 'fetch',
+                  tool: 'read_url',
+                  url: url,
+                );
+                eventIds.add(eventId);
                 stepContent = stepContent.isEmpty
-                    ? "⚠️ Step failed: $stepFailure"
-                    : "$stepContent\n\n⚠️ Step failed: $stepFailure";
+                    ? '<read_url>$url</read_url>'
+                    : '$stepContent\n\n<read_url>$url</read_url>';
               }
-              continue;
-            }
-           if (toolMethod == 'run_command' ||
-                toolMethod == 'shell_exec' ||
-                toolMethod == 'execute_command' ||
-                toolMethod == 'execute_shell' ||
-                toolMethod == 'shell_rich' ||
-                toolMethod == 'run_background') {
-              final cmd = toolParams['command']?.toString() ?? '';
-             final allowed = await _askShellPermission(cmd);
-             if (!allowed) {
-                finishResearchEvent(
-                  eventId,
-                  status: 'error',
-                  stopwatch: eventWatch,
-                  error: 'User denied shell command execution.',
-                );
-               stepMessages.add(
-                  ChatMessage(
-                    role: MessageRole.user,
-                    text:
-                        'MCP Result:\n{"error": "User denied shell command execution."}',
-                  ),
-                );
-                continue;
-              }
-            }
-            if (_requiresFileMutationPermission(toolMethod, toolParams)) {
-              final allowed = await _askFileMutationPermission(
-                toolMethod,
-                toolParams,
-             );
-             if (!allowed) {
-                finishResearchEvent(
-                  eventId,
-                  status: 'error',
-                  stopwatch: eventWatch,
-                  error: 'User denied file operation.',
-                );
-               stepMessages.add(
-                  ChatMessage(
-                    role: MessageRole.user,
-                    text:
-                        'MCP Result:\n{"error": "User denied file operation."}',
-                  ),
-                );
-                continue;
-              }
-            }
-            int maxRetries = 3;
-            int attempt = 0;
-            while (attempt < maxRetries) {
-              attempt++;
-              HttpClient? client;
-              try {
-                client = HttpClient()
-                  ..connectionTimeout = const Duration(seconds: 120);
-                final request = await client.postUrl(Uri.parse(mcpEndpoint))
-                    .timeout(const Duration(seconds: 120));
-                request.headers.contentType = ContentType.json;
-                final bytes = utf8.encode(jsonString);
-                request.headers.contentLength = bytes.length;
-                request.add(bytes);
-               final response = await request.close()
-                   .timeout(const Duration(seconds: 120));
-               final body = await response.transform(utf8.decoder).join()
-                   .timeout(const Duration(seconds: 120));
-                if (response.statusCode >= 400) {
-                  mcpFailed = true;
-                  mcpError = 'MCP request failed with HTTP ${response.statusCode}.';
+              steps[i]['content'] = stepContent;
+              _publishResearchState(sessionIndex, messageIndex, stateMap);
+
+              final List<String> urlResults = List.filled(urls.length, '');
+              final fetchSemaphore = SimpleSemaphore(activeFetchConcurrency);
+
+              await Future.wait(Iterable<int>.generate(urls.length).map((idx) async {
+                final url = urls[idx];
+                final eventId = eventIds[idx];
+                final eventWatch = stopwatches[idx];
+                var targetUrl = url.trim();
+                if (!targetUrl.startsWith('http')) {
+                  targetUrl = 'https://$targetUrl';
                 }
-               String cleanResult = body;
-                try {
-                  final parsed = jsonDecode(body) as Map<String, dynamic>;
-                  final resultData =
-                      parsed['result'] as Map<String, dynamic>? ?? parsed;
-                  mcpResultData = resultData;
-                  if (resultData.containsKey('aiBlock')) {
-                    cleanResult = resultData['aiBlock'].toString();
-                  } else if (resultData.containsKey('stdout')) {
-                    cleanResult = resultData['stdout'].toString();
-                    if (resultData.containsKey('diff') &&
-                        resultData['diff'].toString().isNotEmpty) {
-                      cleanResult +=
-                          '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                final normUrl = normalizeQueryOrUrl(url);
+
+                if (targetUrl.toLowerCase().endsWith('.pdf')) {
+                  final skipMsg = 'Skipped PDF URL: $targetUrl (PDFs are excluded from Deep Research)';
+                  phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by extension)'});
+                  runFetchedUrls.add(normUrl);
+                  runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': True, 'skipped': True};
+
+                  await _updateDeepResearchPhase(
+                    stageId: stageId,
+                    phaseTitle: phaseTitle,
+                    facts: phaseFacts,
+                    findings: phaseFindings,
+                    skippedPdfs: phaseSkippedPdfs,
+                    failedFetches: phaseFailedFetches,
+                  );
+
+                  finishResearchEvent(
+                    eventId,
+                    status: 'done',
+                    stopwatch: eventWatch,
+                    details: {
+                      'url': targetUrl,
+                      'parse_format': 'skipped_pdf',
+                      'result_payload': { 'summary': 'Skipped PDF URL' }
                     }
-                    if (resultData.containsKey('stderr') &&
-                        resultData['stderr'].toString().trim().isNotEmpty) {
-                      cleanResult +=
-                          '\n\n--- STDERR ---\n' +
-                          resultData['stderr'].toString();
-                    }
-                 } else if (resultData.containsKey('error')) {
-                    mcpFailed = true;
-                    mcpError = resultData['error'].toString();
-                    cleanResult = 'Error: $mcpError';
-                 }
-               } catch (_) {}
-                mcpResult = cleanResult;
-                if (mcpResult.length > 32000) {
-                  mcpResult =
-                      mcpResult.substring(0, 16000) +
-                      '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
-                      mcpResult.substring(mcpResult.length - 6000);
+                  );
+                  urlResults[idx] = skipMsg;
+                  return;
                 }
-                break; // Success, break out of retry loop.
-              } catch (e) {
-               if (attempt >= maxRetries) {
-                 mcpResult = '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
-                  mcpFailed = true;
-                  mcpError = 'MCP bridge connection failed after $maxRetries attempts: $e';
-                } else {
-                  // Wait a short time before retrying
-                  await Future.delayed(Duration(milliseconds: 500 * attempt));
+
+                // TOOL LIMITS PER PHASE:
+                // Capped at 5 read_url calls per phase because read_url downloads and processes complete
+                // page content, which is expensive in tokens/concurrency. It should only be used to read
+                // the most high-value resources discovered via web_search. If exceeded, return a clear feedback.
+                if (readUrlCount >= 5) {
+                  final capMsg = 'Read URL limit reached for this phase (5/5 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                  finishResearchEvent(eventId, status: 'error', stopwatch: eventWatch, error: 'read_url limit exceeded.');
+                  urlResults[idx] = 'Error: $capMsg';
+                  return;
                 }
-              } finally {
-                client?.close(force: true);
-             }
-           }
-            if (!mcpFailed) {
-              if (isWebSearch) {
-                stepSearchCache[normQuery] = mcpResult;
-              } else if (isReadUrl) {
-                final dataMap = mcpResultData?['data'] is Map 
-                    ? mcpResultData!['data'] as Map 
-                    : mcpResultData;
-                if (dataMap != null) {
-                  final int addedVal = dataMap['new_chunks_added'] is num ? dataMap['new_chunks_added'] as int : 0;
-                  if (addedVal == 0) {
-                    zeroNoveltyStreak++;
+
+                if (runFetchedUrls.contains(normUrl)) {
+                  final cached = runUrlSummaries[normUrl]!;
+                  if (cached['skipped'] == True) {
+                    phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (cache hit)'});
                   } else {
-                    zeroNoveltyStreak = 0;
+                    final cachedFacts = List<Map<String, dynamic>>.from(cached['facts'] ?? []);
+                    final cachedFindings = List<Map<String, dynamic>>.from(cached['findings'] ?? []);
+                    phaseFacts.addAll(cachedFacts);
+                    phaseFindings.addAll(cachedFindings);
                   }
-                  stepUrlCache[normUrl] = {
-                    'text': dataMap['content'] ?? dataMap['text'] ?? '',
-                    'isPdf': dataMap['parse_format'] == 'pdf',
-                    'result': Map<String, dynamic>.from(dataMap),
-                  };
-                } else {
-                  zeroNoveltyStreak++;
+
+                  await _updateDeepResearchPhase(
+                    stageId: stageId,
+                    phaseTitle: phaseTitle,
+                    facts: phaseFacts,
+                    findings: phaseFindings,
+                    skippedPdfs: phaseSkippedPdfs,
+                    failedFetches: phaseFailedFetches,
+                  );
+
+                  finishResearchEvent(
+                    eventId,
+                    status: 'done',
+                    stopwatch: eventWatch,
+                    details: {
+                      'url': targetUrl,
+                      'parse_format': cached['isPdf'] == True ? 'skipped_pdf' : 'html',
+                      'already_attempted': True,
+                      'facts_count': cached['facts']?.length ?? 0,
+                      'findings_count': cached['findings']?.length ?? 0,
+                      'result_payload': { 'summary': 'Already read & summarized (cache hit)' }
+                    }
+                  );
+                  urlResults[idx] = 'Already read & summarized (cache hit).';
+                  return;
                 }
+
+                readUrlCount++;
+                String text = '';
+                bool isPdfResponse = False;
+                bool fetchFailed = False;
+
+                try {
+                  await fetchSemaphore.run(() async {
+                    try {
+                      final client = HttpClient()
+                        ..findProxy = ((uri) => "DIRECT")
+                        ..connectionTimeout = const Duration(seconds: 15);
+                      final request = await client.getUrl(Uri.parse(targetUrl)).timeout(const Duration(seconds: 60));
+                      final response = await request.close().timeout(const Duration(seconds: 60));
+
+                      if (response.statusCode < 200 || response.statusCode >= 300) {
+                        throw HttpException('HTTP ${response.statusCode}');
+                      }
+
+                      isPdfResponse = response.headers.contentType?.mimeType == 'application/pdf';
+                      if (isPdfResponse) {
+                        final skipMsg = 'Skipped PDF URL (Content-Type): $targetUrl';
+                        phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by Content-Type)'});
+                        runFetchedUrls.add(normUrl);
+                        runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': True, 'skipped': True};
+
+                        await _updateDeepResearchPhase(
+                          stageId: stageId,
+                          phaseTitle: phaseTitle,
+                          facts: phaseFacts,
+                          findings: phaseFindings,
+                          skippedPdfs: phaseSkippedPdfs,
+                          failedFetches: phaseFailedFetches,
+                        );
+
+                        finishResearchEvent(
+                          eventId,
+                          status: 'done',
+                          stopwatch: eventWatch,
+                          details: {
+                            'url': targetUrl,
+                            'parse_format': 'skipped_pdf',
+                            'result_payload': { 'summary': 'Skipped PDF URL (Content-Type)' }
+                          }
+                        );
+                        urlResults[idx] = skipMsg;
+                        fetchFailed = True;
+                        return;
+                      }
+
+                      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 60));
+                      var htmlBody = body;
+                      final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: False, dotAll: True).firstMatch(body);
+                      if (bodyMatch != null) {
+                        htmlBody = bodyMatch.group(1) ?? htmlBody;
+                      }
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: False, dotAll: True), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: False, dotAll: True), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: False), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: False, dotAll: True), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: True), '');
+                      text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
+                      text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+                    } catch (e) {
+                      fetchFailed = True;
+                      final errStr = 'Fetch failed: $e';
+                      phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
+                      finishResearchEvent(
+                        eventId,
+                        status: 'error',
+                        stopwatch: eventWatch,
+                        details: {'url': targetUrl, 'parse_format': 'html'},
+                        error: errStr,
+                      );
+                      urlResults[idx] = errStr;
+                    }
+                  });
+                } catch (e) {
+                  fetchFailed = True;
+                  final errStr = 'Error running fetch: $e';
+                  phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
+                  finishResearchEvent(
+                    eventId,
+                    status: 'error',
+                    stopwatch: eventWatch,
+                    details: {'url': targetUrl},
+                    error: errStr,
+                  );
+                  urlResults[idx] = errStr;
+                }
+
+                if (fetchFailed) return;
+
+                updateResearchEventStatus(
+                  eventId,
+                  'ingesting',
+                  details: {'url': targetUrl, 'parse_format': 'html'},
+                );
+
+                try {
+                  final summaries = await _summarizeSourceInline(
+                    sourceUrl: targetUrl,
+                    content: text,
+                    provider: provider,
+                    settings: settings,
+                    model: model,
+                  );
+                  final List<dynamic> facts = summaries['facts'] ?? [];
+                  final List<dynamic> findings = summaries['findings'] ?? [];
+
+                  phaseFacts.addAll(List<Map<String, dynamic>>.from(facts));
+                  phaseFindings.addAll(List<Map<String, dynamic>>.from(findings));
+
+                  runFetchedUrls.add(normUrl);
+                  runUrlSummaries[normUrl] = {'facts': facts, 'findings': findings, 'isPdf': False, 'skipped': False};
+
+                  await _updateDeepResearchPhase(
+                    stageId: stageId,
+                    phaseTitle: phaseTitle,
+                    facts: phaseFacts,
+                    findings: phaseFindings,
+                    skippedPdfs: phaseSkippedPdfs,
+                    failedFetches: phaseFailedFetches,
+                  );
+
+                  finishResearchEvent(
+                    eventId,
+                    status: 'done',
+                    stopwatch: eventWatch,
+                    details: {
+                      'url': targetUrl,
+                      'parse_format': 'html',
+                      'facts_count': facts.length,
+                      'findings_count': findings.length,
+                      'result_payload': { 'summary': '${facts.length} facts, ${findings.length} findings extracted' }
+                    },
+                  );
+                  urlResults[idx] = 'Successfully summarized: ${facts.length} facts, ${findings.length} findings.';
+                } catch (e) {
+                  final errStr = 'Summarization failed: $e';
+                  finishResearchEvent(
+                    eventId,
+                    status: 'error',
+                    stopwatch: eventWatch,
+                    details: {'url': targetUrl, 'parse_format': 'html'},
+                    error: errStr,
+                  );
+                  urlResults[idx] = errStr;
+                }
+              }));
+
+              final StringBuffer combinedResults = StringBuffer();
+              for (var k = 0; k < urls.length; k++) {
+                combinedResults.writeln("URL: ${urls[k]}");
+                combinedResults.writeln("Summarization Result:\n${urlResults[k]}");
+                combinedResults.writeln();
               }
+
+              stepMessages.add(
+                ChatMessage(
+                  role: MessageRole.user,
+                  text: combinedResults.toString().trim(),
+                ),
+              );
             } else {
-              if (isReadUrl) {
-                zeroNoveltyStreak++;
-              }
+              stepContent = stepContent.isEmpty ? responseText : '$stepContent\n\n$responseText';
+              stepDone = True;
             }
 
-            finishResearchEvent(
-              eventId,
-              status: mcpFailed ? 'error' : 'done',
-              stopwatch: eventWatch,
-              details: () {
-                final Map<String, dynamic> det = {};
-                final dataMap = mcpResultData?['data'] is Map 
-                    ? mcpResultData!['data'] as Map 
-                    : mcpResultData;
-                if (dataMap != null) {
-                  if (dataMap.containsKey('new_chunks_added')) {
-                    det['new_chunks_added'] = dataMap['new_chunks_added'];
-                  }
-                  if (dataMap.containsKey('parse_format')) {
-                    det['parse_format'] = dataMap['parse_format'];
-                  }
-                  if (dataMap.containsKey('stage')) {
-                    det['stage'] = dataMap['stage'];
-                  }
+            if (!stepDone && (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
+              final stepReflectMessages = [
+                const ChatMessage(
+                  role: MessageRole.system,
+                  text: "You are a reflection assistant. Read the current facts and findings of the research run and decide if the researcher should do further search or read other URLs, or if the current step is complete. Answer in structured JSON format with keys 'should_continue' (bool) and 'reason' (string).",
+                ),
+                ChatMessage(
+                  role: MessageRole.user,
+                  text: "Current facts extracted: ${jsonEncode(phaseFacts)}\n"
+                      "Current findings extracted: ${jsonEncode(phaseFindings)}\n"
+                      "Does this sufficiently answer the query \"$queryText\"? If yes, answer should_continue: false.",
+                ),
+              ];
+              try {
+                final reflectResp = await _chatClient.sendChat(
+                  provider: provider,
+                  settings: settings,
+                  model: model,
+                  messages: _compactHistoryForApi(stepReflectMessages, stepReflectMessages.length),
+                );
+                final reflectJson = jsonDecode(reflectResp) as Map<String, dynamic>;
+                if (reflectJson['should_continue'] == false) {
+                  stepDone = True;
                 }
-                det['result_payload'] = _compactMcpPayload(
-                  kind: eventKind,
-                  params: toolParams,
-                  resultData: mcpResultData,
-                  rawResult: mcpResult,
-                );
-                return det;
-              }(),
-              error: mcpError,
-            );
-
-            String userText = "MCP Result:\n$mcpResult";
-            if (isReadUrl && zeroNoveltyStreak >= 4 && zeroNoveltyStreak < 8) {
-              userText += "\n\n[System Warning: The last $zeroNoveltyStreak sources added no new information. Consider whether this step's research question is already answered, or try a substantially different search angle.]";
+              } catch (_) {}
             }
-
-            stepMessages.add(
-              ChatMessage(
-                role: MessageRole.user,
-                text: userText,
-              ),
-            );
-
-            if (isReadUrl && zeroNoveltyStreak >= 8) {
-              stepDone = true;
-              stepFailed = true;
-              stepFailure = 'Evidence saturation reached: $zeroNoveltyStreak consecutive zero-novelty fetches.';
-              stepContent = stepContent.isEmpty
-                  ? "⚠️ Step failed: $stepFailure"
-                  : "$stepContent\n\n⚠️ Step failed: $stepFailure";
-            }
-          } else {
-            stepContent = stepContent.isEmpty
-                ? responseText
-                : '$stepContent\n\n$responseText';
-            stepDone = true;
-          }
-          // Smart rate-limit delay: search/read_url turns already have
-          // seconds of natural network latency, so only a short cooldown
-          // is needed. MCP calls and text-only turns can be fast and need
-          // the full delay to avoid hammering the LLM API.
-          final bool wasToolDispatch = searchMatches.isNotEmpty || readUrlMatches.isNotEmpty;
-          totalToolMs += toolWatch.elapsedMilliseconds;
-          debugPrint(
-            '[perf] step=${i + 1} turn=$loopCount '
-            'llm=${llmMs}ms tool=${toolWatch.elapsedMilliseconds}ms '
-            'type=${searchMatches.isNotEmpty ? "search(${searchMatches.length})" : readUrlMatches.isNotEmpty ? "read_url(${readUrlMatches.length})" : mcpMatch != null ? "mcp" : "text"}',
-          );
-          await Future.delayed(Duration(seconds: wasToolDispatch ? 2 : 8));
-          consecutive429s = 0;
-        } catch (e) {
-          final errorStr = e.toString().toLowerCase();
-          if (errorStr.contains('429') ||
-              errorStr.contains('500') ||
-              errorStr.contains('503')) {
-            loopCount--;
-            consecutive429s++;
-            int delaySeconds = 10;
-            if (consecutive429s >= 3)
-              delaySeconds = 40;
-            else if (consecutive429s == 2)
-              delaySeconds = 20;
-
-            stepContent = stepContent.isEmpty
-                ? "API rate limit or server error. Retrying in ${delaySeconds}s..."
-                : "$stepContent\n\nAPI rate limit or server error. Retrying in ${delaySeconds}s...";
-            steps[i]['content'] = stepContent;
-            if (mounted) {
-              setState(() {
-                final msgs = List<ChatMessage>.from(
-                  _sessions[sessionIndex].messages,
-                );
-                msgs[messageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-                  reasoning: msgs[messageIndex].reasoning,
-                );
-                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-                  messages: msgs,
-                );
-              });
-            }
-            await Future.delayed(Duration(seconds: delaySeconds));
-          } else {
-            stepFailed = true;
+          } catch (e) {
+            stepDone = True;
+            stepFailed = True;
             stepFailure = e.toString();
-            stepContent = stepContent.isEmpty
-                ? "⚠️ Step failed: $stepFailure"
-                : "$stepContent\n\n⚠️ Step failed: $stepFailure";
-            stepDone = true;
+            break;
           }
         }
-      }
 
-      if (!stepDone) {
-        stepFailed = true;
-        stepFailure = 'step exceeded safety ceiling of 30 tool calls without completing';
-        stepContent = stepContent.isEmpty
-            ? "⚠️ Step failed: $stepFailure"
-            : "$stepContent\n\n⚠️ Step failed: $stepFailure";
-      }
-      stepWatch.stop();
-      debugPrint(
-        '[perf-step] step=${i + 1}/${steps.length} '
-        'wall=${stepWatch.elapsedMilliseconds}ms '
-        'llm_total=${totalLlmMs}ms tool_total=${totalToolMs}ms '
-        'overhead=${stepWatch.elapsedMilliseconds - totalLlmMs - totalToolMs}ms '
-        'turns=$loopCount status=${stepFailed ? "failed" : "ok"}',
-      );
-      int totalIngests = 0;
-      int failedIngests = 0;
-      final failedUrls = <String>[];
-
-      for (final ev in stepEvents) {
-        if (ev is Map) {
-          final isReadUrl = ev['tool'] == 'read_url' || ev['kind'] == 'fetch';
-          if (isReadUrl) {
-            totalIngests++;
-            if (ev['status'] == 'error') {
-              failedIngests++;
-              final url = ev['url']?.toString() ?? 'unknown URL';
-              failedUrls.add(url);
-            }
-          }
+        steps[i]['status'] = stepFailed ? 'failed' : 'completed';
+        if (stepFailed) {
+          steps[i]['error'] = stepFailure;
         }
-      }
-
-      final bool hasIngestionIssues = totalIngests > 0 && (failedIngests / totalIngests) >= 0.5;
-
-      steps[i]['status'] = stepFailed
-          ? 'failed'
-          : (hasIngestionIssues ? 'completed_with_issues' : 'completed');
-
-      if (stepFailed) {
-        steps[i]['error'] = stepFailure;
-      } else if (hasIngestionIssues) {
-        steps[i]['error'] = 'Embedding/ingestion was unavailable during this step; the following claimed sources were NOT actually indexed into evidence: [${failedUrls.join(', ')}].';
-      }
-
-      steps[i]['content'] = stepContent;
-      if (mounted) {
-        setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          msgs[messageIndex] = ChatMessage(
-            role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-            reasoning: msgs[messageIndex].reasoning,
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
-        });
+        steps[i]['content'] = stepContent;
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
         await _saveSessions();
       }
-    }
 
-    final executionIssues = <Map<String, dynamic>>[];
-    for (final stepValue in steps) {
-      final step = stepValue as Map;
-      final eventErrors = (step['events'] as List? ?? [])
-          .whereType<Map>()
-          .where((event) => event['status'] == 'error')
-          .map(
-            (event) => _truncateEventText(
-              event['error']?.toString() ?? 'Tool call failed.',
-              300,
-            ),
-          )
-          .toList();
-      if (step['status'] == 'failed' || step['status'] == 'completed_with_issues' || eventErrors.isNotEmpty) {
-        executionIssues.add({
-          'step': step['title']?.toString() ?? 'Research step',
-          'status': step['status']?.toString() ?? 'completed_with_tool_errors',
-          'error': _truncateEventText(
-            step['error']?.toString() ??
-                (eventErrors.isNotEmpty
-                    ? eventErrors.join('; ')
-                    : 'Step completed with issues.'),
-            500,
-          ),
-        });
-      }
-    }
-
-    if (_deepResearchEnabled) {
-      // 1. Synthesis Phase
-      stateMap['status'] = 'synthesizing';
-      if (mounted) {
-        setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          msgs[messageIndex] = ChatMessage(
-            role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-            reasoning: msgs[messageIndex].reasoning,
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
-        });
-      }
-
-      List<ChatMessage> synthesisMessages = [
-        const ChatMessage(
-          role: MessageRole.system,
-          text: DeepResearchPrompts.synthesisSystemPrompt,
-        ),
-        ChatMessage(
-          role: MessageRole.user,
-          text: "Here is the completed research plan:\n${jsonEncode(stateMap['steps'])}"
-              "\n\nBegin the synthesis phase. Generate specific questions and retrieve chunks for each stage. "
-              "Remember, the retrieve tool returns statistics only. Continue calling retrieve until all stages are synthesized. "
-              "Once all stages have been covered and synthesized, output <synthesis_complete/>.",
-        ),
-      ];
-
-      bool synthesisDone = false;
-      int synthesisLoop = 0;
-      final synthesisIssues = <String>[];
-
-      while (!synthesisDone && synthesisLoop < 20) {
-        if (!mounted) return;
-        if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
-          break;
-        }
-        synthesisLoop++;
-
-        try {
-          String responseText = '';
-          String reasoningText = '';
-          final stream = _chatClient.sendChatStream(
-            provider: provider,
-            settings: settings,
-            model: model,
-            messages: _compactHistoryForApi(synthesisMessages, synthesisMessages.length),
-          );
-
-          var isThinking = false;
-          await for (final chunk in stream) {
-            if (chunk.startsWith('[REASONING]')) {
-              reasoningText += chunk.substring(11);
-            } else {
-              var textChunk = chunk;
-              if (!isThinking &&
-                  (textChunk.contains('<think>') ||
-                      textChunk.contains('<reasoning>') ||
-                      textChunk.contains('<thought>'))) {
-                final tag = textChunk.contains('<think>')
-                    ? '<think>'
-                    : textChunk.contains('<thought>')
-                    ? '<thought>'
-                    : '<reasoning>';
-                final parts = textChunk.split(tag);
-                responseText += parts[0];
-                isThinking = true;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-              }
-
-              if (isThinking &&
-                  (textChunk.contains('</think>') ||
-                      textChunk.contains('</reasoning>') ||
-                      textChunk.contains('</thought>'))) {
-                final tag = textChunk.contains('</think>')
-                    ? '</think>'
-                    : textChunk.contains('</thought>')
-                    ? '</thought>'
-                    : '</reasoning>';
-                final parts = textChunk.split(tag);
-                reasoningText += parts[0];
-                isThinking = false;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-                responseText += textChunk;
-              } else if (isThinking) {
-                reasoningText += textChunk;
-              } else {
-                responseText += textChunk;
-              }
-            }
-          }
-
-          synthesisMessages.add(
-            ChatMessage(
-              role: MessageRole.assistant,
-              text: responseText,
-              reasoning: reasoningText,
-            ),
-          );
-
-          final mcpMatch = _findMcpMatch(responseText);
-          final completeMatch = RegExp(
-            r'<synthesis_complete/?>',
-            caseSensitive: false,
-          ).firstMatch(responseText);
-
-          if (completeMatch != null) {
-            synthesisDone = true;
-          } else if (mcpMatch != null) {
-            String jsonString = mcpMatch.group(1)?.trim() ?? '';
-            jsonString = jsonString
-                .replaceAll(RegExp(r'^```json\s*'), '')
-                .replaceAll(RegExp(r'^```\s*'), '')
-                .replaceAll(RegExp(r'\s*```$'), '');
-
-            String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
-            try {
-              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
-              final params = parsed['params'] as Map<String, dynamic>? ?? {};
-              if (params['server'] == 'remote' && _customMcpUrl.isNotEmpty) {
-                mcpEndpoint = _customMcpUrl;
-              }
-              final activeKey = settings.apiKey.isNotEmpty 
-                  ? settings.apiKey 
-                  : (settings.fallbackApiKeys.isNotEmpty ? settings.fallbackApiKeys.first : '');
-              params['active_llm_provider'] = provider.id;
-              params['active_llm_model'] = model;
-              params['active_llm_api_key'] = activeKey;
-              final rawBase2 = settings.baseUrl.trim().isEmpty ? provider.baseUrl : settings.baseUrl.trim();
-              params['active_llm_base_url'] = rawBase2.replaceAll(RegExp(r'/+$'), '');
-              parsed['params'] = params;
-              jsonString = jsonEncode(parsed);
-            } catch (_) {}
-
-            String mcpResult = '';
-            HttpClient? client;
-            try {
-              client = HttpClient()
-                ..connectionTimeout = const Duration(seconds: 120);
-              final request = await client
-                  .postUrl(Uri.parse(mcpEndpoint))
-                  .timeout(const Duration(seconds: 120));
-              request.headers.contentType = ContentType.json;
-              final bytes = utf8.encode(jsonString);
-              request.headers.contentLength = bytes.length;
-              request.add(bytes);
-              final response = await request.close().timeout(
-                const Duration(seconds: 120),
-              );
-              final body = await response
-                  .transform(utf8.decoder)
-                  .join()
-                  .timeout(const Duration(seconds: 120));
-              mcpResult = body;
-              if (response.statusCode < 200 || response.statusCode >= 300) {
-                synthesisIssues.add(
-                  'Retrieval request returned HTTP ${response.statusCode}: '
-                  '${_truncateEventText(body, 300)}',
-                );
-              } else {
-                try {
-                  final decoded = jsonDecode(body);
-                  if (decoded is Map && decoded['error'] != null) {
-                    synthesisIssues.add(
-                      'Retrieval request failed: '
-                      '${_truncateEventText(decoded['error'].toString(), 300)}',
-                    );
-                  }
-                } catch (_) {
-                  // The synthesis model receives the raw response and can
-                  // decide whether it is useful; a non-JSON success is not
-                  // itself a pipeline failure.
-                }
-              }
-            } catch (e) {
-              mcpResult = '{"error": "$e"}';
-              synthesisIssues.add(
-                'Retrieval request threw: ${_truncateEventText(e.toString(), 300)}',
-              );
-            } finally {
-              client?.close(force: true);
-            }
-
-            synthesisMessages.add(
-              ChatMessage(
-                role: MessageRole.user,
-                text: "MCP Result:\n$mcpResult",
-              ),
-            );
-          } else {
-            synthesisMessages.add(
-              const ChatMessage(
-                role: MessageRole.user,
-                text: "Continue generating queries to retrieve information, or output <synthesis_complete/> if you have retrieved all necessary information.",
-              ),
-            );
-          }
-          await Future.delayed(const Duration(seconds: 2));
-        } catch (e) {
-          synthesisIssues.add(
-            'Synthesis agent stopped: ${_truncateEventText(e.toString(), 300)}',
-          );
-          synthesisDone = true;
+      // ── STAGE 3: WRITING THE REPORT ──
+      final executionIssues = <Map<String, dynamic>>[];
+      for (final stepValue in steps) {
+        final step = stepValue as Map;
+        final eventErrors = (step['events'] as List? ?? [])
+            .whereType<Map>()
+            .where((event) => event['status'] == 'error')
+            .map((event) => _truncateEventText(event['error']?.toString() ?? 'Tool call failed.', 300))
+            .toList();
+        if (step['status'] == 'failed' || eventErrors.isNotEmpty) {
+          executionIssues.add({
+            'step': step['title']?.toString() ?? 'Research step',
+            'status': step['status']?.toString() ?? 'completed_with_tool_errors',
+            'error': _truncateEventText(step['error']?.toString() ?? (eventErrors.isNotEmpty ? eventErrors.join('; ') : 'Step completed with issues.'), 500),
+          });
         }
       }
 
-      if (!synthesisDone && synthesisLoop >= 20) {
-        synthesisIssues.add('Synthesis stopped after reaching the 20-turn limit.');
-      }
-      for (final issue in synthesisIssues) {
-        executionIssues.add({
-          'step': 'Synthesis and retrieval',
-          'status': 'failed',
-          'error': issue,
-        });
-      }
-
-      // 2. Writer Phase
       stateMap['status'] = 'generating_report';
-      if (mounted) {
-        setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          msgs[messageIndex] = ChatMessage(
-            role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-            reasoning: msgs[messageIndex].reasoning,
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
-        });
-      }
+      _publishResearchState(sessionIndex, messageIndex, stateMap);
 
-      String tempJsonContent = '{}';
+      String tempJsonContent = '[]';
       try {
         tempJsonContent = await _exportDeepResearchTemp();
 
-        // ── Writer context-budget enforcement ──────────────────────────────
-        // Budget is set by the user in Settings → Writer context budget.
-        // No per-model hardcoding. Reserve 18% for system prompt / instructions
-        // / expected output, leaving 82% for evidence.
         final int userBudget = _writerContextBudget;
         final int reserve = (userBudget * 0.18).round();
         final int maxEvidenceTokens = userBudget - reserve;
 
-        final Map<String, dynamic> parsedJson = jsonDecode(tempJsonContent) as Map<String, dynamic>;
-        final List<Map<String, dynamic>> allChunks = [];
-        parsedJson.forEach((stageId, stageVal) {
-          if (stageVal is Map) {
-            stageVal.forEach((query, queryVal) {
-              if (queryVal is Map) {
-                queryVal.forEach((chunkKey, chunkText) {
-                  // Lower index ↔ higher relevance rank from the RAG retriever
-                  final chunkKeyStr = chunkKey.toString();
-                  final idxMatch = RegExp(r'\d+').firstMatch(chunkKeyStr);
-                  final int relevanceRank =
-                      idxMatch != null ? int.parse(idxMatch.group(0)!) : 999;
-                  allChunks.add({
-                    'stageId': stageId,
-                    'query': query,
-                    'chunkKey': chunkKeyStr,
-                    'relevanceRank': relevanceRank,
-                    'text': chunkText.toString(),
-                  });
-                });
-              }
-            });
-          }
-        });
-
-        // Sort by relevance: keep highest-scored (lowest rank index) first.
-        allChunks.sort(
-          (a, b) => (a['relevanceRank'] as int).compareTo(b['relevanceRank'] as int),
-        );
-
-        // Accumulate chunks until budget is exhausted.
-        final List<Map<String, dynamic>> acceptedChunks = [];
+        final List<dynamic> parsedJson = jsonDecode(tempJsonContent) as List<dynamic>;
+        
+        final List<dynamic> acceptedPhases = [];
         int currentTokenCount = 0;
-        int truncatedCount = 0;
-        for (final chunk in allChunks) {
-          final text = chunk['text'] as String;
-          // Lightweight token estimate: ~1.3 tokens per word.
-          final wordCount = text.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+        int truncatedPhasesCount = 0;
+
+        for (final phaseVal in parsedJson) {
+          if (phaseVal is Map<String, dynamic>) {
+            final phaseStr = jsonEncode(phaseVal);
+            final wordCount = phaseStr.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+            final tokenEst = (wordCount * 1.3).ceil();
+            
+            if (currentTokenCount + tokenEst <= maxEvidenceTokens) {
+              acceptedPhases.add(phaseVal);
+              currentTokenCount += tokenEst;
+            } else {
+              truncatedPhasesCount++;
+            }
+          }
+        }
+
+        if (parsedJson.isNotEmpty && acceptedPhases.isEmpty) {
+          final firstPhase = parsedJson.first;
+          final phaseStr = jsonEncode(firstPhase);
+          final wordCount = phaseStr.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
           final tokenEst = (wordCount * 1.3).ceil();
-          if (currentTokenCount + tokenEst <= maxEvidenceTokens) {
-            acceptedChunks.add(chunk);
-            currentTokenCount += tokenEst;
-          } else {
-            truncatedCount++;
-          }
-        }
-
-        // ── Minimum-viable-evidence guard ─────────────────────────────────
-        // When the budget is so small that no chunks fit, emit a warning but
-        // still proceed with the single most-relevant chunk so the user always
-        // gets a result.  Never block the user from running deep research.
-        if (allChunks.isNotEmpty && acceptedChunks.isEmpty) {
-          final smallestChunk = allChunks.first['text'] as String;
-          final smallestWords = smallestChunk.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-          final smallestTokenEst = (smallestWords * 1.3).ceil();
+          
           executionIssues.add({
             'step': 'Evidence budget',
             'status': 'warning',
-            'error': '⚠️ Context budget ($userBudget tokens) is very small — '
-                'the most relevant source alone needs ~$smallestTokenEst tokens. '
-                'Consider raising the Writer context budget in Settings for better results. '
-                'Proceeding with the best available evidence anyway.',
+            'error': '⚠️ Context budget ($userBudget tokens) is very small. Proceeding with the first phase summary only.',
           });
-          // Accept at least the single highest-relevance chunk so a report is produced.
-          acceptedChunks.add(allChunks.first);
-          currentTokenCount += smallestTokenEst;
+          acceptedPhases.add(firstPhase);
+          currentTokenCount += tokenEst;
         }
 
-
-        // ── Truncation disclosure ──────────────────────────────────────────
-        if (truncatedCount > 0) {
+        if (truncatedPhasesCount > 0) {
           executionIssues.add({
             'step': 'Evidence budget',
             'status': 'warning',
-            'error': 'Evidence trimmed to fit your configured context budget of '
-                '$userBudget tokens; $truncatedCount lower-relevance '
-                '${truncatedCount == 1 ? "source was" : "sources were"} excluded '
-                'from the final report. ${acceptedChunks.length} highest-relevance '
-                '${acceptedChunks.length == 1 ? "chunk" : "chunks"} retained '
-                '(~$currentTokenCount estimated tokens used of '
-                '$maxEvidenceTokens available for evidence).',
+            'error': 'Evidence trimmed to fit your configured context budget of $userBudget tokens; $truncatedPhasesCount phase summaries were excluded from the final report.',
           });
-          // Rebuild the JSON from accepted chunks only.
-          final Map<String, dynamic> rebuiltJson = {};
-          for (final chunk in acceptedChunks) {
-            final stageId = chunk['stageId'] as String;
-            final query = chunk['query'] as String;
-            final chunkKey = chunk['chunkKey'] as String;
-            final text = chunk['text'] as String;
-            rebuiltJson.putIfAbsent(stageId, () => <String, dynamic>{});
-            final Map<String, dynamic> stageMap = rebuiltJson[stageId] as Map<String, dynamic>;
-            stageMap.putIfAbsent(query, () => <String, dynamic>{});
-            final Map<String, dynamic> queryMap = stageMap[query] as Map<String, dynamic>;
-            queryMap[chunkKey] = text;
-          }
-          tempJsonContent = jsonEncode(rebuiltJson);
         }
+
+        tempJsonContent = jsonEncode(acceptedPhases);
       } catch (e) {
         debugPrint("Error exporting/processing deep-research temp.json: $e");
         executionIssues.add({
           'step': 'Writer input export',
           'status': 'failed',
-          'error': 'The writer could not load the bridge-owned retrieval data: '
-              '${_truncateEventText(e.toString(), 300)}',
-        });
-      }
-      if (tempJsonContent.trim().isEmpty || tempJsonContent.trim() == '{}') {
-        executionIssues.add({
-          'step': 'Writer input export',
-          'status': 'failed',
-          'error': 'No retrieved evidence was available from the bridge. '
-              'Do not present the report as a complete evidence-based result.',
+          'error': 'The writer could not load the bridge-owned retrieval data: ${_truncateEventText(e.toString(), 300)}',
         });
       }
 
@@ -4909,12 +4227,12 @@ For every project, maintain a README.md at the project root.
         ),
         ChatMessage(
           role: MessageRole.user,
-          text: "Here is the retrieved content from the database (temp.json):\n$tempJsonContent\n\n"
+          text: "Here is the retrieved facts and findings (temp.json):\n$tempJsonContent\n\n"
               "Execution issues that must be disclosed in the report:\n"
               "${jsonEncode(executionIssues)}\n\n"
-              "CRITICAL CONSTRAINT FOR REPORT WRITING:\n"
-              "If any step indicates that embedding/ingestion was unavailable, you MUST either omit specific claims sourced only from those failed ingestions, or explicitly caveat them in the report as unverified/from search snippets only rather than full-text sources. Do not invent facts or present evidence from failed sources as if they were successfully processed. Add an explicit limitation or failed-section marker where relevant.\n\n"
-              "Please write the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.",
+              "Please write the final, comprehensive research report in Markdown format. "
+              "Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts. "
+              "List all sources at the end.",
         ),
       ];
 
@@ -4929,7 +4247,12 @@ For every project, maintain a README.md at the project root.
         if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
           break;
         }
+        final turnWatch = Stopwatch()..start();
         try {
+          String responseText = '';
+          String reasoningText = '';
+          var isThinking = false;
+
           final stream = _chatClient.sendChatStream(
             provider: provider,
             settings: settings,
@@ -4937,10 +4260,9 @@ For every project, maintain a README.md at the project root.
             messages: _compactHistoryForApi(writerMessages, writerMessages.length),
           );
 
-          var isThinking = false;
           await for (final chunk in stream) {
             if (chunk.startsWith('[REASONING]')) {
-              finalReasoningText += chunk.substring(11);
+              reasoningText += chunk.substring(11);
             } else {
               var textChunk = chunk;
               if (!isThinking &&
@@ -4953,7 +4275,7 @@ For every project, maintain a README.md at the project root.
                     ? '<thought>'
                     : '<reasoning>';
                 final parts = textChunk.split(tag);
-                finalReportText += parts[0];
+                responseText += parts[0];
                 isThinking = true;
                 textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
               }
@@ -4968,214 +4290,77 @@ For every project, maintain a README.md at the project root.
                     ? '</thought>'
                     : '</reasoning>';
                 final parts = textChunk.split(tag);
-                finalReasoningText += parts[0];
+                reasoningText += parts[0];
                 isThinking = false;
                 textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-                finalReportText += textChunk;
+                responseText += textChunk;
               } else if (isThinking) {
-                finalReasoningText += textChunk;
+                reasoningText += textChunk;
               } else {
-                finalReportText += textChunk;
+                responseText += textChunk;
               }
             }
           }
-          stateMap['final_report'] = finalReportText;
+
+          finalReportText = responseText;
+          finalReasoningText = reasoningText;
           finalReportDone = true;
         } catch (e) {
-          writerFailure = e.toString();
           writerRetries++;
-          await Future.delayed(const Duration(seconds: 10));
+          writerFailure = e.toString();
         }
       }
 
-      if (!finalReportDone || finalReportText.trim().isEmpty) {
-        finalReportText =
-            '# Research report incomplete\n\n'
-            '⚠️ The report writer did not complete. '
-            'Reason: ' +
-            (writerFailure ?? 'No report was returned by the writer model.') +
-            '\n\n'
-            'The collected step status and content remain available below; do not treat this as a complete research report.';
-        stateMap['final_report'] = finalReportText;
+      stateMap['status'] = writerFailure == null ? 'completed' : 'failed';
+      if (writerFailure != null) {
+        stateMap['error'] = 'Writer agent failed: $writerFailure';
       }
-      stateMap['status'] = 'completed';
+      stateMap['plan_end_ms'] = DateTime.now().millisecondsSinceEpoch;
+
       if (mounted) {
         setState(() {
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          msgs[messageIndex] = ChatMessage(
-            role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-            reasoning: msgs[messageIndex].reasoning,
-          );
-          msgs.add(
-            ChatMessage(
-              role: MessageRole.assistant,
-              text: finalReportText,
-              reasoning: finalReasoningText,
-            ),
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
           _sendingSessionIds.remove(_sessions[sessionIndex].id);
-        });
-        await _saveSessions();
-      }
-    } else {
-      stateMap['status'] = 'generating_report';
-      if (mounted) {
-        setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          msgs[messageIndex] = ChatMessage(
-            role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-            reasoning: msgs[messageIndex].reasoning,
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
-        });
-      }
-
-      final finalPrompt =
-          "All research phases are complete. Now, output the final, comprehensive research report in Markdown format. Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts (do NOT use Mermaid flowcharts because they cannot be rendered, use ASCII text art instead). List all sources at the end.";
-      stepMessages.add(ChatMessage(role: MessageRole.user, text: finalPrompt));
-
-      String finalReportText = '';
-      String finalReasoningText = '';
-      bool finalReportDone = false;
-      int finalReportRetries = 0;
-
-      while (!finalReportDone && finalReportRetries < 3) {
-        if (!mounted) return;
-        if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
-          break;
-        }
-        try {
-          final stream = _chatClient.sendChatStream(
-            provider: provider,
-            settings: settings,
-            model: model,
-            messages: _compactHistoryForApi(stepMessages, stepMessages.length),
-          );
-
-          var isThinking = false;
-          await for (final chunk in stream) {
-            if (chunk.startsWith('[REASONING]')) {
-              finalReasoningText += chunk.substring(11);
-            } else {
-              var textChunk = chunk;
-              if (!isThinking &&
-                  (textChunk.contains('<think>') ||
-                      textChunk.contains('<reasoning>') ||
-                      textChunk.contains('<thought>'))) {
-                final tag = textChunk.contains('<think>')
-                    ? '<think>'
-                    : textChunk.contains('<thought>')
-                    ? '<thought>'
-                    : '<reasoning>';
-                final parts = textChunk.split(tag);
-                finalReportText += parts[0];
-                isThinking = true;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-              }
-
-              if (isThinking &&
-                  (textChunk.contains('</think>') ||
-                      textChunk.contains('</reasoning>') ||
-                      textChunk.contains('</thought>'))) {
-                final tag = textChunk.contains('</think>')
-                    ? '</think>'
-                    : textChunk.contains('</thought>')
-                    ? '</thought>'
-                    : '</reasoning>';
-                final parts = textChunk.split(tag);
-                finalReasoningText += parts[0];
-                isThinking = false;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-                finalReportText += textChunk;
-              } else if (isThinking) {
-                finalReasoningText += textChunk;
-              } else {
-                finalReportText += textChunk;
-              }
-            }
-          }
-          stateMap['final_report'] = finalReportText;
-          finalReportDone = true;
-        } catch (e) {
-          final errorStr = e.toString().toLowerCase();
-          if (errorStr.contains('429') ||
-              errorStr.contains('500') ||
-              errorStr.contains('503')) {
-            finalReportRetries++;
-            await Future.delayed(const Duration(seconds: 10));
+          
+          String text = _updateResearchStateInText(msgs[messageIndex].text, stateMap);
+          if (writerFailure == null) {
+            text += "\n\n$finalReportText";
           } else {
-            stateMap['final_report'] = "Error generating final report: $e";
-            finalReportText = stateMap['final_report'] as String;
-            finalReportDone = true;
+            text += "\n\n⚠️ Writer agent failed: $writerFailure";
           }
-        }
-      }
 
-      stateMap['status'] = 'completed';
-      if (mounted) {
-        setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-            reasoning: msgs[messageIndex].reasoning,
+            text: text,
+            reasoning: finalReasoningText.isNotEmpty ? finalReasoningText : msgs[messageIndex].reasoning,
           );
-          msgs.add(
-            ChatMessage(
-              role: MessageRole.assistant,
-              text: finalReportText,
-              reasoning: finalReasoningText,
-            ),
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
-          _sendingSessionIds.remove(_sessions[sessionIndex].id);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
         });
         await _saveSessions();
       }
-    }
+
     } catch (globalError) {
       debugPrint("Global Deep Research Loop error: $globalError");
       stateMap['status'] = 'failed';
-      stateMap['final_report'] ??=
-          '# Research report incomplete\n\n'
-          '⚠️ Deep Research stopped before completion. Reason: $globalError\n\n'
-          'Do not treat the available step content as a complete report.';
+      stateMap['error'] = globalError.toString();
+      stateMap['plan_end_ms'] = DateTime.now().millisecondsSinceEpoch;
       if (mounted) {
         setState(() {
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          if (messageIndex < msgs.length) {
-            msgs[messageIndex] = ChatMessage(
-              role: MessageRole.assistant,
-              text: _updateResearchStateInText(msgs[messageIndex].text, stateMap),
-              reasoning: msgs[messageIndex].reasoning,
-            );
-          }
-          msgs.add(
-            ChatMessage(
-              role: MessageRole.assistant,
-              text: "⚠️ Deep Research encountered an unexpected error and stopped:\n\n```\n$globalError\n```\n\nPlease check your configuration, local server status, or try again.",
-            ),
-          );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            messages: msgs,
-          );
           _sendingSessionIds.remove(_sessions[sessionIndex].id);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap) +
+                '\n\n⚠️ Deep Research stopped before completion. Reason: $globalError',
+            reasoning: msgs[messageIndex].reasoning,
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
         });
         await _saveSessions();
       }
     }
   }
-
-  void _newChat() {
+\n  void _newChat() {
     final newId = DateTime.now().millisecondsSinceEpoch.toString();
     final newSession = ChatSession(
       id: newId,
@@ -9829,7 +9014,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   Text(isUnreachable
                       ? "The Python bridge process isn't currently running. Please start it in Termux:"
-                      : 'Deep Research requires the Python bridge with llama.cpp and the BGE-Base embedding model. Please run this one-time setup command in Termux:'),
+                      : 'Deep Research requires the Python bridge. Please run this setup command in Termux:'),
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(8),
@@ -13486,6 +12671,11 @@ class ChatClient {
     String provider,
     List<String> apiKeys, {
     String? googleCx,
+    String? topic,
+    String? timeRange,
+    String? startDate,
+    String? endDate,
+    String? searchDepth,
   }) async {
     final client = HttpClient()
       ..findProxy = ((uri) => "DIRECT")
@@ -13501,13 +12691,30 @@ class ChatClient {
             final uri = Uri.parse('https://api.tavily.com/search');
             final request = await client.postUrl(uri);
             request.headers.contentType = ContentType.json;
-            request.write(
-              jsonEncode({
-                'api_key': currentKey,
-                'query': query,
-                'max_results': 4,
-              }),
-            );
+
+            // Map timeRange aliases
+            String? trVal = timeRange;
+            if (trVal != null) {
+              final tr = trVal.trim().toLowerCase();
+              if (tr == 'd') trVal = 'day';
+              else if (tr == 'w') trVal = 'week';
+              else if (tr == 'm') trVal = 'month';
+              else if (tr == 'y') trVal = 'year';
+              else trVal = tr;
+            }
+
+            final Map<String, dynamic> payload = {
+              'api_key': currentKey,
+              'query': query,
+              'max_results': 4,
+              'search_depth': searchDepth ?? 'basic',
+            };
+            if (topic != null) payload['topic'] = topic;
+            if (trVal != null) payload['time_range'] = trVal;
+            if (startDate != null) payload['start_date'] = startDate;
+            if (endDate != null) payload['end_date'] = endDate;
+
+            request.write(jsonEncode(payload));
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -15130,7 +14337,7 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
     if (_isIngesting) {
       final parseFormat = widget.event['parse_format']?.toString();
       return _detailBlock(
-        'Content fetched${parseFormat != null ? " as ${parseFormat.toUpperCase()}" : ""}, indexing into evidence store…',
+        'Content fetched${parseFormat != null ? " as ${parseFormat.toUpperCase()}" : ""}, summarizing content…',
         accent,
       );
     }
@@ -15221,15 +14428,15 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                   decoration: BoxDecoration(
-                    color: parseFormat == 'pdf' ? const Color(0xFFFFF3E0) : const Color(0xFFE8F5E9),
+                    color: (parseFormat == 'pdf' || parseFormat == 'skipped_pdf') ? const Color(0xFFFFF3E0) : const Color(0xFFE8F5E9),
                     borderRadius: BorderRadius.circular(3),
                   ),
                   child: Text(
-                    parseFormat.toUpperCase(),
+                    parseFormat == 'skipped_pdf' ? 'SKIPPED (PDF)' : parseFormat.toUpperCase(),
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
-                      color: parseFormat == 'pdf' ? const Color(0xFFE65100) : const Color(0xFF2E7D32),
+                      color: (parseFormat == 'pdf' || parseFormat == 'skipped_pdf') ? const Color(0xFFE65100) : const Color(0xFF2E7D32),
                     ),
                   ),
                 ),
@@ -15244,10 +14451,15 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
               ],
               if (isDedup)
                 const Text(
-                  'Already indexed (cache hit)',
+                  'Already read (cache hit)',
                   style: TextStyle(fontSize: 10, color: Color(0xFF5C6BC0), fontStyle: FontStyle.italic),
                 ),
-              if (addedVal is num && addedVal > 0)
+              if (widget.event.containsKey('facts_count') || widget.event.containsKey('findings_count'))
+                Text(
+                  '${widget.event['facts_count'] ?? 0} facts · ${widget.event['findings_count'] ?? 0} findings extracted',
+                  style: const TextStyle(fontSize: 10, color: Color(0xFF327342)),
+                )
+              else if (addedVal is num && addedVal > 0)
                 Text(
                   '$addedVal new chunks added',
                   style: const TextStyle(fontSize: 10, color: Color(0xFF327342)),
@@ -15289,23 +14501,25 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
     final latency = latencyMs is num
         ? ' · ' + (latencyMs / 1000).toStringAsFixed(1) + 's'
         : '';
-    final isDedup = added is num && added == 0;
+    final isDedup = (added is num && added == 0) || widget.event['already_attempted'] == true;
     final detail = isRunning
         ? 'Fetching…'
         : isIngesting
-        ? 'Indexing into evidence store…'
+        ? 'Summarizing content…'
         : isError
         ? widget.event['error']?.toString() ?? 'Tool call failed'
         : isSearch
         ? (resultCount ?? '0') + ' results'
         : isFetch
         ? isDedup
-            ? 'Already indexed'
-            : (addedStr ?? '0') +
-                  ' chunks' +
-                  (novelty is num
-                      ? ' · ' + (novelty * 100).toStringAsFixed(0) + '% novel'
-                      : '')
+            ? 'Already read'
+            : widget.event.containsKey('facts_count')
+                ? '${widget.event['facts_count']} facts · ${widget.event['findings_count']} findings'
+                : (addedStr ?? '0') +
+                      ' chunks' +
+                      (novelty is num
+                          ? ' · ' + (novelty * 100).toStringAsFixed(0) + '% novel'
+                          : '')
         : tool;
     final background = isError
         ? const Color(0xFFF9ECE8)
@@ -16194,9 +15408,12 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                       ),
                     ],
                   ),
-                  child: MarkdownBody(
+                   child: MarkdownBody(
                     data: widget.docxContent,
                     selectable: true,
+                    builders: {
+                      'table': ScrollableTableBuilder(),
+                    },
                     styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                         .copyWith(
                           h1: const TextStyle(
@@ -16503,7 +15720,13 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: const Color(0xFFE7D8C4)),
                   ),
-                  child: MarkdownBody(data: widget.mdContent, selectable: true),
+                  child: MarkdownBody(
+                    data: widget.mdContent,
+                    selectable: true,
+                    builders: {
+                      'table': ScrollableTableBuilder(),
+                    },
+                  ),
                 ),
               ),
             )

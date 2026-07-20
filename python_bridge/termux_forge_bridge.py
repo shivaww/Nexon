@@ -238,10 +238,9 @@ class TermuxForgeBridge:
         r.register("mcp_transport_handle", self._mcp_transport_handle)
 
         # ── Deep research ────────────────────────────────────────────
-        r.register("deep_research.ingest", self._deep_research_ingest)
-        r.register("deep_research.status", self._deep_research_status)
-        r.register("deep_research.retrieve", self._deep_research_retrieve)
         r.register("deep_research.export_temp", self._deep_research_export_temp)
+        r.register("deep_research.reset", self._deep_research_reset)
+        r.register("deep_research.update_phase", self._deep_research_update_phase)
         r.register("web_search", self._web_search)
         r.register("read_url", self._read_url)
 
@@ -919,49 +918,44 @@ class TermuxForgeBridge:
 
     # ── Deep research ─────────────────────────────────────────────────
 
-    async def _deep_research_ingest(
-        self, stage_id: str = "", query_id: str = "", source_url: str = "", text: str = ""
-    ) -> dict:
-        """Index already-cleaned content, used internally by ``web_fetch`` and tests.
-
-        Asynchronous flow: calls deep_research.ingest_fast which parses, chunks, and
-        stores raw chunks into SQLite, returning immediately within 3s.
-        """
-        await self.deep_research.acquire_ingest_slot()
-        try:
-            res = await self.deep_research.ingest_fast(
-                stage_id, query_id, source_url, text
-            )
-            # Add to session in-memory dedup set if accepted
-            source_hash = res.get("source_hash")
-            if source_hash and res.get("status") == "accepted":
-                self._INGESTED_THIS_SESSION.add(source_hash)
-            return res
-        finally:
-            self.deep_research.release_ingest_slot()
-
-    async def _deep_research_status(self, source_hash: str = "") -> dict:
-        """Query background embedding task progress by source URL hash."""
-        if not source_hash:
-            return {"error": "source_hash parameter is required"}
-        status_info = self.deep_research.store.get_source_status(source_hash)
-        if not status_info:
-            return {"error": f"No status found for source_hash: {source_hash}"}
-        return status_info
-
-    async def _deep_research_retrieve(self, stage_id: str, query: str) -> dict:
-        """Write ranked chunks to temp.json and return confirmation metadata only."""
-        return await self.deep_research.retrieve(stage_id, query)
-
     async def _deep_research_export_temp(self) -> dict:
         """Return the bridge-owned retrieval payload for Flutter's writer stage."""
-        try:
-            content = self.deep_research.temp_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            content = "{}"
+        content = self.deep_research.export_temp()
         return {"content": content}
 
-    async def _web_search(self, query: str = "", q: str = "") -> dict:
+    async def _deep_research_reset(self) -> dict:
+        """Clear temp.json and in-memory caches."""
+        return self.deep_research.reset_run()
+
+    async def _deep_research_update_phase(
+        self,
+        stage_id: str = "",
+        phase_title: str = "",
+        facts: list = None,
+        findings: list = None,
+        skipped_pdfs: list = None,
+        failed_fetches: list = None,
+    ) -> dict:
+        """Update phase facts and findings in temp.json."""
+        return self.deep_research.update_phase(
+            stage_id=stage_id,
+            phase_title=phase_title,
+            facts=facts or [],
+            findings=findings or [],
+            skipped_pdfs=skipped_pdfs or [],
+            failed_fetches=failed_fetches or [],
+        )
+
+    async def _web_search(
+        self,
+        query: str = "",
+        q: str = "",
+        topic: str = "general",
+        time_range: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        search_depth: str = "basic"
+    ) -> dict:
         search_query = query or q
         if not search_query:
             return {"error": "Query is required."}
@@ -970,15 +964,41 @@ class TermuxForgeBridge:
             return {"error": "TAVILY_API_KEY environment variable not configured."}
         try:
             import aiohttp
+            
+            # Map aliases d/w/m/y to day/week/month/year
+            mapped_time_range = None
+            if time_range:
+                tr = time_range.strip().lower()
+                if tr == "d":
+                    mapped_time_range = "day"
+                elif tr == "w":
+                    mapped_time_range = "week"
+                elif tr == "m":
+                    mapped_time_range = "month"
+                elif tr == "y":
+                    mapped_time_range = "year"
+                elif tr in ("day", "week", "month", "year"):
+                    mapped_time_range = tr
+
+            payload = {
+                "api_key": api_key,
+                "query": search_query,
+                "search_depth": search_depth if search_depth in ("basic", "advanced") else "basic",
+                "max_results": 4
+            }
+            if topic:
+                payload["topic"] = topic
+            if mapped_time_range:
+                payload["time_range"] = mapped_time_range
+            if start_date:
+                payload["start_date"] = start_date
+            if end_date:
+                payload["end_date"] = end_date
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     "https://api.tavily.com/search",
-                    json={
-                        "api_key": api_key,
-                        "query": search_query,
-                        "search_depth": "basic",
-                        "max_results": 4
-                    },
+                    json=payload,
                     timeout=aiohttp.ClientTimeout(total=15)
                 ) as resp:
                     if resp.status >= 300:
@@ -1005,143 +1025,47 @@ class TermuxForgeBridge:
         if not target_url.startswith("http"):
             target_url = "https://" + target_url
 
-        import hashlib
-        url_hash = hashlib.sha256(target_url.encode("utf-8")).hexdigest()[:16]
-
-        if url_hash in self._INGESTED_THIS_SESSION:
-            return {
-                "status": "already_exists",
-                "reason": "in_memory_cache",
-                "source_hash": url_hash,
-                "url": target_url,
-                "new_chunks_added": 0,
-                "novelty_ratio": 0.0,
-            }
-
-        if self.deep_research.store.has_source_hash(url_hash):
-            return {
-                "status": "already_exists",
-                "reason": "database",
-                "source_hash": url_hash,
-                "url": target_url,
-                "new_chunks_added": 0,
-                "novelty_ratio": 0.0,
-            }
-
         is_pdf = target_url.lower().endswith(".pdf")
-        text = ""
+        if is_pdf:
+            logger.info("Skipping PDF URL (extension): %s", target_url)
+            return {
+                "status": "skipped_pdf",
+                "reason": "PDF files are excluded from Deep Research",
+                "url": target_url,
+                "parse_format": "skipped_pdf"
+            }
+
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status < 200 or resp.status >= 300:
                         return {"error": f"Fetch failed: HTTP {resp.status}"}
+                    
                     content_type = resp.headers.get("content-type", "").lower()
                     if "application/pdf" in content_type:
-                        is_pdf = True
-                    if is_pdf:
-                        try:
-                            pdf_bytes = await resp.read()
-                            if not pdf_bytes:
-                                return {"error": "Extraction failed: Empty PDF"}
-                            pypdf_text = ""
-                            pypdf_err = None
-                            try:
-                                import io
-                                from pypdf import PdfReader
-                                reader = PdfReader(io.BytesIO(pdf_bytes))
-                                text_parts = []
-                                for page in reader.pages:
-                                    t = page.extract_text()
-                                    if t:
-                                        text_parts.append(t)
-                                pypdf_text = "\n".join(text_parts).strip()
-                            except Exception as pe:
-                                pypdf_err = pe
+                        logger.info("Skipping PDF URL (Content-Type): %s", target_url)
+                        return {
+                            "status": "skipped_pdf",
+                            "reason": "PDF files are excluded from Deep Research",
+                            "url": target_url,
+                            "parse_format": "skipped_pdf"
+                        }
 
-                            if len(pypdf_text) >= 10:
-                                text = pypdf_text
-                            else:
-                                custom_text = ""
-                                try:
-                                    import zlib
-                                    import re
-                                    stream_pattern = re.compile(rb"stream[\r\n]+([\s\S]*?)[\r\n]+endstream")
-                                    custom_parts = []
-                                    for match in stream_pattern.finditer(pdf_bytes):
-                                        stream_content = match.group(1)
-                                        decompressed = None
-                                        try:
-                                            decompressed = zlib.decompress(stream_content)
-                                        except Exception:
-                                            decompressed = stream_content
-                                        if decompressed:
-                                            for bt_match in re.finditer(rb"BT([\s\S]*?)ET", decompressed):
-                                                bt_data = bt_match.group(1)
-                                                for text_match in re.finditer(rb"\((.*?)\)", bt_data):
-                                                    try:
-                                                        val = text_match.group(1).decode("utf-8", errors="ignore")
-                                                        val = re.sub(r"\\[0-7]{3}", "", val)
-                                                        val = val.replace("\\(", "(").replace("\\)", ")").replace("\\\\", "\\")
-                                                        custom_parts.append(val)
-                                                    except Exception:
-                                                        pass
-                                    custom_text = " ".join(custom_parts)
-                                    custom_text = re.sub(rb"\s+", b" ", custom_text.encode("utf-8")).decode("utf-8").strip()
-                                except Exception:
-                                    pass
-
-                                if len(custom_text) >= 10:
-                                    text = custom_text
-                                elif pypdf_err is not None:
-                                    return {"error": f"Extraction failed: {pypdf_err}"}
-                                else:
-                                    return {"error": "Extraction failed: No text layer found (possibly scanned/image PDF)"}
-                        except Exception as e:
-                            return {"error": f"Extraction failed: {e}"}
-                    else:
-                        try:
-                            body = await resp.text()
-                            from deep_research.rag.cleaner import TextCleaner
-                            text = TextCleaner().clean(body)
-                        except Exception as e:
-                            return {"error": f"Extraction failed: {e}"}
+                    try:
+                        body = await resp.text()
+                        from deep_research.cleaner import TextCleaner
+                        text = TextCleaner().clean(body)
+                        return {
+                            "status": "success",
+                            "content": text,
+                            "url": target_url,
+                            "parse_format": "html"
+                        }
+                    except Exception as e:
+                        return {"error": f"Extraction failed: {e}"}
         except Exception as e:
             return {"error": f"Fetch failed: {e}"}
-
-        try:
-            res = await self.deep_research.ingest_fast(stage_id, query_id, target_url, text)
-            if res.get("status") == "rejected":
-                return {
-                    "parse_format": "pdf" if is_pdf else "html",
-                    "new_chunks_added": 0,
-                    "novelty_ratio": 0.0,
-                    "total_chunks_stage": 0,
-                    "stage": stage_id,
-                    "content": text[:200],
-                    "url": target_url,
-                    "status": "rejected",
-                    "reason": res.get("reason"),
-                    "source_hash": res.get("source_hash")
-                }
-            # Success / accepted status
-            source_hash = res.get("source_hash")
-            if source_hash:
-                self._INGESTED_THIS_SESSION.add(source_hash)
-
-            return {
-                "parse_format": "pdf" if is_pdf else "html",
-                "new_chunks_added": res.get("added", 0),
-                "novelty_ratio": 1.0,
-                "total_chunks_stage": res.get("added", 0),
-                "stage": stage_id,
-                "content": text[:200],
-                "url": target_url,
-                "status": "accepted",
-                "source_hash": source_hash
-            }
-        except Exception as e:
-            return {"error": f"Ingest failed: {e}"}
 
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,
@@ -2438,9 +2362,7 @@ class TermuxForgeBridge:
         self._http_site = web.TCPSite(self._http_runner, self.host, 8390)
         await self._http_site.start()
 
-        # Spawn the background embedding queue worker task
-        self._embed_worker_task = asyncio.create_task(self.deep_research.lightrag._embed_worker_loop())
-
+        # Background embedding worker task is no longer needed since RAG/vector-embedding has been removed.
         logger.info("Bridge servers running.")
 
         # Wait for shutdown signal
@@ -2449,14 +2371,6 @@ class TermuxForgeBridge:
     async def shutdown(self) -> None:
         """Gracefully shut down the servers."""
         logger.info("Shutting down bridge servers…")
-
-        # Cancel background embed task
-        if hasattr(self, '_embed_worker_task'):
-            self._embed_worker_task.cancel()
-            try:
-                await self._embed_worker_task
-            except asyncio.CancelledError:
-                pass
 
         # Save history
         self._save_history()

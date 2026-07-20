@@ -1,4 +1,4 @@
-"""Hierarchical, session-scoped retrieval for the TermuxForge bridge."""
+"""3-agent (planner -> researcher -> writer) Deep Research for the TermuxForge bridge."""
 
 from .orchestrator import DeepResearchOrchestrator
 
