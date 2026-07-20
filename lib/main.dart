@@ -3316,7 +3316,7 @@ For every project, maintain a README.md at the project root.
       }
 
       final List<Map<String, dynamic>> steps = [];
-      final stepMatches = RegExp(r'<step\b[^>]*title="([^"]+)"[^>]*>(.*?)</step>', dotAll: True).allMatches(planText);
+      final stepMatches = RegExp(r'<step\b[^>]*title="([^"]+)"[^>]*>(.*?)</step>', dotAll: true).allMatches(planText);
       
       int stepIdx = 1;
       for (final match in stepMatches) {
@@ -3349,8 +3349,8 @@ For every project, maintain a README.md at the project root.
       _publishResearchState(sessionIndex, messageIndex, stateMap);
 
       // ── STAGE 2: MULTI-AGENT EXECUTION ──
-      final int maxConcurrentFetchCalls = _deepResearchConcurrency;
-      final Duration globalTimeBudget = Duration(minutes: _deepResearchTimeoutMinutes);
+      final int maxConcurrentFetchCalls = 6;
+      final Duration globalTimeBudget = const Duration(minutes: 60);
       final DateTime startTime = DateTime.now();
 
       DateTime getGlobalElapsed() {
@@ -3679,7 +3679,7 @@ For every project, maintain a README.md at the project root.
               for (var k = 0; k < searchMatches.length; k++) {
                 final query = queries[k];
                 final attrs = searchAttrsList[k];
-                final normQuery = normalizeQueryOrUrl(query);
+                final normQuery = _normalizeQueryOrUrl(query);
 
                 // TOOL LIMITS PER PHASE:
                 // Capped at 20 web_search calls per research phase to focus the agent on high-relevance
@@ -3847,13 +3847,13 @@ For every project, maintain a README.md at the project root.
                 if (!targetUrl.startsWith('http')) {
                   targetUrl = 'https://$targetUrl';
                 }
-                final normUrl = normalizeQueryOrUrl(url);
+                final normUrl = _normalizeQueryOrUrl(url);
 
                 if (targetUrl.toLowerCase().endsWith('.pdf')) {
-                  final skipMsg = 'Skipped PDF URL: $targetUrl (PDFs are excluded from Deep Research)';
-                  phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by extension)'});
-                  runFetchedUrls.add(normUrl);
-                  runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': True, 'skipped': True};
+                   final skipMsg = 'Skipped PDF URL: $targetUrl (PDFs are excluded from Deep Research)';
+                   phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by extension)'});
+                   runFetchedUrls.add(normUrl);
+                   runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': true, 'skipped': true};
 
                   await _updateDeepResearchPhase(
                     stageId: stageId,
@@ -3891,7 +3891,7 @@ For every project, maintain a README.md at the project root.
 
                 if (runFetchedUrls.contains(normUrl)) {
                   final cached = runUrlSummaries[normUrl]!;
-                  if (cached['skipped'] == True) {
+                  if (cached['skipped'] == true) {
                     phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (cache hit)'});
                   } else {
                     final cachedFacts = List<Map<String, dynamic>>.from(cached['facts'] ?? []);
@@ -3915,8 +3915,8 @@ For every project, maintain a README.md at the project root.
                     stopwatch: eventWatch,
                     details: {
                       'url': targetUrl,
-                      'parse_format': cached['isPdf'] == True ? 'skipped_pdf' : 'html',
-                      'already_attempted': True,
+                      'parse_format': cached['isPdf'] == true ? 'skipped_pdf' : 'html',
+                      'already_attempted': true,
                       'facts_count': cached['facts']?.length ?? 0,
                       'findings_count': cached['findings']?.length ?? 0,
                       'result_payload': { 'summary': 'Already read & summarized (cache hit)' }
@@ -3928,8 +3928,8 @@ For every project, maintain a README.md at the project root.
 
                 readUrlCount++;
                 String text = '';
-                bool isPdfResponse = False;
-                bool fetchFailed = False;
+                bool isPdfResponse = false;
+                bool fetchFailed = false;
 
                 try {
                   await fetchSemaphore.run(() async {
@@ -3949,7 +3949,7 @@ For every project, maintain a README.md at the project root.
                         final skipMsg = 'Skipped PDF URL (Content-Type): $targetUrl';
                         phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by Content-Type)'});
                         runFetchedUrls.add(normUrl);
-                        runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': True, 'skipped': True};
+                        runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': true, 'skipped': true};
 
                         await _updateDeepResearchPhase(
                           stageId: stageId,
@@ -3971,25 +3971,25 @@ For every project, maintain a README.md at the project root.
                           }
                         );
                         urlResults[idx] = skipMsg;
-                        fetchFailed = True;
+                        fetchFailed = true;
                         return;
                       }
 
                       final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 60));
                       var htmlBody = body;
-                      final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: False, dotAll: True).firstMatch(body);
+                      final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
                       if (bodyMatch != null) {
                         htmlBody = bodyMatch.group(1) ?? htmlBody;
                       }
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: False, dotAll: True), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: False, dotAll: True), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: False), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: False, dotAll: True), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: True), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: false, dotAll: true), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: false, dotAll: true), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: false), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: false, dotAll: true), '');
+                      htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
                       text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
                       text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
                     } catch (e) {
-                      fetchFailed = True;
+                      fetchFailed = true;
                       final errStr = 'Fetch failed: $e';
                       phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
                       finishResearchEvent(
@@ -4003,7 +4003,7 @@ For every project, maintain a README.md at the project root.
                     }
                   });
                 } catch (e) {
-                  fetchFailed = True;
+                  fetchFailed = true;
                   final errStr = 'Error running fetch: $e';
                   phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
                   finishResearchEvent(
@@ -4039,7 +4039,7 @@ For every project, maintain a README.md at the project root.
                   phaseFindings.addAll(List<Map<String, dynamic>>.from(findings));
 
                   runFetchedUrls.add(normUrl);
-                  runUrlSummaries[normUrl] = {'facts': facts, 'findings': findings, 'isPdf': False, 'skipped': False};
+                  runUrlSummaries[normUrl] = {'facts': facts, 'findings': findings, 'isPdf': false, 'skipped': false};
 
                   await _updateDeepResearchPhase(
                     stageId: stageId,
@@ -4091,7 +4091,7 @@ For every project, maintain a README.md at the project root.
               );
             } else {
               stepContent = stepContent.isEmpty ? responseText : '$stepContent\n\n$responseText';
-              stepDone = True;
+              stepDone = true;
             }
 
             if (!stepDone && (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
@@ -4116,13 +4116,13 @@ For every project, maintain a README.md at the project root.
                 );
                 final reflectJson = jsonDecode(reflectResp) as Map<String, dynamic>;
                 if (reflectJson['should_continue'] == false) {
-                  stepDone = True;
+                  stepDone = true;
                 }
               } catch (_) {}
             }
           } catch (e) {
-            stepDone = True;
-            stepFailed = True;
+            stepDone = true;
+            stepFailed = true;
             stepFailure = e.toString();
             break;
           }
@@ -4360,7 +4360,8 @@ For every project, maintain a README.md at the project root.
       }
     }
   }
-\n  void _newChat() {
+
+  void _newChat() {
     final newId = DateTime.now().millisecondsSinceEpoch.toString();
     final newSession = ChatSession(
       id: newId,
