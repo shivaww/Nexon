@@ -1444,7 +1444,13 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
         if (_searchSettings.enabled) {
           systemPromptText +=
-              "\n━━ WEB SEARCH PROTOCOL ━━\nIf a user asks about recent events, unknown facts, or requires live data out of your knowledge cutoff, you MUST use the web.\n1. First, output <search_request>query</search_request> to get search results.\n2. After viewing the search results, you MUST use <read_url>URL</read_url> to fetch the full content of the most relevant page to ensure maximum accuracy.\nCRITICAL: Only output ONE tool tag per turn, then stop and wait for the result.\n";
+              "\n━━ WEB SEARCH PROTOCOL (STRICT ENFORCEMENT) ━━\n"
+              "NEVER guess, hallucinate, or provide outdated information for time-sensitive queries, recent events, current software/library versions, or facts outside your knowledge cutoff. If you are not 100% certain, you MUST use the web.\n\n"
+              "STRICT WORKFLOW (Respect the ONE tool call per turn rule):\n"
+              "1. SEARCH: Output <search_request>precise query here</search_request> to get search results, then STOP. Wait for the result.\n"
+              "2. READ: After viewing the search results, output <read_url>URL</read_url> to fetch the full content of the most relevant page, then STOP. Wait for the result.\n"
+              "3. ANSWER: Synthesize the fetched page content to provide an accurate, up-to-date response with citations.\n\n"
+              "CRITICAL: Never skip Step 1 or Step 2. Do not answer from memory if the topic requires live data. If search results are insufficient, perform another <search_request> with a different query.\n";
         }
 
         systemPromptText +=
