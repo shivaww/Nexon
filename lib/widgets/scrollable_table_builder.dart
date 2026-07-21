@@ -25,10 +25,10 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(
                         minWidth: 95,  // Reasonable min column width
-                        maxWidth: 320, // Reasonable max column width to prevent excessive overflow
+                        // maxWidth: 320, // Commented out to allow intrinsic width
                       ),
                       child: RichText(
-                        softWrap: true,
+                        softWrap: false, // Set to false so IntrinsicColumnWidth can calculate width correctly
                         text: TextSpan(
                           children: cell.children?.map((node) => _parseNode(node, preferredStyle, cell.tag == 'th')).toList() ?? [],
                         ),
