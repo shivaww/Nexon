@@ -115,11 +115,11 @@ Decide: complexity (STANDARD/COMPLEX), stage_count (5-15) based on user query.
 Generate a phase-by-phase research plan.
 Output format:
 <research_plan>
-  <step title="Stage Title 1">Detailed goal and instructions for this phase</step>
-  <step title="Stage Title 2">Detailed goal and instructions for this phase</step>
+  <phase1>Stage Title - Detailed goal and instructions for this phase</phase1>
+  <phase2>Stage Title - Detailed goal and instructions for this phase</phase2>
   ...
 </research_plan>
-No text outside the XML tags. Use <step title="...">...</step> for each phase. Do not include reasoning or preamble outside the XML.""";
+No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
 
   static const String researchSystemPrompt = """ROLE: Research agent. You are running one phase of a multi-step research plan.
 Your task is to gather enough relevant information to fully address the phase's prompt.
@@ -456,6 +456,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     required ProviderSettings settings,
     required String model,
   }) async {
+    final truncatedContent = content.length > 12000
+        ? content.substring(0, 12000) + "\n...[content truncated]"
+        : content;
     final summarizerMessages = [
       const ChatMessage(
         role: MessageRole.system,
@@ -463,7 +466,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       ),
       ChatMessage(
         role: MessageRole.user,
-        text: "Source URL: $sourceUrl\n\nSource Content:\n$content",
+        text: "Source URL: $sourceUrl\n\nSource Content:\n$truncatedContent",
       ),
     ];
     try {
@@ -3316,11 +3319,11 @@ For every project, maintain a README.md at the project root.
       }
 
       final List<Map<String, dynamic>> steps = [];
-      final stepMatches = RegExp(r'<step\b[^>]*title="([^"]+)"[^>]*>(.*?)</step>', dotAll: true).allMatches(planText);
+      final stepMatches = RegExp(r"<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>", caseSensitive: false, dotAll: true).allMatches(planText);
       
       int stepIdx = 1;
       for (final match in stepMatches) {
-        final title = match.group(1) ?? 'Step $stepIdx';
+        final title = "Phase $stepIdx";
         final queryText = match.group(2)?.trim() ?? '';
         steps.add({
           'id': 'step_$stepIdx',
@@ -3775,7 +3778,7 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
     try {
       final individualSummaries = await _summarizeSourceInline(
         sourceUrl: individualUrl,
-        content: searchResult,
+        content: m.group(3) ?? "",
         provider: provider,
         settings: settings,
         model: model,
@@ -4135,7 +4138,8 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                   model: model,
                   messages: _compactHistoryForApi(stepReflectMessages, stepReflectMessages.length),
                 );
-                final reflectJson = jsonDecode(reflectResp) as Map<String, dynamic>;
+                final cleanReflectResp = reflectResp.replaceAll(RegExp(r"```json\s*|\s*```"), "").trim();
+                final reflectJson = jsonDecode(cleanReflectResp) as Map<String, dynamic>;
                 if (reflectJson['should_continue'] == false) {
                   stepDone = true;
                 }
