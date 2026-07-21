@@ -839,6 +839,60 @@ class ToolRegistry {
       ],
     );
     _reg(
+      'wait_for_background',
+      'Wait for Background Process',
+      'Pause agent execution for up to a time limit while a background process runs without stopping it.',
+      ToolCategory.shell,
+      0,
+      [
+        const ToolParameter(
+          name: 'pid',
+          description: 'Service PID, name, or command substring',
+        ),
+        const ToolParameter(
+          name: 'time_limit_seconds',
+          description: 'Maximum seconds to wait (up to 90s)',
+          type: 'int',
+          required: false,
+          defaultValue: '15',
+        ),
+        const ToolParameter(
+          name: 'poll_interval_seconds',
+          description: 'Polling interval in seconds',
+          type: 'int',
+          required: false,
+          defaultValue: '2',
+        ),
+      ],
+    );
+    _reg(
+      'background_time_limit',
+      'Background Time Limit',
+      'Pause agent execution for up to a time limit while a background process runs without stopping it.',
+      ToolCategory.shell,
+      0,
+      [
+        const ToolParameter(
+          name: 'pid',
+          description: 'Service PID, name, or command substring',
+        ),
+        const ToolParameter(
+          name: 'time_limit_seconds',
+          description: 'Maximum seconds to wait (up to 90s)',
+          type: 'int',
+          required: false,
+          defaultValue: '15',
+        ),
+        const ToolParameter(
+          name: 'poll_interval_seconds',
+          description: 'Polling interval in seconds',
+          type: 'int',
+          required: false,
+          defaultValue: '2',
+        ),
+      ],
+    );
+    _reg(
       'install_package',
       'Install Package',
       'Install a system package via pkg.',

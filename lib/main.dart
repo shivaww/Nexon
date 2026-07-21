@@ -1505,6 +1505,16 @@ Use octal mode strings (e.g., 755, 644). Set recursive=true for directories.
 Starts process detached. Returns: PID, URL(s), startup log, management commands.
 Other tools: list_services, service_status (pass <id>), service_logs (pass <id>), stop_service (pass <id>).
 
+── BACKGROUND TIME LIMIT (wait while a background service continues running) ──
+<tool_request>
+  <method>wait_for_background</method>
+  <pid>12345</pid>
+  <time_limit_seconds>30</time_limit_seconds>
+  <poll_interval_seconds>2</poll_interval_seconds>
+</tool_request>
+Supported alias method: <method>background_time_limit</method>.
+Pauses ONLY the agent for up to 90 seconds (time_limit_seconds); it never stops the background process. Use it after run_background or during background tasks when a build, server, or watcher needs time to run. It returns whether the service finished or is still running, its latest status, and recent logs. Then use service_status or service_logs as needed.
+
 ── DART IDE TOOLS ──
 <tool_request>
   <method>dart_diagnostics</method>
@@ -1520,26 +1530,27 @@ Returns structured analyzer diagnostics when the Dart SDK supports JSON output.
 Use output=none to check formatting without writing, output=write to apply formatting.
 
 ━━ DECISION GUIDE: WHEN TO USE WHICH ━━
-| Task                    | Use                    | NOT                    |
-|-------------------------|------------------------|------------------------|
-| Read file / check code  | read_file_rich         | cat, head, tail        |
-| Edit 1-3 code sections  | patch_file             | sed -i, heredoc        |
-| Edit by line number     | replace_lines          | sed -i                 |
-| Create new file         | write_file_rich        | cat > file << 'EOF'    |
-| Append to file / log    | append_file            | echo >>                |
-| Search codebase         | search_rich            | grep -rn               |
-| List project structure  | tree                   | ls -la                 |
-| Delete file / dir       | delete_path            | rm -rf                 |
-| Move / rename           | move_path              | mv                     |
-| Copy file / dir         | copy_path              | cp -r                  |
-| Create directory        | mkdir_path             | mkdir -p               |
-| File metadata           | stat_path              | stat, ls -la           |
-| Change permissions      | chmod_path             | chmod                  |
-| Dart diagnostics        | dart_diagnostics       | raw dart analyze       |
-| Dart formatting         | dart_format            | raw dart format        |
-| Symbol references       | symbol_references      | ad-hoc grep            |
-| Build / git / installs  | run_command            | N/A                    |
-| Long-running server     | run_background         | run_command            |
+| Task                    | Use                                         | NOT                    |
+|-------------------------|---------------------------------------------|------------------------|
+| Read file / check code  | read_file_rich                              | cat, head, tail        |
+| Edit 1-3 code sections  | patch_file                                  | sed -i, heredoc        |
+| Edit by line number     | replace_lines                               | sed -i                 |
+| Create new file         | write_file_rich                             | cat > file << 'EOF'    |
+| Append to file / log    | append_file                                 | echo >>                |
+| Search codebase         | search_rich                                 | grep -rn               |
+| List project structure  | tree                                        | ls -la                 |
+| Delete file / dir       | delete_path                                 | rm -rf                 |
+| Move / rename           | move_path                                   | mv                     |
+| Copy file / dir         | copy_path                                   | cp -r                  |
+| Create directory        | mkdir_path                                  | mkdir -p               |
+| File metadata           | stat_path                                   | stat, ls -la           |
+| Change permissions      | chmod_path                                  | chmod                  |
+| Dart diagnostics        | dart_diagnostics                            | raw dart analyze       |
+| Dart formatting         | dart_format                                 | raw dart format        |
+| Symbol references       | symbol_references                           | ad-hoc grep            |
+| Build / git / installs  | run_command                                 | N/A                    |
+| Long-running server     | run_background                              | run_command            |
+| Wait for background job | wait_for_background / background_time_limit | arbitrary sleep command|
 
 ━━ WORKFLOW FOR EDITING CODE ━━
 1. read_file_rich (confirm exact content and line numbers)
@@ -3123,6 +3134,11 @@ For every project, maintain a README.md at the project root.
         return '📄 Fetching service logs: ${p('id')}';
       case 'stop_service':
         return '⏹️ Stopping service: ${p('id')}';
+      case 'wait_for_background':
+      case 'background_time_limit':
+        final target = p('pid') ?? p('id') ?? '';
+        final secs = p('time_limit_seconds') ?? '15';
+        return '⏳ Waiting for background process $target (${secs}s limit)';
       default:
         return '⚙️  Tool: $method';
     }
@@ -5935,6 +5951,14 @@ class _McpToolBlockState extends State<McpToolBlock> {
           const Color(0xFFDC2626),
           'Stop service',
           p('id'),
+        );
+      case 'wait_for_background':
+      case 'background_time_limit':
+        return (
+          Icons.timer_outlined,
+          const Color(0xFFD97706),
+          'Wait for background job',
+          p('pid') ?? p('id'),
         );
       case 'dart_diagnostics':
       case 'dart_analyze':

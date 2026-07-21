@@ -292,6 +292,8 @@ class TermuxForgeBridge:
         r.register("service_status",  self._service_status)
         r.register("service_logs",    self._service_logs)
         r.register("stop_service",    self._stop_service)
+        r.register("wait_for_background", self._wait_for_background)
+        r.register("background_time_limit", self._wait_for_background)
 
         # ── IDE / Analyzer Tools ─────────────────────────────────────
         r.register("dart_diagnostics", self._dart_diagnostics)
@@ -2103,6 +2105,47 @@ class TermuxForgeBridge:
                 "exitCode": 1,
             }
         return await self.services.stop_service(target, force)
+
+    async def _wait_for_background(
+        self,
+        pid: int = None,
+        id: int = None,
+        time_limit_seconds: float = 15,
+        poll_interval_seconds: float = 2,
+        log_lines: int = 20,
+    ) -> dict:
+        """Wait a bounded time for a tracked background service to finish.
+
+        This pauses the calling agent, never the service. The limit is capped
+        below the Flutter bridge request timeout so the caller always receives
+        a status update instead of an indefinitely pending tool call.
+        """
+        target = pid if pid is not None else id
+        if target is None:
+            return {"error": "Must provide the background service 'pid' or 'id'."}
+
+        target = self._resolve_pid(target)
+        limit = max(1.0, min(float(time_limit_seconds), 90.0))
+        poll_interval = max(0.5, min(float(poll_interval_seconds), 10.0))
+        started = time.monotonic()
+
+        while True:
+            status = self.services.service_status(target)
+            alive = status.get("alive") is True
+            elapsed = time.monotonic() - started
+            if not alive or elapsed >= limit:
+                logs = self.services.service_logs(target, max(1, min(int(log_lines), 100)))
+                return {
+                    "pid": target,
+                    "waited_seconds": round(elapsed, 2),
+                    "time_limit_seconds": limit,
+                    "timed_out": alive,
+                    "completed": not alive,
+                    "status": status,
+                    "logs": logs,
+                    "exitCode": 0,
+                }
+            await asyncio.sleep(min(poll_interval, limit - elapsed))
 
 
 
