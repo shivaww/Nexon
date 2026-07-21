@@ -1531,6 +1531,38 @@ Returns structured analyzer diagnostics when the Dart SDK supports JSON output.
 </tool_request>
 Use output=none to check formatting without writing, output=write to apply formatting.
 
+── STRUCTURED GIT TOOLS (PREFER OVER RAW SHELL FOR GIT OPS) ──
+<tool_request>
+  <method>git_status</method>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+
+<tool_request>
+  <method>git_diff</method>
+  <staged>false</staged>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+
+<tool_request>
+  <method>git_commit</method>
+  <message>feat: add new feature</message>
+  <add_all>true</add_all>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+
+<tool_request>
+  <method>git_push</method>
+  <message>feat: add new feature</message>
+  <branch>main</branch>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+
+<tool_request>
+  <method>git_pull</method>
+  <branch>main</branch>
+  <cwd>/projects/myapp</cwd>
+</tool_request>
+
 ━━ DECISION GUIDE: WHEN TO USE WHICH ━━
 | Task                    | Use                                         | NOT                    |
 |-------------------------|---------------------------------------------|------------------------|
@@ -1550,6 +1582,11 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Change permissions      | chmod_path                                  | chmod                  |
 | Dart diagnostics        | dart_diagnostics (Dart only)                | raw dart analyze       |
 | Dart formatting         | dart_format (Dart only)                     | raw dart format        |
+| Check Git status        | git_status                                  | git status             |
+| Check Git diff          | git_diff (<staged>true</staged>)             | git diff               |
+| Commit changes          | git_commit (<message>, <add_all>)            | git commit             |
+| Push changes to remote  | git_push (<message>, <branch>)               | git push               |
+| Pull updates from remote| git_pull (<branch>)                          | git pull               |
 | Non-Dart diagnostics    | run_command (e.g. python -m py_compile, eslint, tsc --noEmit) | dart_diagnostics |
 | Symbol references       | symbol_references                           | ad-hoc grep            |
 | Build / git / installs  | run_command                                 | N/A                    |
@@ -1610,15 +1647,16 @@ NEVER call read_file_rich repeatedly from line 1 scrolling through the whole fil
 
 ━━ WORKFLOW: GIT OPERATIONS ━━
 Use structured git tools for all version control — do NOT use raw `git` via run_command unless unavoidable:
-- git_status  → check working tree before any commit
-- git_diff    → review changes (optionally pass <ref> to compare against a specific commit)
-- git_commit  → stage all tracked changes and commit with a message
-For push, branch, stash, or log: use run_command with explicit git commands.
-Example commit flow:
+- git_status  → check working tree status before any commit
+- git_diff    → review changes (pass <staged>true</staged> for staged diffs)
+- git_commit  → stage and commit changes with a message (<add_all>true</add_all>)
+- git_push    → stage, commit, and push updates to remote repository
+- git_pull    → pull latest changes from remote branch
+For branch management, stash, or log: use run_command with explicit git commands.
+Example commit & push flow:
   Step 1: git_status  → confirm what changed
   Step 2: git_diff    → review the diff
-  Step 3: git_commit message="feat: add login screen"
-  Step 4: run_command command="git push"
+  Step 3: git_push message="feat: add login screen" branch="main"
 
 ━━ WORKFLOW: HANDLING A FAILED SHELL COMMAND ━━
 When run_command returns a non-zero exit code:
