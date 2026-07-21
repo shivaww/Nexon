@@ -1321,19 +1321,19 @@ NEVER chain multiple tool calls in one response.
 NEVER read an entire file blindly. You must follow this workflow:
 • SMALL FILE FAST-PATH: For small files (< 150 lines), you may call `read_file_rich` directly.
 • LARGE FILE OUTLINE: For large files (> 150 lines), ALWAYS call `file_outline` first to target specific line ranges.
-1. GET THE MAP: Use `<tool_request><method>file_outline</method><path>path/to/file.dart</path></tool_request>` for structured symbol line numbers.
-2. READ SPECIFIC LINES: Use `<tool_request><method>read_file_rich</method><path>path/to/file.dart</path><start_line>45</start_line><end_line>80</end_line></tool_request>` to read target lines.
-3. SEARCH: Use `<tool_request><method>search_rich</method><query>RegExp('TODO.*')</query><path>lib/</path><context_lines>2</context_lines></tool_request>`.
-4. EDIT: NEVER rewrite a whole file. Use `<tool_request><method>patch_file</method><path>path/to/file.dart</path><patches>[{"search": "old code", "replace": "new code"}]</patches></tool_request>` for atomic search-and-replace.
+1. GET THE MAP: Use `<tool_request><method>file_outline</method><path>path/to/file.ext</path></tool_request>` for structured symbol line numbers.
+2. READ SPECIFIC LINES: Use `<tool_request><method>read_file_rich</method><path>path/to/file.ext</path><start_line>45</start_line><end_line>80</end_line></tool_request>` to read target lines.
+3. SEARCH: Use `<tool_request><method>search_rich</method><query>RegExp('TODO.*')</query><path>src/</path><context_lines>2</context_lines></tool_request>`.
+4. EDIT: NEVER rewrite a whole file. Use `<tool_request><method>patch_file</method><path>path/to/file.ext</path><patches>[{"search": "old code", "replace": "new code"}]</patches></tool_request>` for atomic search-and-replace.
 
 ━━ STRUCTURED FILE TOOLS (ALWAYS PREFER OVER SHELL FOR FILE OPS) ━━
 Use XML format: <tool_request><method>NAME</method><param>value</param>...</tool_request>
-CRITICAL: Always use direct tag format like <path>/foo</path>. Do NOT use <PARAM name="path">/foo</PARAM> to maximize parser cleanliness.
+CRITICAL: Always use direct tag format like <path>/foo</path>. Do NOT use <PARAM name="path">/foo</PARAM> to maximize parser cleanliness. Works on ALL file types (Dart, Python, JS/TS, JSON, HTML, CSS, Shell, YAML, etc.).
 
 ── READ FILE (with line numbers, metadata, navigation hints) ──
 <tool_request>
   <method>read_file_rich</method>
-  <path>/absolute/path/to/file.dart</path>
+  <path>/absolute/path/to/file.ext</path>
   <start_line>1</start_line>
   <end_line>120</end_line>
 </tool_request>
@@ -1343,15 +1343,15 @@ Max 600 lines per call. Use start_line/end_line to navigate large files.
 ── MULTI-READ (read multiple files or ranges in ONE call) ──
 <tool_request>
   <method>multi_read_rich</method>
-  <reads>[{"path":"/lib/main.dart","start_line":45,"end_line":80},{"path":"/lib/widget.dart","start_line":1,"end_line":50}]</reads>
+  <reads>[{"path":"/src/main.ts","start_line":45,"end_line":80},{"path":"/config.json","start_line":1,"end_line":50}]</reads>
 </tool_request>
 Use when you need to read non-adjacent sections or multiple files at once.
 
 ── PATCH FILE (multi search-replace, atomic, with diff output) ──
 <tool_request>
   <method>patch_file</method>
-  <path>/absolute/path/to/file.dart</path>
-  <patches>[{"search":"exact old code here","replace":"new code here","label":"fix pie chart"}]</patches>
+  <path>/absolute/path/to/file.ext</path>
+  <patches>[{"search":"exact old code here","replace":"new code here","label":"fix logic"}]</patches>
 </tool_request>
 Returns: unified diff of all changes. Fails safely if search text not found.
 For multiple non-adjacent edits: add multiple objects to the patches array.
@@ -1360,19 +1360,17 @@ CRITICAL: search text must EXACTLY match including whitespace and indentation.
 ── REPLACE LINES (replace a specific line range) ──
 <tool_request>
   <method>replace_lines</method>
-  <path>/absolute/path/to/file.dart</path>
+  <path>/absolute/path/to/file.ext</path>
   <start_line>45</start_line>
   <end_line>52</end_line>
-  <new_content>  Widget build(BuildContext context) {
-    return Scaffold();
-  }</new_content>
+  <new_content>  // New content here</new_content>
 </tool_request>
 Use when you know exact line numbers (after reading the file first).
 
 ── INSERT LINES (insert after a line) ──
 <tool_request>
   <method>insert_lines</method>
-  <path>/absolute/path/to/file.dart</path>
+  <path>/absolute/path/to/file.ext</path>
   <after_line>120</after_line>
   <content>  // New code here</content>
 </tool_request>
@@ -1380,7 +1378,7 @@ Use when you know exact line numbers (after reading the file first).
 ── DELETE LINES ──
 <tool_request>
   <method>delete_lines</method>
-  <path>/absolute/path/to/file.dart</path>
+  <path>/absolute/path/to/file.ext</path>
   <start_line>45</start_line>
   <end_line>52</end_line>
 </tool_request>
@@ -1388,7 +1386,7 @@ Use when you know exact line numbers (after reading the file first).
 ── WRITE FILE (create or overwrite entire file, atomic) ──
 <tool_request>
   <method>write_file_rich</method>
-  <path>/absolute/path/to/newfile.dart</path>
+  <path>/absolute/path/to/newfile.ext</path>
   <content>full file content here</content>
   <create_dirs>true</create_dirs>
 </tool_request>
@@ -1397,9 +1395,9 @@ For existing files, prefer passing <expected_sha256> from stat_path/read metadat
 ── SEARCH FILES (grep across codebase) ──
 <tool_request>
   <method>search_rich</method>
-  <path>/lib</path>
-  <query>_buildPieChart</query>
-  <include>*.dart</include>
+  <path>/src</path>
+  <query>myFunctionName</query>
+  <include>*</include>
   <case_insensitive>false</case_insensitive>
 </tool_request>
 Returns: file:line:content for each match. Max 50 results.
@@ -1407,15 +1405,15 @@ Returns: file:line:content for each match. Max 50 results.
 ── FILE OUTLINE (class/function structure of a file) ──
 <tool_request>
   <method>file_outline</method>
-  <path>/lib/main.dart</path>
+  <path>/src/main.ext</path>
 </tool_request>
-Returns: all class/function/widget definitions with line numbers.
+Returns: all class/function/struct definitions with line numbers.
 
 ── SYMBOL REFERENCES ──
 <tool_request>
   <method>symbol_references</method>
   <symbol>MyClass</symbol>
-  <path>/projects/myapp/lib</path>
+  <path>/projects/myapp/src</path>
 </tool_request>
 Use this before renames or cross-file edits.
 
@@ -1429,14 +1427,14 @@ Use this before renames or cross-file edits.
 ── DIFF TWO FILES ──
 <tool_request>
   <method>diff_files</method>
-  <path_a>/lib/main.dart</path_a>
-  <path_b>/lib/old_main.dart</path_b>
+  <path_a>/src/main.ext</path_a>
+  <path_b>/src/old_main.ext</path_b>
 </tool_request>
 
 ── SHELL COMMAND (for build tools, git, installs — NOT for file reading/editing) ──
 <tool_request>
   <method>run_command</method>
-  <command>dart analyze lib/</command>
+  <command>npm test</command>
   <cwd>/projects/myapp</cwd>
 </tool_request>
 Also supported: <command>shell command here</command> shorthand.
@@ -1452,7 +1450,7 @@ Use for log files, cumulative writes, config additions.
 ── DELETE PATH (file or directory with safety guards) ──
 <tool_request>
   <method>delete_path</method>
-  <path>/absolute/path/to/old_file.dart</path>
+  <path>/absolute/path/to/old_file.ext</path>
   <recursive>false</recursive>
 </tool_request>
 Set recursive=true to delete non-empty directories. Protected system dirs are hard-blocked.
@@ -1460,8 +1458,8 @@ Set recursive=true to delete non-empty directories. Protected system dirs are ha
 ── MOVE / RENAME ──
 <tool_request>
   <method>move_path</method>
-  <src>/old/path/file.dart</src>
-  <dest>/new/path/file.dart</dest>
+  <src>/old/path/file.ext</src>
+  <dest>/new/path/file.ext</dest>
   <overwrite>false</overwrite>
 </tool_request>
 Cross-filesystem safe. Set overwrite=true to replace existing destination.
@@ -1477,14 +1475,14 @@ Cross-filesystem safe. Set overwrite=true to replace existing destination.
 ── MKDIR (create directory, parents by default) ──
 <tool_request>
   <method>mkdir_path</method>
-  <path>/projects/myapp/lib/models</path>
+  <path>/projects/myapp/src/models</path>
   <parents>true</parents>
 </tool_request>
 
 ── STAT (detailed file/dir metadata) ──
 <tool_request>
   <method>stat_path</method>
-  <path>/lib/main.dart</path>
+  <path>/src/main.ext</path>
 </tool_request>
 Returns: size, permissions, timestamps, type, language, symlink info.
 
