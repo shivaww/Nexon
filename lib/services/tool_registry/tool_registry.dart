@@ -281,7 +281,7 @@ class ToolRegistry {
     _reg(
       'patch_file',
       'Patch File',
-      'Apply exact search/replace patches atomically and return a unified diff.',
+      'Apply multiple search/replace patches to a file atomically and return a unified diff.',
       ToolCategory.file,
       2,
       [
@@ -636,20 +636,6 @@ class ToolRegistry {
 
     // -- Dart tools (category: dart) ----------------------------------------
     _reg(
-      'dart_analyze',
-      'Dart Analyze',
-      'Compatibility alias for dart_diagnostics.',
-      ToolCategory.dart,
-      3,
-      [
-        const ToolParameter(
-          name: 'path',
-          description: 'Path to analyze',
-          required: false,
-        ),
-      ],
-    );
-    _reg(
       'dart_diagnostics',
       'Dart Diagnostics',
       'Run Dart analyzer and return structured diagnostics where supported.',
@@ -708,31 +694,6 @@ class ToolRegistry {
       'run_command',
       'Run Command',
       'Execute a shell command with rich IDE output.',
-      ToolCategory.shell,
-      5,
-      [
-        const ToolParameter(
-          name: 'command',
-          description: 'The shell command to execute',
-        ),
-        const ToolParameter(
-          name: 'cwd',
-          description: 'Working directory',
-          required: false,
-        ),
-        const ToolParameter(
-          name: 'timeout',
-          description: 'Timeout in seconds',
-          type: 'int',
-          required: false,
-          defaultValue: '30',
-        ),
-      ],
-    );
-    _reg(
-      'shell_rich',
-      'Shell Rich',
-      'Execute a shell command through the rich output engine.',
       ToolCategory.shell,
       5,
       [
@@ -835,33 +796,6 @@ class ToolRegistry {
           type: 'bool',
           required: false,
           defaultValue: 'false',
-        ),
-      ],
-    );
-    _reg(
-      'wait_for_background',
-      'Wait for Background Process',
-      'Pause agent execution for up to a time limit while a background process runs without stopping it.',
-      ToolCategory.shell,
-      0,
-      [
-        const ToolParameter(
-          name: 'pid',
-          description: 'Service PID, name, or command substring',
-        ),
-        const ToolParameter(
-          name: 'time_limit_seconds',
-          description: 'Maximum seconds to wait (up to 90s)',
-          type: 'int',
-          required: false,
-          defaultValue: '15',
-        ),
-        const ToolParameter(
-          name: 'poll_interval_seconds',
-          description: 'Polling interval in seconds',
-          type: 'int',
-          required: false,
-          defaultValue: '2',
         ),
       ],
     );

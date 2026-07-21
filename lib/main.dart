@@ -1351,10 +1351,13 @@ Use when you need to read non-adjacent sections or multiple files at once.
 <tool_request>
   <method>patch_file</method>
   <path>/absolute/path/to/file.ext</path>
-  <patches>[{"search":"exact old code here","replace":"new code here","label":"fix logic"}]</patches>
+  <patches>[
+    {"search":"exact old code section 1","replace":"new code section 1","label":"fix header"},
+    {"search":"exact old code section 2","replace":"new code section 2","label":"update method"}
+  ]</patches>
 </tool_request>
 Returns: unified diff of all changes. Fails safely if search text not found.
-For multiple non-adjacent edits: add multiple objects to the patches array.
+Applies multiple non-adjacent search-and-replace edits to the same file in a single atomic call (add multiple objects to the patches array).
 CRITICAL: search text must EXACTLY match including whitespace and indentation.
 
 ── REPLACE LINES (replace a specific line range) ──
@@ -1507,12 +1510,11 @@ Other tools: list_services, service_status (pass <id>), service_logs (pass <id>)
 
 ── BACKGROUND TIME LIMIT (wait while a background service continues running) ──
 <tool_request>
-  <method>wait_for_background</method>
+  <method>background_time_limit</method>
   <pid>12345</pid>
   <time_limit_seconds>30</time_limit_seconds>
   <poll_interval_seconds>2</poll_interval_seconds>
 </tool_request>
-Supported alias method: <method>background_time_limit</method>.
 Pauses ONLY the agent for up to 90 seconds (time_limit_seconds); it never stops the background process. Use it after run_background or during background tasks when a build, server, or watcher needs time to run. It returns whether the service finished or is still running, its latest status, and recent logs. Then use service_status or service_logs as needed.
 
 ── DART IDE TOOLS ──
@@ -1533,7 +1535,7 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Task                    | Use                                         | NOT                    |
 |-------------------------|---------------------------------------------|------------------------|
 | Read file / check code  | read_file_rich                              | cat, head, tail        |
-| Edit 1-3 code sections  | patch_file                                  | sed -i, heredoc        |
+| Edit multiple code sections | patch_file (pass multiple objects in patches array) | sed -i, heredoc, rewrite whole file |
 | Edit by line number     | replace_lines                               | sed -i                 |
 | Create new file         | write_file_rich                             | cat > file << 'EOF'    |
 | Append to file / log    | append_file                                 | echo >>                |
@@ -1550,7 +1552,7 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Symbol references       | symbol_references                           | ad-hoc grep            |
 | Build / git / installs  | run_command                                 | N/A                    |
 | Long-running server     | run_background                              | run_command            |
-| Wait for background job | wait_for_background / background_time_limit | arbitrary sleep command|
+| Wait for background job | background_time_limit               | arbitrary sleep command|
 
 ━━ VERSATILE TOOL STRATEGIES (DUAL-USE PRO TIPS) ━━
 Certain tools can perform high-value secondary jobs. Use them strategically to save turns and prevent errors:
