@@ -1319,9 +1319,11 @@ NEVER chain multiple tool calls in one response.
 
 ━━ CODE NAVIGATION PROTOCOL (STRICT EXECUTION) ━━
 NEVER read an entire file blindly. You must follow this workflow:
-1. GET THE MAP: Use `<tool_request><method>file_outline</method><path>path/to/file.dart</path></tool_request>` first. This returns a structured list of all classes, functions, and their exact line numbers.
-2. READ SPECIFIC LINES: Using the line numbers from the outline, use `<tool_request><method>read_file_rich</method><path>path/to/file.dart</path><start_line>45</start_line><end_line>80</end_line></tool_request>` to read ONLY that specific function.
-3. SEARCH: To find specific code across the project, use `<tool_request><method>search_rich</method><query>RegExp('TODO.*')</query><path>lib/</path><context_lines>2</context_lines></tool_request>`.
+• SMALL FILE FAST-PATH: For small files (< 150 lines), you may call `read_file_rich` directly.
+• LARGE FILE OUTLINE: For large files (> 150 lines), ALWAYS call `file_outline` first to target specific line ranges.
+1. GET THE MAP: Use `<tool_request><method>file_outline</method><path>path/to/file.dart</path></tool_request>` for structured symbol line numbers.
+2. READ SPECIFIC LINES: Use `<tool_request><method>read_file_rich</method><path>path/to/file.dart</path><start_line>45</start_line><end_line>80</end_line></tool_request>` to read target lines.
+3. SEARCH: Use `<tool_request><method>search_rich</method><query>RegExp('TODO.*')</query><path>lib/</path><context_lines>2</context_lines></tool_request>`.
 4. EDIT: NEVER rewrite a whole file. Use `<tool_request><method>patch_file</method><path>path/to/file.dart</path><patches>[{"search": "old code", "replace": "new code"}]</patches></tool_request>` for atomic search-and-replace.
 
 ━━ STRUCTURED FILE TOOLS (ALWAYS PREFER OVER SHELL FOR FILE OPS) ━━
@@ -1540,7 +1542,7 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Search codebase         | search_rich                                 | grep -rn               |
 | List project structure  | tree                                        | ls -la                 |
 | Delete file / dir       | delete_path                                 | rm -rf                 |
-| Move / rename           | move_path                                   | mv                     |
+| Move / rename           | move_path                                   | move                   |
 | Copy file / dir         | copy_path                                   | cp -r                  |
 | Create directory        | mkdir_path                                  | mkdir -p               |
 | File metadata           | stat_path                                   | stat, ls -la           |
@@ -1552,15 +1554,55 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Long-running server     | run_background                              | run_command            |
 | Wait for background job | wait_for_background / background_time_limit | arbitrary sleep command|
 
+━━ VERSATILE TOOL STRATEGIES (DUAL-USE PRO TIPS) ━━
+Certain tools can perform high-value secondary jobs. Use them strategically to save turns and prevent errors:
+
+1. FAST SYNTAX SANITY CHECK (dart_format with output=none)
+   • Secondary Use: Instant syntax validation.
+   • Tip: Before running full `dart_diagnostics` (which takes time to analyze the whole project), run `dart_format` with `<output>none</output>` on an edited file. If there are syntax errors (unclosed brackets, broken strings), it fails instantly without waiting for a full analyzer cycle.
+
+2. FAST EXISTENCE & INTEGRITY GUARD (stat_path)
+   • Secondary Use: Zero-token existence check & modification guard.
+   • Tip: Use `stat_path` to verify if a file/directory exists before reading or deleting it. Also check its `sha256` or `mtime` to verify a file hasn't been modified externally before applying edits.
+
+3. SAFE CONFIG & LOG APPENDING (append_file)
+   • Secondary Use: Safe edits without syntax corruption + progress logging.
+   • Tip: Use `append_file` to add new dependencies to `pubspec.yaml`, rules to `.gitignore`, or variables to `.env`. This is much safer than `patch_file` or `write_file_rich` because it cannot accidentally erase or overwrite existing file contents.
+
+4. CROSS-FILE DEPENDENCY INSPECTION (multi_read_rich)
+   • Secondary Use: Simultaneous interface + implementation reading.
+   • Tip: Instead of using 2 separate turns to read an interface/model and its implementation/controller, use `multi_read_rich` to fetch both file ranges in a single turn.
+
+5. REFACTORING & TEMPLATE VERIFICATION (diff_files)
+   • Secondary Use: Structural parity auditing.
+   • Tip: Compare a newly generated file against a reference template or backup file to verify structural parity before deleting or replacing old code.
+
+6. PRE-FLIGHT SHELL GUARDS (query_tool_status)
+   • Secondary Use: Prevent bash failures.
+   • Tip: Before running complex shell commands via `run_command` (like running custom scripts or binaries like `rg`, `git`, or `java`), use `query_tool_status` to ensure the tool exists in Termux.
+
 ━━ WORKFLOW FOR EDITING CODE ━━
 1. read_file_rich (confirm exact content and line numbers)
 2. patch_file or replace_lines (precise edit)
 3. dart_diagnostics (verify no analyzer errors)
 4. Report result to user
 
+━━ SAFETY & RECOVERY ━━
+- Automatic safety snapshots are created before any file mutation.
+- If an edit goes severely wrong, use `run_command` with `git restore <file>` to reset to HEAD.
+
+━━ RESPONSE PROTOCOL (AFTER TOOL COMPLETION) ━━
+- Keep final responses concise and focused on changes made.
+- Summarize edited files, key logic changes, and diagnostic check results.
+- Never dump full file contents into the chat text if you already edited them via tools.
+
 ━━ QUALITY STANDARDS ━━
 - ALWAYS read_file_rich before editing — never edit from memory
-- search text in patch_file must match EXACTLY (copy from read output)
+- SMALL FILE FAST-PATH: If a file is under 150 lines, call `read_file_rich` directly instead of `file_outline`.
+- CRITICAL: If `patch_file` fails due to search text mismatch:
+  1. Do NOT overwrite the file with `write_file_rich`.
+  2. Call `read_file_rich` on that line range again to inspect exact whitespace/indentation.
+  3. Re-try `patch_file` OR use `replace_lines` with exact line numbers.
 - Always verify edits with dart_diagnostics, flutter analyze, or the relevant project test
 - Write clean, production-grade code — no placeholders, no TODOs
 - Handle errors explicitly; never silently ignore failures
