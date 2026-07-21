@@ -2221,7 +2221,7 @@ For every project, maintain a README.md at the project root.
       if (msg.role == MessageRole.system) {
         String newText = msg.text;
         
-        if (newText.length > 1500) {
+        if (newText.length > 8000) {
           final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]').firstMatch(newText);
           final mcpMatch = newText.contains('MCP Result:\n');
           
