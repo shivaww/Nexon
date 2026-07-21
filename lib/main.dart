@@ -3823,8 +3823,6 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
     },
   );
 }
-                  );
-                }
               }
 
               stepMessages.add(
