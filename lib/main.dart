@@ -115,11 +115,11 @@ Decide: complexity (STANDARD/COMPLEX), stage_count (5-15) based on user query.
 Generate a phase-by-phase research plan.
 Output format:
 <research_plan>
-  <phase1>Stage Title - Detailed goal and instructions for this phase</phase1>
-  <phase2>Stage Title - Detailed goal and instructions for this phase</phase2>
+  <step title="Stage Title 1">Detailed goal and instructions for this phase</step>
+  <step title="Stage Title 2">Detailed goal and instructions for this phase</step>
   ...
 </research_plan>
-No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
+No text outside the XML tags. Use <step title="...">...</step> for each phase. Do not include reasoning or preamble outside the XML.""";
 
   static const String researchSystemPrompt = """ROLE: Research agent. You are running one phase of a multi-step research plan.
 Your task is to gather enough relevant information to fully address the phase's prompt.
@@ -3765,40 +3765,61 @@ For every project, maintain a README.md at the project root.
                 allUrls.addAll(urls);
                 combinedResults.writeln("Search results for '$query':\n$searchResult\n");
 
-                if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
-                  updateResearchEventStatus(eventId, 'ingesting');
-                  final summaries = await _summarizeSourceInline(
-                    sourceUrl: "search_query:${Uri.encodeComponent(query)}",
-                    content: searchResult,
-                    provider: provider,
-                    settings: settings,
-                    model: model,
-                  );
-                  final List<dynamic> facts = summaries['facts'] ?? [];
-                  final List<dynamic> findings = summaries['findings'] ?? [];
-
-                  phaseFacts.addAll(List<Map<String, dynamic>>.from(facts));
-                  phaseFindings.addAll(List<Map<String, dynamic>>.from(findings));
-
-                  await _updateDeepResearchPhase(
-                    stageId: stageId,
-                    phaseTitle: phaseTitle,
-                    facts: phaseFacts,
-                    findings: phaseFindings,
-                    skippedPdfs: phaseSkippedPdfs,
-                    failedFetches: phaseFailedFetches,
-                  );
-
-                  finishResearchEvent(
-                    eventId,
-                    status: 'done',
-                    stopwatch: eventWatch,
-                    details: {
-                      'result_count': resultMatches.length,
-                      'facts_count': facts.length,
-                      'findings_count': findings.length,
-                      'result_payload': { 'summary': '${facts.length} facts, ${findings.length} findings extracted' }
-                    }
+if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
+  updateResearchEventStatus(eventId, 'ingesting');
+  final summariesByResult = <int, Map<String, dynamic>>{};
+  await Future.wait(Iterable<int>.generate(resultMatches.length).map((idx) async {
+    final m = resultMatches[idx];
+    final individualUrl = m.group(2)?.trim() ?? '';
+    if (individualUrl.isEmpty) return;
+    try {
+      final individualSummaries = await _summarizeSourceInline(
+        sourceUrl: individualUrl,
+        content: searchResult,
+        provider: provider,
+        settings: settings,
+        model: model,
+      );
+      summariesByResult[idx] = {
+        'facts': individualSummaries['facts'] ?? [],
+        'findings': individualSummaries['findings'] ?? [],
+      };
+    } catch (e) {
+      debugPrint('Inline summarization failed for result $idx: $e');
+    }
+  }));
+  for (final entry in summariesByResult.entries) {
+    final facts = List<Map<String, dynamic>>.from(entry.value['facts']);
+    final findings = List<Map<String, dynamic>>.from(entry.value['findings']);
+    phaseFacts.addAll(facts);
+    phaseFindings.addAll(findings);
+  }
+  await _updateDeepResearchPhase(
+    stageId: stageId,
+    phaseTitle: phaseTitle,
+    facts: phaseFacts,
+    findings: phaseFindings,
+    skippedPdfs: phaseSkippedPdfs,
+    failedFetches: phaseFailedFetches,
+  );
+  finishResearchEvent(
+    eventId,
+    status: 'done',
+    stopwatch: eventWatch,
+    details: {
+      'result_count': resultMatches.length,
+      'facts_count': phaseFacts.length,
+      'findings_count': phaseFindings.length,
+      'result_payload': _compactSearchPayload(resultMatches.map((match) {
+        return {
+          'title': match.group(1) ?? '',
+          'url': match.group(2) ?? '',
+          'snippet': match.group(3) ?? '',
+        };
+      })),
+    },
+  );
+}
                   );
                 }
               }
