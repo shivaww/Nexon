@@ -1581,6 +1581,17 @@ Certain tools can perform high-value secondary jobs. Use them strategically to s
    • Secondary Use: Prevent bash failures.
    • Tip: Before running complex shell commands via `run_command` (like running custom scripts or binaries like `rg`, `git`, or `java`), use `query_tool_status` to ensure the tool exists in Termux.
 
+━━ WORKFLOW: LOCATING AN UNKNOWN CLASS / SYMBOL ━━
+When you need to find a class, function, or symbol and don't know which file it lives in:
+1. search_rich  → query the symbol name across the project root to get file:line hits
+2. file_outline → run on the matched file(s) to see all class/function definitions + line numbers
+3. read_file_rich → open only the relevant line range (StartLine–EndLine from file_outline)
+NEVER read the whole file blindly. Always target the exact line range returned by file_outline.
+Example: to find class `ProviderAPIs`:
+  Step 1: search_rich query="ProviderAPIs" path=/projects/myapp  → finds lib/services/provider_apis.dart:42
+  Step 2: file_outline path=/projects/myapp/lib/services/provider_apis.dart → shows class starts at line 42, ends near line 180
+  Step 3: read_file_rich path=...provider_apis.dart start_line=42 end_line=180
+
 ━━ WORKFLOW FOR EDITING CODE ━━
 1. read_file_rich (confirm exact content and line numbers)
 2. patch_file or replace_lines (precise edit)
