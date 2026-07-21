@@ -475,12 +475,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
         settings: settings,
         model: model,
         messages: summarizerMessages,
-      );
-      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(responseText);
+      final cleanResp = responseText.replaceAll(RegExp(r"```json"), "").replaceAll("```", "").trim();
+      final jsonMatch = RegExp(r"\{[\s\S]*\}").firstMatch(cleanResp);
       if (jsonMatch != null) {
         final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-        final List<dynamic> rawFacts = parsed['facts'] is List ? parsed['facts'] : [];
-        final List<dynamic> rawFindings = parsed['findings'] is List ? parsed['findings'] : [];
+        final List<dynamic> rawFacts = parsed["facts"] is List ? parsed["facts"] as List<dynamic> : [];
+        final List<dynamic> rawFindings = parsed["findings"] is List ? parsed["findings"] as List<dynamic> : [];
         final List<Map<String, dynamic>> facts = [];
         for (final item in rawFacts) {
           if (item is Map) {
