@@ -1535,6 +1535,7 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Task                    | Use                                         | NOT                    |
 |-------------------------|---------------------------------------------|------------------------|
 | Read file / check code  | read_file_rich                              | cat, head, tail        |
+| Read multiple files/ranges at once | multi_read_rich                  | multiple read_file_rich turns |
 | Edit multiple code sections | patch_file (pass multiple objects in patches array) | sed -i, heredoc, rewrite whole file |
 | Edit by line number     | replace_lines                               | sed -i                 |
 | Create new file         | write_file_rich                             | cat > file << 'EOF'    |
@@ -1547,8 +1548,9 @@ Use output=none to check formatting without writing, output=write to apply forma
 | Create directory        | mkdir_path                                  | mkdir -p               |
 | File metadata           | stat_path                                   | stat, ls -la           |
 | Change permissions      | chmod_path                                  | chmod                  |
-| Dart diagnostics        | dart_diagnostics                            | raw dart analyze       |
-| Dart formatting         | dart_format                                 | raw dart format        |
+| Dart diagnostics        | dart_diagnostics (Dart only)                | raw dart analyze       |
+| Dart formatting         | dart_format (Dart only)                     | raw dart format        |
+| Non-Dart diagnostics    | run_command (e.g. python -m py_compile, eslint, tsc --noEmit) | dart_diagnostics |
 | Symbol references       | symbol_references                           | ad-hoc grep            |
 | Build / git / installs  | run_command                                 | N/A                    |
 | Long-running server     | run_background                              | run_command            |
@@ -1591,6 +1593,41 @@ Example: to find class `ProviderAPIs`:
   Step 1: search_rich query="ProviderAPIs" path=/projects/myapp  → finds lib/services/provider_apis.dart:42
   Step 2: file_outline path=/projects/myapp/lib/services/provider_apis.dart → shows class starts at line 42, ends near line 180
   Step 3: read_file_rich path=...provider_apis.dart start_line=42 end_line=180
+
+━━ WORKFLOW: READING A VERY LARGE FILE (> 600 lines) ━━
+read_file_rich returns max 600 lines per call. For files larger than 600 lines:
+1. file_outline → get all symbol line numbers first
+2. Read only the section you need with start_line/end_line
+3. If you need multiple non-adjacent sections → use multi_read_rich with multiple ranges in one call
+NEVER call read_file_rich repeatedly from line 1 scrolling through the whole file.
+
+━━ WORKFLOW: CREATING A NEW PROJECT ━━
+1. tree path=/projects → confirm parent dir and check for conflicts
+2. mkdir_path → create the project root directory
+3. write_file_rich → create essential files (pubspec.yaml, main.dart, README.md, .gitignore)
+4. run_command → run project init commands (flutter create, npm init, etc.) if needed
+5. git_status → confirm initial state before first commit
+
+━━ WORKFLOW: GIT OPERATIONS ━━
+Use structured git tools for all version control — do NOT use raw `git` via run_command unless unavoidable:
+- git_status  → check working tree before any commit
+- git_diff    → review changes (optionally pass <ref> to compare against a specific commit)
+- git_commit  → stage all tracked changes and commit with a message
+For push, branch, stash, or log: use run_command with explicit git commands.
+Example commit flow:
+  Step 1: git_status  → confirm what changed
+  Step 2: git_diff    → review the diff
+  Step 3: git_commit message="feat: add login screen"
+  Step 4: run_command command="git push"
+
+━━ WORKFLOW: HANDLING A FAILED SHELL COMMAND ━━
+When run_command returns a non-zero exit code:
+1. Read the full error output — identify if it's a missing dependency, syntax error, or permission issue
+2. Missing tool → use install_package or query_tool_status first
+3. Syntax error in code → use dart_diagnostics / dart_format / run_command with linter
+4. Permission denied → use chmod_path to fix file permissions
+5. Git conflict → use git_status + git_diff to inspect, then resolve via patch_file
+NEVER retry the same command blindly — diagnose first.
 
 ━━ WORKFLOW FOR EDITING CODE ━━
 1. read_file_rich (confirm exact content and line numbers)
