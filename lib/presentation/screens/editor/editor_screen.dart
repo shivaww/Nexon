@@ -1,4 +1,5 @@
 /// TermuxForge — Code Editor Screen
+import 'dart:io';
 ///
 /// Tabbed code editor with syntax highlighting, line numbers,
 /// search/replace, file path breadcrumb, modified indicator,
@@ -404,11 +405,19 @@ class TermuxForgeApp extends StatelessWidget {
     });
   }
 
-  void _saveCurrentFile() {
-    setState(() => _activeTab.isModified = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Saved ${_activeTab.fileName}')),
-    );
+  Future<void> _saveCurrentFile() async {
+    try {
+      final file = File(_activeTab.path);
+      await file.writeAsString(_activeTab.controller.text);
+      setState(() => _activeTab.isModified = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved ${_activeTab.fileName}')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error saving file: $e')),
+      );
+    }
   }
 
   void _sendToAgent() {
