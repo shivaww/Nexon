@@ -200,7 +200,7 @@ Read all facts and findings. Decide a hierarchical document structure: Chapter p
 CRITICAL GUARDRAIL:
 You may only state a comparison between two subjects if two or more FACT records in the evidence share the exact same metric name. In that case, state only the numeric comparison as given by the records (e.g. 'X scored 92% vs Y's 88% on SWE-bench-Verified') — do not add qualitative judgment language ('significantly better', 'clearly superior') beyond what the numbers themselves show. Never invent a comparison, ranking, or superiority claim not directly supported by two or more matching FACT records. If only one data point exists for a metric, state it standalone without comparison.
 
-Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). List all sources at the end.""";
+Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). List all sources at the end. Output plain Markdown only: do not generate SVG, HTML, Mermaid, or image-based visuals.""";
 }
 
 class ChatHomePage extends StatefulWidget {
@@ -2846,7 +2846,27 @@ For every project, maintain a README.md at the project root.
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9\s-]'), '')
         .replaceAll(RegExp(r'[\s-]+'), '_');
-    return 'research_$slug.md';
+    final normalizedSlug = slug.replaceAll(RegExp(r'^_+|_+$'), '');
+    return 'research_${normalizedSlug.isEmpty ? 'report' : normalizedSlug}.md';
+  }
+
+  String _stripSvgVisuals(String markdown) {
+    return markdown
+        .replaceAll(
+          RegExp(r'<svg\b[^>]*(?:/>|>[\s\S]*?</svg>)', caseSensitive: false),
+          '',
+        )
+        .replaceAll(
+          RegExp(r'!\[[^\]]*\]\([^)]*\.svg(?:\?[^)]*)?\)', caseSensitive: false),
+          '',
+        );
+  }
+
+  Future<String> _persistResearchReport(String fileName, String content) async {
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File('${directory.path}/$fileName');
+    await file.writeAsString(content, flush: true);
+    return file.path;
   }
 
   String _updateResearchStateInText(String oldText, Map<String, dynamic> stateMap) {
@@ -3204,7 +3224,7 @@ For every project, maintain a README.md at the project root.
 
   Map<String, dynamic> _compactSearchPayload(Iterable<Map> results) {
     return {
-      'results': results.take(3).map((result) {
+      'results': results.take(6).map((result) {
         return {
           'title': _truncateEventText(result['title']?.toString() ?? '', 120),
           'url': _truncateEventText(result['url']?.toString() ?? '', 300),
@@ -3370,6 +3390,11 @@ For every project, maintain a README.md at the project root.
         final stageId = steps[i]['id'] as String;
         final phaseTitle = steps[i]['title'] as String;
         final queryText = steps[i]['query_text'] as String;
+        // Keep each temp.json phase scoped to evidence gathered for that phase.
+        phaseFacts.clear();
+        phaseFindings.clear();
+        phaseSkippedPdfs.clear();
+        phaseFailedFetches.clear();
 
         if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
           steps[i]['status'] = 'failed';
@@ -3961,6 +3986,14 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                         ..findProxy = ((uri) => "DIRECT")
                         ..connectionTimeout = const Duration(seconds: 15);
                       final request = await client.getUrl(Uri.parse(targetUrl)).timeout(const Duration(seconds: 60));
+                      request.headers.set(
+                        HttpHeaders.userAgentHeader,
+                        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+                      );
+                      request.headers.set(
+                        HttpHeaders.acceptHeader,
+                        'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                      );
                       final response = await request.close().timeout(const Duration(seconds: 60));
 
                       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -3998,7 +4031,10 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                         return;
                       }
 
-                      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 60));
+                      final body = await response
+                          .transform(const Utf8Decoder(allowMalformed: true))
+                          .join()
+                          .timeout(const Duration(seconds: 60));
                       var htmlBody = body;
                       final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
                       if (bodyMatch != null) {
@@ -4255,8 +4291,8 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
               "Execution issues that must be disclosed in the report:\n"
               "${jsonEncode(executionIssues)}\n\n"
               "Please write the final, comprehensive research report in Markdown format. "
-              "Use clear headings, detailed paragraphs, tables, and ASCII-art flowcharts. "
-              "List all sources at the end.",
+              "Use clear headings, detailed paragraphs, and tables. Do not use SVG, HTML, Mermaid, "
+              "or image-based visuals. List all sources at the end.",
         ),
       ];
 
@@ -4335,6 +4371,25 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
         }
       }
 
+      if (!finalReportDone && writerFailure == null) {
+        writerFailure = 'Writer stopped before producing a report.';
+      }
+      if (writerFailure == null) {
+        finalReportText = _stripSvgVisuals(finalReportText).trim();
+        if (finalReportText.isEmpty) {
+          writerFailure = 'Writer returned an empty report.';
+        } else {
+          stateMap['final_report'] = finalReportText;
+          try {
+            stateMap['report_path'] = await _persistResearchReport(
+              _getResearchFileName(_sessions[sessionIndex].title),
+              finalReportText,
+            );
+          } catch (e) {
+            stateMap['report_save_error'] = 'Could not save the Markdown report: $e';
+          }
+        }
+      }
       stateMap['status'] = writerFailure == null ? 'completed' : 'failed';
       if (writerFailure != null) {
         stateMap['error'] = 'Writer agent failed: $writerFailure';
@@ -12728,14 +12783,26 @@ class ChatClient {
               else trVal = tr;
             }
 
+            // Give current-events queries a current, thorough result set even
+            // if the model omitted optional search attributes.
+            final isFreshQuery = RegExp(
+              r'\b(latest|recent|current|today|news|update|updated|release|price|pricing|202\d)\b',
+              caseSensitive: false,
+            ).hasMatch(query);
+            final effectiveTopic = topic ?? (isFreshQuery ? 'news' : null);
+            final effectiveTimeRange = trVal ?? (isFreshQuery ? 'month' : null);
+            final effectiveDepth = searchDepth == 'advanced' || searchDepth == 'basic'
+                ? searchDepth!
+                : (isFreshQuery ? 'advanced' : 'basic');
+
             final Map<String, dynamic> payload = {
               'api_key': currentKey,
               'query': query,
-              'max_results': 4,
-              'search_depth': searchDepth ?? 'basic',
+              'max_results': 6,
+              'search_depth': effectiveDepth,
             };
-            if (topic != null) payload['topic'] = topic;
-            if (trVal != null) payload['time_range'] = trVal;
+            if (effectiveTopic != null) payload['topic'] = effectiveTopic;
+            if (effectiveTimeRange != null) payload['time_range'] = effectiveTimeRange;
             if (startDate != null) payload['start_date'] = startDate;
             if (endDate != null) payload['end_date'] = endDate;
 
@@ -12748,9 +12815,13 @@ class ChatClient {
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['results'] is List) {
               final results = decoded['results'] as List;
-              return results
-                  .map((r) => '- [${r['title']}](${r['url']}): ${r['content']}')
-                  .join('\n\n');
+              return results.map((r) {
+                final publishedDate = r is Map ? r['published_date']?.toString() : null;
+                final datePrefix = publishedDate == null || publishedDate.isEmpty
+                    ? ''
+                    : 'Published $publishedDate — ';
+                return '- [${r['title']}](${r['url']}): $datePrefix${r['content']}';
+              }).join('\n\n');
             }
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
@@ -13739,7 +13810,9 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     final originalSteps = widget.stateMap['steps'] as List? ?? [];
     final controllers = originalSteps.map((step) {
       final value = step as Map;
-      return TextEditingController(text: value['prompt']?.toString() ?? '');
+      return TextEditingController(
+        text: value['query_text']?.toString() ?? value['prompt']?.toString() ?? '',
+      );
     }).toList();
     final titles = originalSteps
         .map((step) => (step as Map)['title']?.toString() ?? 'Research stage')
@@ -13795,7 +13868,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
       final updatedSteps = <Map<String, dynamic>>[];
       for (var index = 0; index < originalSteps.length; index++) {
         final step = Map<String, dynamic>.from(originalSteps[index] as Map);
-        step['prompt'] = controllers[index].text.trim();
+        step['query_text'] = controllers[index].text.trim();
         updatedSteps.add(step);
       }
       setState(() => widget.stateMap['steps'] = updatedSteps);
@@ -14132,7 +14205,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Prompt: ${step['prompt']}',
+                          'Prompt: ${step['query_text'] ?? step['prompt'] ?? ''}',
                           style: const TextStyle(
                             fontSize: 12.5,
                             color: Colors.black54,

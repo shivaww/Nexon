@@ -136,7 +136,7 @@ class _ScrollableTableWrapperState extends State<ScrollableTableWrapper> {
             SingleChildScrollView(
               controller: _scrollController,
               scrollDirection: Axis.horizontal,
-              child: widget.child,
+              child: IntrinsicWidth(child: widget.child),
             ),
             if (_showLeftIndicator)
               Positioned(
