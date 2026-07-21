@@ -475,6 +475,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         settings: settings,
         model: model,
         messages: summarizerMessages,
+      );
       final cleanResp = responseText.replaceAll(RegExp(r"```json"), "").replaceAll("```", "").trim();
       final jsonMatch = RegExp(r"\{[\s\S]*\}").firstMatch(cleanResp);
       if (jsonMatch != null) {
@@ -3772,7 +3773,7 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
   updateResearchEventStatus(eventId, 'ingesting');
   final summariesByResult = <int, Map<String, dynamic>>{};
   await Future.wait(Iterable<int>.generate(resultMatches.length).map((idx) async {
-    final m = resultMatches[idx];
+    final m = resultMatches.elementAt(idx);
     final individualUrl = m.group(2)?.trim() ?? '';
     if (individualUrl.isEmpty) return;
     try {
