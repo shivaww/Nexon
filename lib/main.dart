@@ -288,6 +288,43 @@ class _ChatHomePageState extends State<ChatHomePage> {
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
   int? _editingMessageIndex;
+  int _historyLimit = 50;
+  bool _isLoadingMoreHistory = false;
+
+  Future<void> _loadMoreHistory() async {
+    if (_isLoadingMoreHistory) return;
+    setState(() {
+      _isLoadingMoreHistory = true;
+    });
+
+    try {
+      final result = await DriveSyncService.restoreFromDriveDetailed();
+      if (result.success) {
+        final prefs = await SharedPreferences.getInstance();
+        final raw = prefs.getString('chat_sessions_v1');
+        if (raw != null && raw.trim().isNotEmpty) {
+          final decoded = jsonDecode(raw) as List<dynamic>;
+          final loadedSessions = decoded
+              .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
+              .toList();
+          if (mounted && loadedSessions.isNotEmpty) {
+            setState(() {
+              _sessions = loadedSessions;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[HistoryPagination] Error loading more from Drive: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _historyLimit += 25;
+          _isLoadingMoreHistory = false;
+        });
+      }
+    }
+  }
 
   List<ChatMessage> get _messages {
     if (_sessions.isEmpty) {
@@ -4677,6 +4714,9 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
       onSessionRename: _renameSession,
       onSessionPinToggle: _togglePinSession,
       onNewChat: _newChat,
+      visibleLimit: _historyLimit,
+      isLoadingMore: _isLoadingMoreHistory,
+      onLoadMore: _loadMoreHistory,
     );
 
     return Scaffold(
@@ -4735,6 +4775,9 @@ class ChatHistoryPanel extends StatelessWidget {
     required this.onSessionRename,
     required this.onSessionPinToggle,
     required this.onNewChat,
+    required this.visibleLimit,
+    required this.isLoadingMore,
+    required this.onLoadMore,
     super.key,
   });
 
@@ -4745,6 +4788,9 @@ class ChatHistoryPanel extends StatelessWidget {
   final void Function(String sessionId, String newTitle) onSessionRename;
   final ValueChanged<String> onSessionPinToggle;
   final VoidCallback onNewChat;
+  final int visibleLimit;
+  final bool isLoadingMore;
+  final VoidCallback onLoadMore;
 
   @override
   Widget build(BuildContext context) {
@@ -4755,6 +4801,8 @@ class ChatHistoryPanel extends StatelessWidget {
         if (!a.isPinned && b.isPinned) return 1;
         return 0; // Maintain original relative order
       });
+
+    final displayedSessions = sortedSessions.take(visibleLimit).toList();
 
     return Container(
       color: const Color(0xFFEFE6D6),
@@ -4788,9 +4836,50 @@ class ChatHistoryPanel extends StatelessWidget {
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
-              itemCount: sortedSessions.length,
+              itemCount: displayedSessions.length + 1,
               itemBuilder: (context, index) {
-                final session = sortedSessions[index];
+                if (index == displayedSessions.length) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 6.0),
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                        side: const BorderSide(color: Color(0xFFD8B98D), width: 1.2),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        backgroundColor: const Color(0xFFFFF8EA),
+                      ),
+                      onPressed: isLoadingMore ? null : onLoadMore,
+                      icon: isLoadingMore
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF7B4E2E),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.history,
+                              size: 18,
+                              color: Color(0xFF7B4E2E),
+                            ),
+                      label: Text(
+                        isLoadingMore
+                            ? 'Loading previous chats…'
+                            : 'Load More Previous Chats (+25)',
+                        style: const TextStyle(
+                          color: Color(0xFF7B4E2E),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+
+                final session = displayedSessions[index];
                 final selected = session.id == activeSessionId;
                 final messageCount = session.messages.length;
                 return AnimatedContainer(
@@ -10700,21 +10789,78 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     ],
                   ),
                   TextButton.icon(
-                    onPressed: () async {
-                      final prefs = await SharedPreferences.getInstance();
-                      await prefs.setBool('has_completed_onboarding_v2', false);
-                      await Supabase.instance.client.auth.signOut();
-                      if (mounted) {
-                        Navigator.pushAndRemoveUntil(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const ForgeChatApp(
-                              hasCompletedOnboarding: false,
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          backgroundColor: Colors.white,
+                          title: const Text(
+                            'Confirm Logout',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: Color(0xFF1E293B),
                             ),
                           ),
-                          (route) => false,
-                        );
-                      }
+                          content: const Text(
+                            'Are you sure you want to logout?',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF475569),
+                            ),
+                          ),
+                          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(),
+                              child: const Text(
+                                'Cancel',
+                                style: TextStyle(
+                                  color: Color(0xFF64748B),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFEF4444),
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              ),
+                              onPressed: () async {
+                                Navigator.of(ctx).pop();
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('has_completed_onboarding_v2', false);
+                                await Supabase.instance.client.auth.signOut();
+                                if (mounted) {
+                                  Navigator.pushAndRemoveUntil(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const ForgeChatApp(
+                                        hasCompletedOnboarding: false,
+                                      ),
+                                    ),
+                                    (route) => false,
+                                  );
+                                }
+                              },
+                              child: const Text(
+                                'Logout',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
                     },
                     icon: const Icon(Icons.logout, size: 16, color: Colors.red),
                     label: const Text(
