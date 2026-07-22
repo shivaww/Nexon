@@ -4,7 +4,7 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Non--Commercial-orange.svg)](LICENSE)
 [![Flutter](https://img.shields.io/badge/Flutter-3.32%2B-blue.svg)](https://flutter.dev)
 
 ---
@@ -137,4 +137,4 @@ Contributions, bug reports, and feature requests are open and welcome! Feel free
 
 ## 📜 License & Usage
 
-Distributed under the **MIT License**. Free for personal, academic, and commercial use. See [`LICENSE`](LICENSE) for details.
+Distributed under the **Nexon Non-Commercial License**. Free for personal, academic, and non-commercial usage. Commercial use, re-selling, or commercial integration requires an active Nexon Pro subscription or commercial licensing agreement. See [`LICENSE`](LICENSE) for details.
