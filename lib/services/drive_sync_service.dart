@@ -53,11 +53,10 @@ class DriveSyncService {
   static const _tokenKey = 'google_provider_token';
   static const _refreshTokenKey = 'google_provider_refresh_token';
   static const _tokenExpiryKey = 'google_provider_token_expiry';
-  // This is a public OAuth client identifier, not a client secret. It must
-  // match the Google OAuth client configured in Supabase for this Android app.
-  static const _googleOAuthClientId = String.fromEnvironment(
-    'GOOGLE_OAUTH_CLIENT_ID',
-  );
+  // Public OAuth client identifier for Google Drive token refresh.
+  // Matches the Google OAuth Web Client ID configured in Supabase Auth.
+  static const _googleOAuthClientId =
+      '324056833787-tvm3a99dvsnt9hhpfht8saub1hnegkkj.apps.googleusercontent.com';
   static const _maxArtifactBytes = 2 * 1024 * 1024;
   static const _textExtensions = {
     '.md',
