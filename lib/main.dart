@@ -10792,99 +10792,106 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       ],
                     ],
                   ),
-                  TextButton.icon(
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (ctx) => AlertDialog(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          backgroundColor: Colors.white,
-                          title: const Text(
-                            'Confirm Logout',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                              color: Color(0xFF1E293B),
-                            ),
-                          ),
-                          content: const Text(
-                            'Are you sure you want to logout?',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF475569),
-                            ),
-                          ),
-                          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(ctx).pop(),
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(
-                                  color: Color(0xFF64748B),
-                                  fontWeight: FontWeight.w600,
-                                ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
                               ),
-                            ),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFEF4444),
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              ),
-                              onPressed: () async {
-                                Navigator.of(ctx).pop();
-                                final prefs = await SharedPreferences.getInstance();
-                                await prefs.setBool('has_completed_onboarding_v2', false);
-                                await Supabase.instance.client.auth.signOut();
-                                if (mounted) {
-                                  Navigator.pushAndRemoveUntil(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => const ForgeChatApp(
-                                        hasCompletedOnboarding: false,
-                                      ),
-                                    ),
-                                    (route) => false,
-                                  );
-                                }
-                              },
-                              child: const Text(
-                                'Logout',
+                              backgroundColor: Colors.white,
+                              title: const Text(
+                                'Confirm Logout',
                                 style: TextStyle(
-                                  color: Colors.white,
                                   fontWeight: FontWeight.bold,
+                                  fontSize: 18,
+                                  color: Color(0xFF1E293B),
                                 ),
                               ),
+                              content: const Text(
+                                'Are you sure you want to logout?',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFF475569),
+                                ),
+                              ),
+                              actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(ctx).pop(),
+                                  child: const Text(
+                                    'Cancel',
+                                    style: TextStyle(
+                                      color: Color(0xFF64748B),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFEF4444),
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  ),
+                                  onPressed: () async {
+                                    Navigator.of(ctx).pop();
+                                    final prefs = await SharedPreferences.getInstance();
+                                    await prefs.setBool('has_completed_onboarding_v2', false);
+                                    await Supabase.instance.client.auth.signOut();
+                                    if (mounted) {
+                                      Navigator.pushAndRemoveUntil(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => const ForgeChatApp(
+                                            hasCompletedOnboarding: false,
+                                          ),
+                                        ),
+                                        (route) => false,
+                                      );
+                                    }
+                                  },
+                                  child: const Text(
+                                    'Logout',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          );
+                        },
+                        icon: const Icon(Icons.logout, size: 16, color: Colors.red),
+                        label: const Text(
+                          'Logout',
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      );
-                    },
-                    icon: const Icon(Icons.logout, size: 16, color: Colors.red),
-                    label: const Text(
-                      'Logout',
-                      style: TextStyle(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
                       ),
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () => UpdateService.checkForUpdates(context, userInitiated: true),
-                    icon: const Icon(Icons.system_update_rounded, size: 16, color: Color(0xFF2563EB)),
-                    label: const Text(
-                      'Check for Updates',
-                      style: TextStyle(
-                        color: Color(0xFF2563EB),
-                        fontWeight: FontWeight.bold,
+                      TextButton.icon(
+                        onPressed: () => UpdateService.checkForUpdates(context, userInitiated: true),
+                        icon: const Icon(Icons.system_update_rounded, size: 16, color: Color(0xFF2563EB)),
+                        label: const Text(
+                          'Check for Updates',
+                          style: TextStyle(
+                            color: Color(0xFF2563EB),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ],
               ),
@@ -10981,7 +10988,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Nexon Pro Subscription',
+                      'Nexon Subscription Plans',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,

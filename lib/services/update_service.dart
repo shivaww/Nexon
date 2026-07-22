@@ -47,19 +47,22 @@ class UpdateService {
     String? latestVersion;
     String? downloadUrl;
     String releaseNotes = '';
+    bool networkError = false;
 
     // 1. Try Backend Version Endpoint
     try {
       final response = await http
           .get(Uri.parse('$defaultBackendUrl/api/version'))
-          .timeout(const Duration(seconds: 6));
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         latestVersion = data['latest_version']?.toString();
         downloadUrl = data['download_url']?.toString();
         releaseNotes = data['release_notes']?.toString() ?? '';
       }
-    } catch (_) {}
+    } catch (_) {
+      networkError = true;
+    }
 
     // 2. Fallback to GitHub Latest Release if backend is unavailable or not set
     if (latestVersion == null || downloadUrl == null || downloadUrl.isEmpty) {
@@ -69,15 +72,18 @@ class UpdateService {
               Uri.parse(githubReleasesUrl),
               headers: {'Accept': 'application/vnd.github.v3+json'},
             )
-            .timeout(const Duration(seconds: 6));
+            .timeout(const Duration(seconds: 5));
         if (response.statusCode == 200) {
+          networkError = false;
           final data = jsonDecode(response.body) as Map<String, dynamic>;
           final tagName = data['tag_name']?.toString() ?? '';
           latestVersion = tagName.replaceAll(RegExp(r'[^0-9.]'), '');
           downloadUrl = data['html_url']?.toString() ?? 'https://github.com/shivaww/Nexon/releases';
           releaseNotes = data['body']?.toString() ?? '';
         }
-      } catch (_) {}
+      } catch (_) {
+        networkError = true;
+      }
     }
 
     if (!context.mounted) return;
@@ -89,7 +95,7 @@ class UpdateService {
         downloadUrl: downloadUrl ?? 'https://github.com/shivaww/Nexon/releases',
         releaseNotes: releaseNotes,
       );
-    } else if (userInitiated) {
+    } else if (latestVersion != null && userInitiated) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -121,6 +127,15 @@ class UpdateService {
               child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
+        ),
+      );
+    } else if (userInitiated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(networkError
+              ? 'Could not connect to update server. Please check your network.'
+              : 'You are running the latest version of Nexon (v$currentVersion).'),
+          duration: const Duration(seconds: 3),
         ),
       );
     }
