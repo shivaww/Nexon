@@ -27,6 +27,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:docx_creator/docx_creator.dart' hide PdfDocument;
 
+import 'package:nexon/widgets/nexon_chart.dart';
+import 'package:nexon/services/drive_sync_service.dart';
+
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:nexon/screens/onboarding_screen.dart';
+
 /// Shared warm cream/tan glassmorphism container matching Nexon's palette.
 class WarmGlassContainer extends StatelessWidget {
   final Widget child;
