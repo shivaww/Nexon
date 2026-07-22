@@ -89,8 +89,14 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 | **Frontend UI** | Flutter (Dart), Material 3 Design, `flutter_markdown`, `flutter_svg`, `fl_chart` |
 | **Local Storage** | Flutter Secure Storage, SharedPreferences, local JSON |
 | **Python Bridge** | Python 3, `aiohttp`, `websockets`, `numpy`, `python-docx` |
-| **Local Embedder** | `llama.cpp` (`llama-server`) & `BGE-Base-v1.5` |
-| **Third-Party APIs**| Supabase Google Auth, Google Drive v3 REST API, Tavily Search API |
+| **Vector & Search Engine** | SQLite + NumPy float32 Vector Math (Lightweight on-device math) |
+| **Third-Party APIs**| Supabase Auth, Google Drive v3 REST API, Tavily Web Search API |
+
+---
+
+## 📌 Project Status
+
+Nexon is an open-source Mobile Agentic IDE project actively developed for Android & Termux. All core infrastructure (Google Drive OAuth token refresh, structured file manipulation, and responsive UI rendering) has been fully stabilized.
 
 ---
 
@@ -125,10 +131,10 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 
 ## 🤝 Contributing
 
-Contributions, bug reports, and feature requests are welcome! Feel free to check out the issues page or submit a Pull Request.
+Contributions, bug reports, and feature requests are open and welcome! Feel free to open an issue or submit a Pull Request.
 
 ---
 
-## 📜 License
+## 📜 License & Usage
 
-Distributed under the **MIT License**. See `LICENSE` for more information.
+Distributed under the **MIT License**. Free for personal, academic, and commercial use. See [`LICENSE`](LICENSE) for details.
