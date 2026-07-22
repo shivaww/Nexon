@@ -7,8 +7,8 @@ set -e
 echo "=== Nexon Environment Setup ==="
 echo "[1/2] Checking and installing system packages..."
 
-# Install system packages cleanly without mirror testing delays
-pkg install -y curl python git wget jq tar clang make ripgrep 2>/dev/null || apt-get install -y curl python git wget jq tar clang make ripgrep 2>/dev/null || true
+# Install essential system packages & Termux python binary modules
+pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl python-aiohttp python-psutil 2>/dev/null || apt-get install -y curl python git wget jq tar clang make ripgrep 2>/dev/null || true
 
 echo "[2/2] Setting up Nexon Bridge..."
 TARGET_DIR="$HOME/nexon_bridge"
@@ -46,7 +46,19 @@ requests>=2.31.0
 python-docx
 EOF
 
-pip install --break-system-packages -q -r requirements.txt 2>/dev/null || pip install -q -r requirements.txt 2>/dev/null || true
+# Install python requirements with fallbacks and binary wheels
+MATHLIB="m" pip install --break-system-packages -q -r requirements.txt 2>/dev/null || \
+pip install --break-system-packages -q -r requirements.txt 2>/dev/null || \
+pip install -q -r requirements.txt 2>/dev/null || \
+pkg install -y python-aiohttp python-psutil || true
+
+# Verify critical modules and auto-fix if missing
+echo "  -> Verifying Python modules..."
+python3 -c "import aiohttp, websockets, psutil, requests; print('✅ All core Python modules verified successfully!')" 2>/dev/null || {
+    echo "  -> Installing pre-compiled binary modules fallback..."
+    pkg install -y python-aiohttp python-psutil || true
+    pip install --break-system-packages websockets aiofiles requests python-docx || true
+}
 
 echo "=== Nexon Python Bridge environment ready! ==="
 echo "All components have been successfully configured."
