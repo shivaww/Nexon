@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,11 +27,124 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:docx_creator/docx_creator.dart' hide PdfDocument;
 
-import 'package:nexon/widgets/nexon_chart.dart';
-import 'package:nexon/services/drive_sync_service.dart';
+/// Shared warm cream/tan glassmorphism container matching Nexon's palette.
+class WarmGlassContainer extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  final BorderRadius? borderRadius;
+  final Color? backgroundColor;
+  final Border? border;
+  final List<BoxShadow>? boxShadow;
+  final double sigma;
 
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:nexon/screens/onboarding_screen.dart';
+  const WarmGlassContainer({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.borderRadius,
+    this.backgroundColor,
+    this.border,
+    this.boxShadow,
+    this.sigma = 10.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveRadius = borderRadius ?? BorderRadius.circular(16);
+    final effectiveBg =
+        backgroundColor ?? const Color(0xFFFFFBF2).withValues(alpha: 0.78);
+    final effectiveBorder = border ??
+        Border.all(
+          color: const Color(0xFFE5DDD3).withValues(alpha: 0.65),
+          width: 1.0,
+        );
+    final effectiveShadow = boxShadow ??
+        [
+          BoxShadow(
+            color: const Color(0xFF2D241C).withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ];
+
+    return Container(
+      margin: margin,
+      decoration: BoxDecoration(
+        borderRadius: effectiveRadius,
+        boxShadow: effectiveShadow,
+      ),
+      child: ClipRRect(
+        borderRadius: effectiveRadius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+          child: Container(
+            padding: padding,
+            decoration: BoxDecoration(
+              color: effectiveBg,
+              borderRadius: effectiveRadius,
+              border: effectiveBorder,
+            ),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shared warm glass dialog wrapper for modal popups.
+class WarmGlassDialog extends StatelessWidget {
+  final Widget? title;
+  final Widget? content;
+  final List<Widget>? actions;
+  final EdgeInsetsGeometry? actionsPadding;
+  final Widget? child;
+
+  const WarmGlassDialog({
+    super.key,
+    this.title,
+    this.content,
+    this.actions,
+    this.actionsPadding,
+    this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: WarmGlassContainer(
+        borderRadius: BorderRadius.circular(22),
+        backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.92),
+        sigma: 10.0,
+        padding: const EdgeInsets.all(20),
+        child: child ??
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (title != null) title!,
+                if (content != null) ...[
+                  const SizedBox(height: 12),
+                  content!,
+                ],
+                if (actions != null && actions!.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: actions!,
+                  ),
+                ],
+              ],
+            ),
+      ),
+    );
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -5392,16 +5506,14 @@ class ChatHeader extends StatelessWidget {
                 Expanded(
                   child: GestureDetector(
                     onTap: onOpenModel,
-                    child: Container(
+                    child: WarmGlassContainer(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
                         vertical: 6,
                       ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFFCF6),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFE7D8C4)),
-                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.78),
+                      sigma: 10.0,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -8500,21 +8612,11 @@ class Composer extends StatelessWidget {
                 ),
               ),
             ),
-          Container(
-            constraints: const BoxConstraints(maxWidth: 920),
+          WarmGlassContainer(
+            borderRadius: BorderRadius.circular(22),
             padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFFCF6),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(color: const Color(0xFFDCCBB8)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 24,
-                  offset: const Offset(0, 12),
-                ),
-              ],
-            ),
+            backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.82),
+            sigma: 10.0,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -9530,22 +9632,15 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * 0.82,
       ),
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-      decoration: const BoxDecoration(
-        color: Color(0xFFFFFBF2),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 16,
-            offset: Offset(0, -4),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      child: WarmGlassContainer(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.88),
+        sigma: 10.0,
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
           // Drag handle at top
           Center(
             child: Container(
@@ -9598,7 +9693,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           ),
         ],
       ),
-    );
+    ),
+  );
   }
 
   Widget _buildActiveTabContent(List<String> models, bool visionEnabled) {
@@ -10803,11 +10899,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         onPressed: () {
                           showDialog(
                             context: context,
-                            builder: (ctx) => AlertDialog(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              backgroundColor: Colors.white,
+                            builder: (ctx) => WarmGlassDialog(
                               title: const Text(
                                 'Confirm Logout',
                                 style: TextStyle(
@@ -10823,7 +10915,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                   color: Color(0xFF475569),
                                 ),
                               ),
-                              actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                               actions: [
                                 TextButton(
                                   onPressed: () => Navigator.of(ctx).pop(),
@@ -15331,41 +15422,62 @@ class FullScreenSvgViewer extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D1B2A),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.copy_all, color: Colors.white),
-            tooltip: 'Copy SVG code',
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: svgString));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('SVG code copied to clipboard')),
-              );
-            },
-          ),
-        ],
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          panEnabled: true,
-          scaleEnabled: true,
-          minScale: 0.5,
-          maxScale: 10.0,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: SvgPicture.string(
-              svgString,
-              fit: BoxFit.contain,
-              width: double.infinity,
-              height: double.infinity,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                panEnabled: true,
+                scaleEnabled: true,
+                minScale: 0.5,
+                maxScale: 10.0,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SvgPicture.string(
+                    svgString,
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                  ),
+                ),
+              ),
             ),
-          ),
+            Positioned(
+              top: 12,
+              left: 14,
+              right: 14,
+              child: WarmGlassContainer(
+                borderRadius: BorderRadius.circular(16),
+                backgroundColor: const Color(0xFF0D1B2A).withValues(alpha: 0.72),
+                border: Border.all(
+                  color: const Color(0xFF1E3A5F).withValues(alpha: 0.6),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                sigma: 10.0,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy_all, color: Colors.white),
+                      tooltip: 'Copy SVG code',
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: svgString));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('SVG code copied to clipboard'),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
