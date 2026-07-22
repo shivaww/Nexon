@@ -11,12 +11,12 @@ echo "[1/2] Checking and installing system packages..."
 pkg install -y curl python git wget jq tar clang make ripgrep 2>/dev/null || apt-get install -y curl python git wget jq tar clang make ripgrep 2>/dev/null || true
 
 echo "[2/2] Setting up Nexon Bridge..."
-mkdir -p "$HOME/nexon_bridge"
 TARGET_DIR="$HOME/nexon_bridge"
+mkdir -p "$TARGET_DIR"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "$PWD")"
 
-echo "  -> Copying bridge source..."
+echo "  -> Fetching bridge source..."
 if [ -d "$SCRIPT_DIR/python_bridge" ]; then
     cp -r "$SCRIPT_DIR/python_bridge/"* "$TARGET_DIR/" || true
 elif [ -d "$HOME/projects/termux_forge/python_bridge" ]; then
@@ -24,9 +24,13 @@ elif [ -d "$HOME/projects/termux_forge/python_bridge" ]; then
 elif [ -d "$HOME/Nexon/python_bridge" ]; then
     cp -r "$HOME/Nexon/python_bridge/"* "$TARGET_DIR/" || true
 else
-    echo "Error: Could not find python_bridge directory locally."
-    echo "Please run this script from the Nexon repository root directory."
-    exit 1
+    echo "  -> Downloading python_bridge components from GitHub..."
+    TMP_CLONE=$(mktemp -d)
+    git clone --depth 1 https://github.com/shivaww/Nexon.git "$TMP_CLONE" 2>/dev/null || true
+    if [ -d "$TMP_CLONE/python_bridge" ]; then
+        cp -r "$TMP_CLONE/python_bridge/"* "$TARGET_DIR/"
+        rm -rf "$TMP_CLONE"
+    fi
 fi
 
 cd "$TARGET_DIR"
@@ -45,6 +49,6 @@ EOF
 pip install --break-system-packages -q -r requirements.txt 2>/dev/null || pip install -q -r requirements.txt 2>/dev/null || true
 
 echo "=== Nexon Python Bridge environment ready! ==="
-echo "All components (Python deps, python-docx, websockets) have been successfully configured."
+echo "All components have been successfully configured."
 echo "You can start the bridge server now by running:"
 echo "  cd ~/nexon_bridge && python3 mcp_server.py"

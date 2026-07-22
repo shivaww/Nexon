@@ -15,37 +15,20 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
           final cells = <Widget>[];
           for (final cell in row.children!.whereType<md.Element>()) {
             final isHeader = cell.tag == 'th' || isHeaderSection;
-            final cellText = _extractPlainText(cell);
-            final isShortCell = cellText.length < 60 || isHeader;
-
             cells.add(
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
                 constraints: BoxConstraints(
-                  minWidth: isHeader ? 140.0 : 120.0,
+                  minWidth: isHeader ? 130.0 : 110.0,
                 ),
-                child: isShortCell
-                    ? SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const NeverScrollableScrollPhysics(),
-                        child: SelectableText.rich(
-                          TextSpan(
-                            children: cell.children
-                                    ?.map((node) => _parseNode(node, preferredStyle, isHeader))
-                                    .toList() ??
-                                [],
-                          ),
-                          maxLines: 1,
-                        ),
-                      )
-                    : SelectableText.rich(
-                        TextSpan(
-                          children: cell.children
-                                  ?.map((node) => _parseNode(node, preferredStyle, isHeader))
-                                  .toList() ??
-                              [],
-                        ),
-                      ),
+                child: SelectableText.rich(
+                  TextSpan(
+                    children: cell.children
+                            ?.map((node) => _parseNode(node, preferredStyle, isHeader))
+                            .toList() ??
+                        [],
+                  ),
+                ),
               ),
             );
           }
@@ -70,13 +53,15 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
     if (rows.isEmpty) return const SizedBox.shrink();
 
     return ScrollableTableWrapper(
-      child: Table(
-        border: TableBorder.all(
-          color: const Color(0xFFCBD5E1),
-          width: 1.0,
+      child: IntrinsicWidth(
+        child: Table(
+          border: TableBorder.all(
+            color: const Color(0xFFCBD5E1),
+            width: 1.0,
+          ),
+          defaultColumnWidth: const IntrinsicColumnWidth(),
+          children: rows,
         ),
-        defaultColumnWidth: const IntrinsicColumnWidth(),
-        children: rows,
       ),
     );
   }

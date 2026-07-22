@@ -355,7 +355,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   Widget _buildTermuxSetup() {
     const setupCommand =
-        'curl -O https://raw.githubusercontent.com/shivaww/Nexon/main/python_bridge/termux_forge_bridge.py && python termux_forge_bridge.py';
+        'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash';
     return Padding(
       padding: const EdgeInsets.all(32.0),
       child: Column(

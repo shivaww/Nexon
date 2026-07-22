@@ -8167,8 +8167,6 @@ class MessageBubble extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: 6.0),
         child: MarkdownBody(
           data: block.content
-              .replaceAll('<', '&lt;')
-              .replaceAll('>', '&gt;')
               .replaceAllMapped(
                 RegExp(r'\\\[([\s\S]*?)\\\]'),
                 (m) => '\$\$' + (m.group(1) ?? '') + '\$\$',
@@ -9097,7 +9095,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           child: SelectableText(
                             isUnreachable
                                 ? 'cd ~/nexon_bridge && python3 mcp_server.py'
-                                : 'cd ~/projects/termux_forge && ./install_bridge.sh',
+                                : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
                             style: const TextStyle(color: Colors.green, fontFamily: 'monospace', fontSize: 12),
                           ),
                         ),
@@ -9107,7 +9105,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             Clipboard.setData(ClipboardData(
                               text: isUnreachable
                                   ? 'cd ~/nexon_bridge && python3 mcp_server.py'
-                                  : 'cd ~/projects/termux_forge && ./install_bridge.sh',
+                                  : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
                             ));
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(content: Text('Copied to clipboard')),
