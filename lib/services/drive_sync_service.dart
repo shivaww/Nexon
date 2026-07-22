@@ -109,7 +109,14 @@ class DriveSyncService {
     if (session == null) return;
     final token = session.providerToken;
     final refresh = session.providerRefreshToken;
-    await _storeGoogleTokens(accessToken: token, refreshToken: refresh);
+    final expiry = (token != null && token.isNotEmpty)
+        ? DateTime.now().toUtc().add(const Duration(minutes: 50))
+        : null;
+    await _storeGoogleTokens(
+      accessToken: token,
+      refreshToken: refresh,
+      expiry: expiry,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -416,20 +423,16 @@ class DriveSyncService {
         );
       }
 
-      // ── Step 4: restore chats ──
-      onProgress?.call('Restoring chats…');
-      log.add('⏳ Restoring chats…');
+      // ── Step 4: restore & merge chats ──
+      onProgress?.call('Merging chats from Drive…');
+      log.add('⏳ Merging chats…');
       try {
-        await _restorePrefsString(
+        final totalCount = await _mergeAndRestoreChatSessions(
           prefs,
           backupData,
-          'chat_sessions',
-          'chat_sessions_v1',
+          log,
         );
-        final chatCount = (backupData['chat_sessions'] is List)
-            ? (backupData['chat_sessions'] as List).length
-            : 0;
-        log.add('✅ Restored $chatCount chat session(s)');
+        log.add('✅ Restored & merged $totalCount chat session(s)');
       } catch (e) {
         log.add('⚠️ Chat restore error (non-fatal): $e');
       }
@@ -566,8 +569,8 @@ class DriveSyncService {
   // TOKEN MANAGEMENT — the critical fix
   // ──────────────────────────────────────────────────────────────────
   /// Gets the current provider token. Expiry is tracked once Google returns an
-  /// `expires_in` value; otherwise the Drive-operation wrapper detects a 401
-  /// and performs one refresh/retry without exposing a dialog to the user.
+  /// `expires_in` value or sign-in occurs; otherwise the Drive-operation wrapper detects a 401
+  /// and performs silent refresh without requiring user re-authentication.
   static Future<_TokenResult> _getValidGoogleToken({
     bool forceRefresh = false,
     List<String>? diagnostics,
@@ -575,35 +578,52 @@ class DriveSyncService {
     final session = Supabase.instance.client.auth.currentSession;
     final liveToken = session?.providerToken;
     final liveRefresh = session?.providerRefreshToken;
-    if ((liveToken?.isNotEmpty ?? false) || (liveRefresh?.isNotEmpty ?? false)) {
+
+    // Persist fresh tokens from Supabase OAuth sign-in without wiping stored refresh tokens
+    if (liveRefresh != null && liveRefresh.isNotEmpty) {
       await _storeGoogleTokens(
         accessToken: liveToken,
         refreshToken: liveRefresh,
+        expiry: liveToken != null && liveToken.isNotEmpty
+            ? DateTime.now().toUtc().add(const Duration(minutes: 50))
+            : null,
       );
     }
 
     final stored = await _readGoogleTokens();
-    final token = liveToken?.isNotEmpty == true ? liveToken : stored.accessToken;
-    final expiry = stored.expiry;
-    final expired = expiry != null && !expiry.isAfter(DateTime.now().toUtc());
-    if (!forceRefresh && token != null && token.isNotEmpty && !expired) {
-      return _TokenResult(token: token);
+    final refreshToken = stored.refreshToken?.isNotEmpty == true
+        ? stored.refreshToken
+        : (liveRefresh?.isNotEmpty == true ? liveRefresh : null);
+
+    final now = DateTime.now().toUtc();
+    final bool isExpired = stored.expiry == null || !stored.expiry!.isAfter(now);
+
+    // If stored token exists, is valid (not expired), and forceRefresh is false, use it
+    if (!forceRefresh && stored.accessToken != null && stored.accessToken!.isNotEmpty && !isExpired) {
+      return _TokenResult(token: stored.accessToken);
     }
 
-    final refresh = stored.refreshToken ?? liveRefresh;
-    final refreshResult = await _refreshGoogleAccessToken(refresh, diagnostics);
+    // Token is expired, missing, or forceRefresh requested -> Perform silent refresh
+    diagnostics?.add('⏳ Token expired or refresh requested. Attempting silent Google token refresh…');
+    final refreshResult = await _refreshGoogleAccessToken(refreshToken, diagnostics);
     if (refreshResult.token != null) {
       return _TokenResult(token: refreshResult.token);
     }
+
+    // Fallback: If refresh failed but a token is available, attempt it as last resort
+    final candidateToken = stored.accessToken ?? (liveToken?.isNotEmpty == true ? liveToken : null);
+    if (candidateToken != null && candidateToken.isNotEmpty && !forceRefresh) {
+      diagnostics?.add('⚠️ Silent refresh failed; attempting existing token as fallback…');
+      return _TokenResult(token: candidateToken);
+    }
+
     return _TokenResult(
-      error: refreshResult.error ?? 'Google Drive authentication is unavailable.',
+      error: refreshResult.error ?? 'Google Drive authentication is unavailable. Please sign in again.',
       needsRelogin: refreshResult.needsRelogin,
     );
   }
 
   /// Exchanges the Google provider refresh token for a new Drive token.
-  /// A Supabase session refresh token cannot perform this exchange and must
-  /// never be substituted for the Google provider refresh token.
   static Future<_RefreshResult> _refreshGoogleAccessToken(
     String? refreshToken,
     List<String>? diagnostics,
@@ -615,6 +635,22 @@ class DriveSyncService {
         needsRelogin: true,
       );
     }
+
+    // Try Supabase session refresh first if available
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) {
+        final res = await Supabase.instance.client.auth.refreshSession();
+        final newLiveToken = res.session?.providerToken;
+        if (newLiveToken != null && newLiveToken.isNotEmpty) {
+          final expiry = DateTime.now().toUtc().add(const Duration(minutes: 50));
+          await _storeGoogleTokens(accessToken: newLiveToken, expiry: expiry);
+          diagnostics?.add('✅ Refreshed Google token via Supabase session');
+          return _RefreshResult(token: newLiveToken);
+        }
+      }
+    } catch (_) {}
+
     if (_googleOAuthClientId.isEmpty) {
       diagnostics?.add('❌ GOOGLE_OAUTH_CLIENT_ID is not configured');
       return const _RefreshResult(
@@ -640,11 +676,12 @@ class DriveSyncService {
           return const _RefreshResult(error: 'Google did not return an access token.');
         }
         final expiresIn = payload['expires_in'];
-        final expiry = expiresIn is num
-            ? DateTime.now().toUtc().add(Duration(seconds: expiresIn.toInt()))
-            : null;
+        final expirySeconds = (expiresIn is num && expiresIn > 120)
+            ? expiresIn.toInt() - 120
+            : 3000;
+        final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
         await _storeGoogleTokens(accessToken: accessToken, expiry: expiry);
-        diagnostics?.add('✅ Google Drive token refreshed silently');
+        diagnostics?.add('✅ Google Drive access token refreshed silently');
         return _RefreshResult(token: accessToken);
       }
 
@@ -702,6 +739,7 @@ class DriveSyncService {
     if (accessToken != null && accessToken.isNotEmpty) {
       await _secureStorage.write(key: _tokenKey, value: accessToken);
     }
+    // NEVER overwrite an existing stored refreshToken with a null/empty value
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await _secureStorage.write(key: _refreshTokenKey, value: refreshToken);
     }
@@ -930,6 +968,73 @@ class DriveSyncService {
       }
     }
     return count;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Smart Chat Merge & Restore Helper
+  // ──────────────────────────────────────────────────────────────────
+  static Future<int> _mergeAndRestoreChatSessions(
+    SharedPreferences prefs,
+    Map<String, dynamic> backupData,
+    List<String> log,
+  ) async {
+    if (!backupData.containsKey('chat_sessions')) return 0;
+
+    final backupSessionsRaw = backupData['chat_sessions'];
+    if (backupSessionsRaw is! List) return 0;
+
+    // Load local chat sessions
+    List<Map<String, dynamic>> localSessions = [];
+    final rawLocal = prefs.getString('chat_sessions_v1');
+    if (rawLocal != null && rawLocal.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawLocal) as List<dynamic>;
+        localSessions = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+
+    final mergedMap = <String, Map<String, dynamic>>{};
+    for (final s in localSessions) {
+      final id = s['id']?.toString();
+      if (id != null && id.isNotEmpty) {
+        mergedMap[id] = s;
+      }
+    }
+
+    int addedFromRemote = 0;
+    int updatedFromRemote = 0;
+    final localCount = localSessions.length;
+
+    for (final remoteRaw in backupSessionsRaw) {
+      if (remoteRaw is! Map) continue;
+      final remote = Map<String, dynamic>.from(remoteRaw);
+      final id = remote['id']?.toString();
+      if (id == null || id.isEmpty) continue;
+
+      if (!mergedMap.containsKey(id)) {
+        mergedMap[id] = remote;
+        addedFromRemote++;
+      } else {
+        final local = mergedMap[id]!;
+        final localMsgs = (local['messages'] as List?)?.length ?? 0;
+        final remoteMsgs = (remote['messages'] as List?)?.length ?? 0;
+
+        final localUpdated = DateTime.tryParse(local['updatedAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final remoteUpdated = DateTime.tryParse(remote['updatedAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+        if (remoteMsgs > localMsgs || (remoteMsgs == localMsgs && remoteUpdated.isAfter(localUpdated))) {
+          mergedMap[id] = remote;
+          updatedFromRemote++;
+        }
+      }
+    }
+
+    final mergedList = mergedMap.values.toList();
+    await prefs.setString('chat_sessions_v1', jsonEncode(mergedList));
+    log.add(
+      '✅ Merged $localCount local chats with ${backupSessionsRaw.length} remote chats. Result: ${mergedList.length} chats ($addedFromRemote added, $updatedFromRemote updated).',
+    );
+    return mergedList.length;
   }
 
   // ──────────────────────────────────────────────────────────────────
