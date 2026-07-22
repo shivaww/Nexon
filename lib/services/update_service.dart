@@ -98,11 +98,12 @@ class UpdateService {
     } else if (latestVersion != null && userInitiated) {
       showDialog(
         context: context,
+        useRootNavigator: true,
         builder: (ctx) => AlertDialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
           ),
-          backgroundColor: Colors.white,
+          backgroundColor: const Color(0xFFFFFBF2),
           title: const Row(
             children: [
               Icon(Icons.check_circle_outline, color: Colors.green, size: 24),
@@ -164,6 +165,7 @@ class UpdateService {
   }) {
     showDialog(
       context: context,
+      useRootNavigator: true,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),

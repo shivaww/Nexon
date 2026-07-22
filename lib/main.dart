@@ -55,7 +55,7 @@ class WarmGlassContainer extends StatelessWidget {
     this.backgroundColor,
     this.border,
     this.boxShadow,
-    this.sigma = 10.0,
+    this.sigma = 12.0,
     this.enableBlur = true,
   });
 
@@ -64,17 +64,17 @@ class WarmGlassContainer extends StatelessWidget {
     final highContrast = MediaQuery.maybeOf(context)?.highContrast ?? false;
     final effectiveRadius = borderRadius ?? BorderRadius.circular(16);
     final effectiveBg =
-        backgroundColor ?? const Color(0xFFFFFBF2).withValues(alpha: highContrast ? 0.96 : 0.78);
+        backgroundColor ?? const Color(0xFFFFFBF2).withValues(alpha: highContrast ? 0.96 : 0.65);
     final effectiveBorder = border ??
         Border.all(
-          color: const Color(0xFFE5DDD3).withValues(alpha: highContrast ? 0.95 : 0.65),
+          color: const Color(0xFFE5DDD3).withValues(alpha: highContrast ? 0.95 : 0.70),
           width: 1.0,
         );
     final effectiveShadow = boxShadow ??
         [
           BoxShadow(
-            color: const Color(0xFF2D241C).withValues(alpha: 0.06),
-            blurRadius: 12,
+            color: const Color(0xFF2D241C).withValues(alpha: 0.08),
+            blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ];
@@ -5143,220 +5143,230 @@ class ChatSurface extends StatelessWidget {
           colors: [Color(0xFFFBF6EC), Color(0xFFF5EFE4), Color(0xFFEFE5D5)],
         ),
       ),
-      child: Column(
+      child: Stack(
         children: [
-          ChatHeader(
-            provider: provider,
-            settings: settings,
-            model: model,
-            onOpenProvider: onOpenProvider,
-            onOpenModel: onOpenModel,
-          ),
-          Expanded(
-            child: Stack(
-              children: [
-                ListView.builder(
-                  controller: scrollController,
-                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
-                  itemCount: messages.length,
-                  itemBuilder: (context, int index) {
-                    AvatarAnimationState state = AvatarAnimationState.idle;
-                    if (isSending && index == messages.length - 1) {
-                      final msg = messages[index];
-                      if (msg.text.contains('<mcp_request>') ||
-                          msg.text.contains('<tool_request>') ||
-                          msg.text.contains('<command>')) {
-                        state = AvatarAnimationState.mcp;
-                      } else if (msg.text.contains('<search_request>')) {
-                        state = AvatarAnimationState.searching;
-                      } else if ((msg.reasoning?.isNotEmpty ?? false) &&
-                          msg.text.isEmpty) {
-                        state = AvatarAnimationState.reasoning;
-                      } else {
-                        state = AvatarAnimationState.typing;
-                      }
-                    }
-                    final isUser = messages[index].role == MessageRole.user;
-                    List<int> branchIndicesForVersions = [];
-                    int currentVersionIndex = 0;
+          Positioned.fill(
+            child: ListView.builder(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(18, 64, 18, 90),
+              itemCount: messages.length,
+              itemBuilder: (context, int index) {
+                AvatarAnimationState state = AvatarAnimationState.idle;
+                if (isSending && index == messages.length - 1) {
+                  final msg = messages[index];
+                  if (msg.text.contains('<mcp_request>') ||
+                      msg.text.contains('<tool_request>') ||
+                      msg.text.contains('<command>')) {
+                    state = AvatarAnimationState.mcp;
+                  } else if (msg.text.contains('<search_request>')) {
+                    state = AvatarAnimationState.searching;
+                  } else if ((msg.reasoning?.isNotEmpty ?? false) &&
+                      msg.text.isEmpty) {
+                    state = AvatarAnimationState.reasoning;
+                  } else {
+                    state = AvatarAnimationState.typing;
+                  }
+                }
+                final isUser = messages[index].role == MessageRole.user;
+                List<int> branchIndicesForVersions = [];
+                int currentVersionIndex = 0;
 
-                    if (isUser && branches != null && branches!.isNotEmpty) {
-                      final activeMsgs = messages;
-                      final prefix = activeMsgs.sublist(0, index);
-                      final seenTexts = <String>{};
+                if (isUser && branches != null && branches!.isNotEmpty) {
+                  final activeMsgs = messages;
+                  final prefix = activeMsgs.sublist(0, index);
+                  final seenTexts = <String>{};
 
-                      for (int b = 0; b < branches!.length; b++) {
-                        final branchMsgs = branches![b];
-                        if (branchMsgs.length > index) {
-                          bool matches = true;
-                          for (int j = 0; j < index; j++) {
-                            if (branchMsgs[j].text != prefix[j].text ||
-                                branchMsgs[j].role != prefix[j].role) {
-                              matches = false;
-                              break;
-                            }
-                          }
-                          if (matches) {
-                            final msgText = branchMsgs[index].text;
-                            if (!seenTexts.contains(msgText)) {
-                              seenTexts.add(msgText);
-                              branchIndicesForVersions.add(b);
-                            }
-                          }
+                  for (int b = 0; b < branches!.length; b++) {
+                    final branchMsgs = branches![b];
+                    if (branchMsgs.length > index) {
+                      bool matches = true;
+                      for (int j = 0; j < index; j++) {
+                        if (branchMsgs[j].text != prefix[j].text ||
+                            branchMsgs[j].role != prefix[j].role) {
+                          matches = false;
+                          break;
                         }
                       }
-
-                      currentVersionIndex = branchIndicesForVersions.indexWhere(
-                        (bIdx) =>
-                            branches![bIdx][index].text == messages[index].text,
-                      );
-                      if (currentVersionIndex == -1) currentVersionIndex = 0;
+                      if (matches) {
+                        final msgText = branchMsgs[index].text;
+                        if (!seenTexts.contains(msgText)) {
+                          seenTexts.add(msgText);
+                          branchIndicesForVersions.add(b);
+                        }
+                      }
                     }
+                  }
 
-                    return MessageBubble(
-                      message: messages[index],
-                      index: index,
-                      providerShortName: provider.shortName,
-                      providerName: provider.name,
-                      reasoningEnabled: settings.reasoningEnabled,
-                      animationState: state,
-                      agenticWorkspace: agenticWorkspace,
-                      fileName: fileName,
-                      isSending: isSending,
-                      onEditUserMessage: () => onEditUserMessage(index),
-                      onStartResearch: ([editedStateMap]) =>
-                          onStartResearch(index, editedStateMap),
-                      versionsCount: branchIndicesForVersions.length,
-                      currentVersionIndex: currentVersionIndex,
-                      onVersionChanged: branchIndicesForVersions.isEmpty
-                          ? null
-                          : (int vIdx) {
-                              onBranchChanged?.call(branchIndicesForVersions[vIdx]);
-                            },
-                    );
-                  },
-                ),
-                if (messages.isEmpty && deepResearchEnabled)
-                  Center(
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 24),
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF9F2),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFEADCC9), width: 1.5),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF7B4E2E).withValues(alpha: 0.08),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFFBF6EC),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.psychology,
-                              color: Color(0xFF7B4E2E),
-                              size: 32,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Deep Research Mode Active',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF2D241C),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Please select a model which is good at reasoning and make sure you are using at least 32k context model.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF6C5946),
-                              height: 1.4,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
+                  currentVersionIndex = branchIndicesForVersions.indexWhere(
+                    (bIdx) =>
+                        branches![bIdx][index].text == messages[index].text,
+                  );
+                  if (currentVersionIndex == -1) currentVersionIndex = 0;
+                }
+
+                return MessageBubble(
+                  message: messages[index],
+                  index: index,
+                  providerShortName: provider.shortName,
+                  providerName: provider.name,
+                  reasoningEnabled: settings.reasoningEnabled,
+                  animationState: state,
+                  agenticWorkspace: agenticWorkspace,
+                  fileName: fileName,
+                  isSending: isSending,
+                  onEditUserMessage: () => onEditUserMessage(index),
+                  onStartResearch: ([editedStateMap]) =>
+                      onStartResearch(index, editedStateMap),
+                  versionsCount: branchIndicesForVersions.length,
+                  currentVersionIndex: currentVersionIndex,
+                  onVersionChanged: branchIndicesForVersions.isEmpty
+                      ? null
+                      : (int vIdx) {
+                          onBranchChanged?.call(branchIndicesForVersions[vIdx]);
+                        },
+                );
+              },
             ),
           ),
-          // Live tool status banner
-          AnimatedSize(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeInOut,
-            child: toolStatus.isNotEmpty
-                ? Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 9,
+          if (messages.isEmpty && deepResearchEnabled)
+            Center(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF9F2),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFEADCC9), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF7B4E2E).withValues(alpha: 0.08),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
                     ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEEF4FF),
-                      border: Border(
-                        top: BorderSide(
-                          color: const Color(0xFFBDD3F8),
-                          width: 1,
-                        ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFBF6EC),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.psychology,
+                        color: Color(0xFF7B4E2E),
+                        size: 32,
                       ),
                     ),
-                    child: Row(
-                      children: [
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Color(0xFF3B82F6),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            toolStatus,
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w500,
-                              color: Color(0xFF1D4ED8),
-                              fontFamily: 'monospace',
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Deep Research Mode Active',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D241C),
+                      ),
                     ),
-                  )
-                : const SizedBox.shrink(),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Please select a model which is good at reasoning and make sure you are using at least 32k context model.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF6C5946),
+                        height: 1.4,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: ChatHeader(
+              provider: provider,
+              settings: settings,
+              model: model,
+              onOpenProvider: onOpenProvider,
+              onOpenModel: onOpenModel,
+            ),
           ),
-          Composer(
-            controller: messageController,
-            isSending: isSending,
-            onSend: onSend,
-            onStop: onStop,
-            onPlusPressed: onPlusPressed,
-            attachedImages: attachedImages,
-            onRemoveImage: onRemoveImage,
-            attachedFiles: attachedFiles,
-            onRemoveFile: onRemoveFile,
-            deepResearchEnabled: deepResearchEnabled,
-            isEditing: isEditing,
-            onCancelEdit: onCancelEdit,
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeInOut,
+                  child: toolStatus.isNotEmpty
+                      ? Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 9,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEEF4FF),
+                            border: Border(
+                              top: BorderSide(
+                                color: const Color(0xFFBDD3F8),
+                                width: 1,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF3B82F6),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  toolStatus,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w500,
+                                    color: Color(0xFF1D4ED8),
+                                    fontFamily: 'monospace',
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                Composer(
+                  controller: messageController,
+                  isSending: isSending,
+                  onSend: onSend,
+                  onStop: onStop,
+                  onPlusPressed: onPlusPressed,
+                  attachedImages: attachedImages,
+                  onRemoveImage: onRemoveImage,
+                  attachedFiles: attachedFiles,
+                  onRemoveFile: onRemoveFile,
+                  deepResearchEnabled: deepResearchEnabled,
+                  isEditing: isEditing,
+                  onCancelEdit: onCancelEdit,
+                ),
+              ],
+            ),
           ),
         ],
       ),
