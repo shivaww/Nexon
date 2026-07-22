@@ -11218,41 +11218,72 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     : dailyCap,
               ),
               ElevatedButton(
-                onPressed: () async {
-                  final prefs = await SharedPreferences.getInstance();
-                  final newState = !isThisPlanActive;
-                  final newTier = newState ? title.toLowerCase() : '';
-                  await prefs.setBool(
-                    'nexon_managed_subscription_enabled',
-                    newState,
-                  );
-                  await prefs.setString('nexon_managed_plan_tier', newTier);
-                  if (newState) {
-                    await prefs.setString(
-                      'nexon_managed_backend_url',
-                      'https://nexon-jyp1.onrender.com',
-                    );
-                  }
-                  setState(() {
-                    _managedSubscriptionEnabled = newState;
-                    _activePlanTier = newTier;
-                  });
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          newState
-                              ? 'Activated Nexon $title Plan!'
-                              : 'Reverted to Bring-Your-Own-Key',
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      backgroundColor: Colors.white,
+                      title: const Row(
+                        children: [
+                          Icon(
+                            Icons.workspace_premium_rounded,
+                            color: Color(0xFFD97706),
+                            size: 24,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Coming Soon',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                              color: Color(0xFF1E293B),
+                            ),
+                          ),
+                        ],
+                      ),
+                      content: Text(
+                        'Subscriptions for the $title plan are coming soon! Stay updated for upcoming releases.',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF475569),
+                          height: 1.4,
                         ),
                       ),
-                    );
-                  }
+                      actionsPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      actions: [
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF2D241C),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 10,
+                            ),
+                          ),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                          child: const Text(
+                            'Got it, Stay Updated!',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isThisPlanActive
-                      ? Colors.green
-                      : const Color(0xFF2D241C),
+                  backgroundColor: const Color(0xFF2D241C),
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
@@ -11263,9 +11294,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                   minimumSize: const Size(0, 36),
                 ),
-                child: Text(
-                  isThisPlanActive ? 'Active' : 'Subscribe',
-                  style: const TextStyle(
+                child: const Text(
+                  'Subscribe',
+                  style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
                   ),
