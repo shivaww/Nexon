@@ -32,6 +32,7 @@ import 'package:nexon/services/drive_sync_service.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/screens/onboarding_screen.dart';
+import 'package:nexon/services/deep_research/deep_research_bridge_client.dart';
 
 /// Shared warm cream/tan glassmorphism container matching Nexon's palette.
 class WarmGlassContainer extends StatelessWidget {
@@ -43,6 +44,7 @@ class WarmGlassContainer extends StatelessWidget {
   final Border? border;
   final List<BoxShadow>? boxShadow;
   final double sigma;
+  final bool enableBlur;
 
   const WarmGlassContainer({
     super.key,
@@ -54,16 +56,18 @@ class WarmGlassContainer extends StatelessWidget {
     this.border,
     this.boxShadow,
     this.sigma = 10.0,
+    this.enableBlur = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    final highContrast = MediaQuery.maybeOf(context)?.highContrast ?? false;
     final effectiveRadius = borderRadius ?? BorderRadius.circular(16);
     final effectiveBg =
-        backgroundColor ?? const Color(0xFFFFFBF2).withValues(alpha: 0.78);
+        backgroundColor ?? const Color(0xFFFFFBF2).withValues(alpha: highContrast ? 0.96 : 0.78);
     final effectiveBorder = border ??
         Border.all(
-          color: const Color(0xFFE5DDD3).withValues(alpha: 0.65),
+          color: const Color(0xFFE5DDD3).withValues(alpha: highContrast ? 0.95 : 0.65),
           width: 1.0,
         );
     final effectiveShadow = boxShadow ??
@@ -83,9 +87,20 @@ class WarmGlassContainer extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: effectiveRadius,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-          child: Container(
+        child: enableBlur && !highContrast
+            ? BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                child: Container(
+                  padding: padding,
+                  decoration: BoxDecoration(
+                    color: effectiveBg,
+                    borderRadius: effectiveRadius,
+                    border: effectiveBorder,
+                  ),
+                  child: child,
+                ),
+              )
+            : Container(
             padding: padding,
             decoration: BoxDecoration(
               color: effectiveBg,
@@ -94,7 +109,6 @@ class WarmGlassContainer extends StatelessWidget {
             ),
             child: child,
           ),
-        ),
       ),
     );
   }
@@ -255,7 +269,7 @@ You have the following tools available:
    - Recent query: <search_request time_range="month" topic="news">latest SWE-bench scores 2026</search_request>
    - Date-bounded query: <search_request start_date="2026-07-01" end_date="2026-07-15">termux release issues</search_request>
    - Foundational query: <search_request>how does symlink work in android termux</search_request>
-2. Fetch Page: Output <read_url>URL</read_url> to fetch page content in depth.
+2. Fetch Page: Output <read_url>URL</read_url> to fetch HTML page content in depth. PDFs are excluded to protect mobile memory and writer context.
    Example: <read_url>https://example.com/git-guide</read_url>
 
 TOOL LIMITS PER PHASE:
@@ -366,6 +380,12 @@ class _ChatHomePageState extends State<ChatHomePage> {
   static const int maxConcurrentIngestCalls = 6;
   final SimpleSemaphore _ingestSemaphore = SimpleSemaphore(maxConcurrentIngestCalls);
   final Map<String, Map<String, dynamic>> _runUrlCache = {};
+
+  DeepResearchBridgeClient get _deepResearchBridge => DeepResearchBridgeClient(
+        endpoint: _customMcpUrl.isNotEmpty
+            ? _customMcpUrl
+            : 'http://127.0.0.1:8390/mcp',
+      );
 
   String _normalizeQueryOrUrl(String input) {
     return input
@@ -552,23 +572,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
 
   Future<void> _resetDeepResearch() async {
-    final endpoint = _customMcpUrl.isNotEmpty ? _customMcpUrl : 'http://127.0.0.1:8390/mcp';
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
     try {
-      final request = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 15));
-      request.headers.contentType = ContentType.json;
-      final bytes = utf8.encode(jsonEncode({
-        'method': 'deep_research.reset',
-        'params': <String, dynamic>{},
-      }));
-      request.headers.contentLength = bytes.length;
-      request.add(bytes);
-      final response = await request.close().timeout(const Duration(seconds: 15));
-      await response.transform(utf8.decoder).join();
+      await _deepResearchBridge.reset();
     } catch (e) {
-      debugPrint("Failed to reset deep research on bridge: $e");
-    } finally {
-      client.close(force: true);
+      throw StateError('Deep Research bridge reset failed: $e');
     }
   }
 
@@ -580,30 +587,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
     required List<dynamic> skippedPdfs,
     required List<dynamic> failedFetches,
   }) async {
-    final endpoint = _customMcpUrl.isNotEmpty ? _customMcpUrl : 'http://127.0.0.1:8390/mcp';
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final request = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 30));
-      request.headers.contentType = ContentType.json;
-      final bytes = utf8.encode(jsonEncode({
-        'method': 'deep_research.update_phase',
-        'params': {
-          'stage_id': stageId,
-          'phase_title': phaseTitle,
-          'facts': facts,
-          'findings': findings,
-          'skipped_pdfs': skippedPdfs,
-          'failed_fetches': failedFetches,
-        },
-      }));
-      request.headers.contentLength = bytes.length;
-      request.add(bytes);
-      final response = await request.close().timeout(const Duration(seconds: 30));
-      await response.transform(utf8.decoder).join();
+      await _deepResearchBridge.updatePhase(
+        stageId: stageId,
+        phaseTitle: phaseTitle,
+        facts: facts,
+        findings: findings,
+        skippedPdfs: skippedPdfs,
+        failedFetches: failedFetches,
+      );
     } catch (e) {
-      debugPrint("Failed to update deep research phase on bridge: $e");
-    } finally {
-      client.close(force: true);
+      throw StateError('Deep Research bridge phase update failed: $e');
     }
   }
 
@@ -713,42 +707,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
     return false;
   }
 
-  Future<String> _exportDeepResearchTemp() async {
-    final endpoint = _customMcpUrl.isNotEmpty
-        ? _customMcpUrl
-        : 'http://127.0.0.1:8390/mcp';
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 120);
-    try {
-      final request = await client
-          .postUrl(Uri.parse(endpoint))
-          .timeout(const Duration(seconds: 120));
-      request.headers.contentType = ContentType.json;
-      final bytes = utf8.encode(jsonEncode({
-        'method': 'deep_research.export_temp',
-        'params': <String, dynamic>{},
-      }));
-      request.headers.contentLength = bytes.length;
-      request.add(bytes);
-      final response = await request.close().timeout(
-        const Duration(seconds: 120),
-      );
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 120));
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('HTTP ${response.statusCode}: $body');
-      }
-      final decoded = jsonDecode(body);
-      final result = decoded is Map ? decoded['result'] : null;
-      if (result is Map && result['content'] is String) {
-        return result['content'] as String;
-      }
-      throw const FormatException('Missing deep research export content');
-    } finally {
-      client.close(force: true);
-    }
+  Future<Map<String, dynamic>> _exportDeepResearchForWriter(int maxEvidenceTokens) {
+    return _deepResearchBridge.exportForWriter(
+      maxEvidenceTokens: maxEvidenceTokens.clamp(1, 200000) as int,
+    );
   }
 
   void _switchSession(String sessionId) {
@@ -3844,59 +3806,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 combinedResults.writeln("Search results for '$query':\n$searchResult\n");
 
 if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
-  updateResearchEventStatus(eventId, 'ingesting');
-  final summariesByResult = <int, Map<String, dynamic>>{};
-  await Future.wait(Iterable<int>.generate(resultMatches.length).map((idx) async {
-    final m = resultMatches.elementAt(idx);
-    final individualUrl = m.group(2)?.trim() ?? '';
-    if (individualUrl.isEmpty) return;
-    try {
-      final individualSummaries = await _summarizeSourceInline(
-        sourceUrl: individualUrl,
-        content: m.group(3) ?? "",
-        provider: provider,
-        settings: settings,
-        model: model,
-      );
-      summariesByResult[idx] = {
-        'facts': individualSummaries['facts'] ?? [],
-        'findings': individualSummaries['findings'] ?? [],
-      };
-    } catch (e) {
-      debugPrint('Inline summarization failed for result $idx: $e');
-    }
-  }));
-  for (final entry in summariesByResult.entries) {
-    final facts = List<Map<String, dynamic>>.from(entry.value['facts']);
-    final findings = List<Map<String, dynamic>>.from(entry.value['findings']);
-    phaseFacts.addAll(facts);
-    phaseFindings.addAll(findings);
-  }
-  await _updateDeepResearchPhase(
-    stageId: stageId,
-    phaseTitle: phaseTitle,
-    facts: phaseFacts,
-    findings: phaseFindings,
-    skippedPdfs: phaseSkippedPdfs,
-    failedFetches: phaseFailedFetches,
-  );
-  finishResearchEvent(
-    eventId,
-    status: 'done',
-    stopwatch: eventWatch,
-    details: {
-      'result_count': resultMatches.length,
-      'facts_count': phaseFacts.length,
-      'findings_count': phaseFindings.length,
-      'result_payload': _compactSearchPayload(resultMatches.map((match) {
-        return {
-          'title': match.group(1) ?? '',
-          'url': match.group(2) ?? '',
-          'snippet': match.group(3) ?? '',
-        };
-      })),
-    },
-  );
+  // Search snippets are discovery leads only. They are never promoted to
+  // facts/findings; evidence is created exclusively after a successful read_url.
 }
               }
 
@@ -4028,7 +3939,45 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                 bool isPdfResponse = false;
                 bool fetchFailed = false;
 
+                // The bridge owns network retrieval, URL policy, and cleaning.
+                // Keeping this result on the server side avoids a second, divergent
+                // fetch implementation in Flutter.
                 try {
+                  final fetched = await fetchSemaphore.run(
+                    () => _deepResearchBridge.readUrl(targetUrl, allowPdf: false),
+                  );
+                  if (fetched['status'] == 'skipped_pdf') {
+                    final reason = fetched['reason']?.toString() ?? 'PDF files are excluded from Deep Research';
+                    phaseSkippedPdfs.add({'url': targetUrl, 'reason': reason});
+                    runFetchedUrls.add(normUrl);
+                    runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': true, 'skipped': true};
+                    await _updateDeepResearchPhase(
+                      stageId: stageId, phaseTitle: phaseTitle, facts: phaseFacts,
+                      findings: phaseFindings, skippedPdfs: phaseSkippedPdfs,
+                      failedFetches: phaseFailedFetches,
+                    );
+                    finishResearchEvent(eventId, status: 'done', stopwatch: eventWatch,
+                      details: {'url': targetUrl, 'parse_format': 'skipped_pdf', 'result_payload': {'summary': reason}});
+                    urlResults[idx] = 'Skipped PDF URL: $targetUrl';
+                    return;
+                  }
+                  if (fetched['error'] != null) {
+                    throw HttpException(fetched['error'].toString());
+                  }
+                  text = fetched['content']?.toString() ?? '';
+                  if (text.isEmpty) throw const HttpException('Fetch returned no readable content');
+                } catch (e) {
+                  fetchFailed = true;
+                  final errStr = 'Fetch failed: $e';
+                  phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
+                  finishResearchEvent(eventId, status: 'error', stopwatch: eventWatch,
+                    details: {'url': targetUrl}, error: errStr);
+                  urlResults[idx] = errStr;
+                }
+
+                // Legacy fallback is intentionally disabled: all research reads
+                // must pass through the bridge above.
+                if (false) {
                   await fetchSemaphore.run(() async {
                     try {
                       final client = HttpClient()
@@ -4110,18 +4059,6 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                       urlResults[idx] = errStr;
                     }
                   });
-                } catch (e) {
-                  fetchFailed = true;
-                  final errStr = 'Error running fetch: $e';
-                  phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
-                  finishResearchEvent(
-                    eventId,
-                    status: 'error',
-                    stopwatch: eventWatch,
-                    details: {'url': targetUrl},
-                    error: errStr,
-                  );
-                  urlResults[idx] = errStr;
                 }
 
                 if (fetchFailed) return;
@@ -4269,57 +4206,21 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
 
       String tempJsonContent = '[]';
       try {
-        tempJsonContent = await _exportDeepResearchTemp();
-
         final int userBudget = _writerContextBudget;
         final int reserve = (userBudget * 0.18).round();
         final int maxEvidenceTokens = userBudget - reserve;
-
-        final List<dynamic> parsedJson = jsonDecode(tempJsonContent) as List<dynamic>;
-        
-        final List<dynamic> acceptedPhases = [];
-        int currentTokenCount = 0;
-        int truncatedPhasesCount = 0;
-
-        for (final phaseVal in parsedJson) {
-          if (phaseVal is Map<String, dynamic>) {
-            final phaseStr = jsonEncode(phaseVal);
-            final wordCount = phaseStr.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-            final tokenEst = (wordCount * 1.3).ceil();
-            
-            if (currentTokenCount + tokenEst <= maxEvidenceTokens) {
-              acceptedPhases.add(phaseVal);
-              currentTokenCount += tokenEst;
-            } else {
-              truncatedPhasesCount++;
-            }
-          }
-        }
-
-        if (parsedJson.isNotEmpty && acceptedPhases.isEmpty) {
-          final firstPhase = parsedJson.first;
-          final phaseStr = jsonEncode(firstPhase);
-          final wordCount = phaseStr.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-          final tokenEst = (wordCount * 1.3).ceil();
-          
+        final writerExport = await _exportDeepResearchForWriter(maxEvidenceTokens);
+        tempJsonContent = writerExport['content']?.toString() ?? '[]';
+        final truncatedFacts = (writerExport['truncated_facts'] as num?)?.toInt() ?? 0;
+        final truncatedFindings = (writerExport['truncated_findings'] as num?)?.toInt() ?? 0;
+        final truncatedPhases = (writerExport['truncated_phases'] as num?)?.toInt() ?? 0;
+        if (truncatedFacts + truncatedFindings + truncatedPhases > 0) {
           executionIssues.add({
             'step': 'Evidence budget',
             'status': 'warning',
-            'error': '⚠️ Context budget ($userBudget tokens) is very small. Proceeding with the first phase summary only.',
-          });
-          acceptedPhases.add(firstPhase);
-          currentTokenCount += tokenEst;
-        }
-
-        if (truncatedPhasesCount > 0) {
-          executionIssues.add({
-            'step': 'Evidence budget',
-            'status': 'warning',
-            'error': 'Evidence trimmed to fit your configured context budget of $userBudget tokens; $truncatedPhasesCount phase summaries were excluded from the final report.',
+            'error': 'Evidence was trimmed to fit $userBudget tokens: $truncatedFacts facts, $truncatedFindings findings, and $truncatedPhases empty phases omitted.',
           });
         }
-
-        tempJsonContent = jsonEncode(acceptedPhases);
       } catch (e) {
         debugPrint("Error exporting/processing deep-research temp.json: $e");
         executionIssues.add({
