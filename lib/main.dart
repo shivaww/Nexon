@@ -18,6 +18,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:nexon/services/update_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -8940,6 +8941,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        UpdateService.checkOnStartup(context);
+      }
+    });
     _maxTokens = widget.settings.maxTokens;
     _selectedProviderId = widget.provider.id;
     _selectedModel = widget.settings.model.isNotEmpty
@@ -10867,6 +10873,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       'Logout',
                       style: TextStyle(
                         color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => UpdateService.checkForUpdates(context, userInitiated: true),
+                    icon: const Icon(Icons.system_update_rounded, size: 16, color: Color(0xFF2563EB)),
+                    label: const Text(
+                      'Check for Updates',
+                      style: TextStyle(
+                        color: Color(0xFF2563EB),
                         fontWeight: FontWeight.bold,
                       ),
                     ),
