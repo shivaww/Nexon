@@ -1,18 +1,17 @@
-# Nexon
+# Nexon 🚀
 
-An AI-powered IDE and research assistant that runs natively on your Android phone via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, and agentic research loops directly on-device.
+An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and hierarchical RAG loops directly on your phone.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
-[![Status](https://img.shields.io/badge/status-private%20%2F%20in%20development-red.svg)](https://github.com/shivaww/Nexon)
-[![License](https://img.shields.io/badge/license-TBD-lightgrey.svg)](https://github.com/shivaww/Nexon)
-<!-- NOTE: Using a static badge since the repository is private and live GitHub API badge calls will fail. This will switch to a live shields.io counter if/when the repository goes public. -->
-[![Downloads](https://img.shields.io/badge/downloads-0--active--dev-blue.svg)](https://github.com/shivaww/Nexon)
+[![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Flutter](https://img.shields.io/badge/Flutter-3.32%2B-blue.svg)](https://flutter.dev)
 
 ---
 
-## System Architecture
+## 🏗️ System Architecture
 
-Nexon split-processes operations between the Dart/Flutter application (which renders the visual IDE panels and manages state) and a Python Bridge background server running in the Termux userland environment.
+Nexon split-processes operations between the Flutter application (visual IDE panels, state management, and rendering) and a Python Bridge background server running in the Termux userland environment.
 
 ```text
 +----------------------------------------------------------------------+
@@ -46,72 +45,72 @@ Nexon split-processes operations between the Dart/Flutter application (which ren
 |     Termux Runtime     |         |      External Services & APIs     |
 | - Bash shell           |         | - Google Drive API (OAuth Backup) |
 | - GCC, git, python     |         | - Tavily Search API (Web Search)  |
-+------------------------+         | - LLM Providers (OpenAI, Anthropic)|
+| +----------------------+         | - LLM Providers (BYOK Keys)       |
                                    +-----------------------------------+
 ```
 
 ---
 
-## Core Features
+## ✨ Core Features
 
-### 1. IDE Workstation & Termux Tool Integration
+### 1. 🛠️ Agentic IDE & Termux Tool Integration
 *   **Arbitrary Command Runner**: LLM agents execute commands directly inside the Termux shell via `shell_exec` through the Python bridge, supporting standard compilers, tests, and script runners.
-*   **Rich File Manipulation**: Read, write, and patch files using specific line range indices. Supports granular tools like `patch_file_rich` and `diff_files_rich`.
-*   **Security Permission States**: Grants users execution control via `shell_permission` configurations natively in the Flutter UI (`ask`, `session`, `always`, or `never`).
+*   **Rich File Manipulation**: Read, write, and patch files using specific line range indices. Supports granular tools like `patch_file`, `replace_lines`, and `diff_files`.
+*   **Security Permission Control**: Grants users execution control via shell permission configurations natively in the Flutter UI (`ask`, `session`, `always`, or `never`).
 
-### 2. Standalone Web Search
-*   **General-Purpose Search**: Outside of Deep Research mode, the app intercepts `<search_request>` tags during standard chat sessions.
-*   **Tavily Integration**: The Python bridge natively routes these requests to the Tavily API, providing LLMs with real-time web context on demand.
+### 2. 🌐 Standalone Web Search
+*   **Live Web Context**: The app intercepts search requests during standard chat sessions and routes them natively to Tavily API for real-time web context.
 
-### 3. Artifact Rendering
-*   **Markdown & Code Views**: Renders rich formatted documents and syntax-highlighted code directly in the chat feed using `flutter_markdown`.
-*   **SVG Visual Rendering**: Intercepts generated SVG files and renders them cleanly using `flutter_svg` (`SvgPicture.string`), turning XML markup into actual on-device visual diagrams.
+### 3. 📄 Artifact Rendering & Export
+*   **Markdown & Code Views**: Renders rich formatted documents and syntax-highlighted code directly in the chat feed.
+*   **SVG Diagram Rendering**: Intercepts generated SVG markup and renders interactive visual diagrams natively via `flutter_svg`.
 *   **Document Export**: Supports parsing and saving conversational artifacts locally as `.md` or `.docx` files.
 
-### 4. AI Memory System
-*   **State Persistence**: Persists a global context state to `nexon_memory.json`, allowing user preferences, developer guidelines, or project specifications to survive app restarts.
+### 4. 🧠 Memory & Persistent Context
+*   **State Persistence**: Persists global context to `nexon_memory.json`, allowing user preferences, developer guidelines, and project specs to survive app restarts.
 
-### 5. Google Drive Backup & Sync
-*   **Unified Backup Payload**: Bundles conversation sessions, secure API keys, system settings, AI memory, and media files into a serialized `nexon_backup.json` file.
-*   **OAuth & Silent Refresh**: Implemented in Dart via `googleapis/drive/v3.dart`. It uses a custom HTTP client (`GoogleAuthClient`) capable of silently refreshing expired access tokens to keep sync running smoothly in the background.
+### 5. ☁️ Google Drive Backup & Sync
+*   **Unified Sync**: Bundles conversation sessions, settings, AI memory, and credentials into `nexon_backup.json` on Google Drive.
+*   **Non-Destructive Merge**: Smart syncing preserves local un-synced chats while restoring remote backups smoothly.
 
-### 6. Deep Research (Hierarchical RAG)
-*   **Three-State Lifecycle**: A guided UI pipeline that moves through Planner, Researcher, and Synthesizer phases.
-*   **On-Device Vector Storage**: Embeddings are stored in SQLite and computed using NumPy vector math (`float32` byte arrays), fully migrating away from complex C-extensions like `sqlite-vec`.
-*   **Configurable Budget**: Includes a user-configurable `_writerContextBudget` setting to throttle how many tokens of retrieved evidence are injected into the final synthesizing phase.
+### 6. 🔬 Deep Research (Hierarchical RAG)
+*   **Guided Pipeline**: Guided UI pipeline moving through Planner, Researcher, and Synthesizer phases.
+*   **On-Device Vector Math**: Computes embeddings stored in SQLite using NumPy vector math (`float32`), operating smoothly on mobile hardware.
+
+### 7. 🔔 Automatic Release Notifications
+*   **Version Checker**: Integrated `UpdateService` notifies users when a new version or APK release is available.
 
 ---
 
-## Technical Specifications
+## 🧰 Technical Specifications
 
 | Layer | Technologies & Frameworks |
 |---|---|
-| **Frontend UI** | Flutter (Dart), Material 3 Design, `flutter_markdown`, `flutter_svg` |
-| **Local Storage** | Flutter Secure Storage (OAuth tokens), SharedPreferences, local JSON |
-| **Python Bridge** | Python 3, `aiohttp`, `websockets`, `numpy`, `docx_creator` |
-| **Local Embedder** | `llama.cpp` (`llama-server`) & `BGE-Base-v1.5` (`bge-base-en-v1.5-f16.gguf`) |
+| **Frontend UI** | Flutter (Dart), Material 3 Design, `flutter_markdown`, `flutter_svg`, `fl_chart` |
+| **Local Storage** | Flutter Secure Storage, SharedPreferences, local JSON |
+| **Python Bridge** | Python 3, `aiohttp`, `websockets`, `numpy`, `python-docx` |
+| **Local Embedder** | `llama.cpp` (`llama-server`) & `BGE-Base-v1.5` |
 | **Third-Party APIs**| Supabase Google Auth, Google Drive v3 REST API, Tavily Search API |
 
 ---
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
 *   An Android device running Android 7.0+ (API 24+)
 *   **[Termux](https://f-droid.org/en/packages/com.termux/)** installed from F-Droid
-*   Python 3.10+ installed inside the Termux container
+*   Python 3.10+ installed inside Termux
 
 ### Installation
 
 1.  **Configure Termux Environment**:
-    Navigate to your local repository directory and run the bridge installation script:
+    Run the bridge setup script inside your repository directory:
     ```bash
-    cd termux_forge
     chmod +x install_bridge.sh
     ./install_bridge.sh
     ```
 2.  **Start Python Bridge Server**:
-    Launch the bridge gateway. This runs the websocket protocol on port `8765` and HTTP REST on port `8390` concurrently:
+    Launch the bridge gateway. This runs WebSocket communication on port `8765` and HTTP REST on port `8390`:
     ```bash
     cd ~/nexon_bridge
     python3 mcp_server.py
@@ -124,14 +123,12 @@ Nexon split-processes operations between the Dart/Flutter application (which ren
 
 ---
 
-## Project Status
+## 🤝 Contributing
 
-Nexon is currently a private project actively developed by a solo developer. 
-*Known Limitations*: None currently tracked for core infrastructure; the Google Drive backup token refresh logic has been stabilized.
+Contributions, bug reports, and feature requests are welcome! Feel free to check out the issues page or submit a Pull Request.
 
 ---
 
-## License & Contributing
+## 📜 License
 
-*   **License**: TBD — currently private, license will be finalized before any public release.
-*   **Contributing**: The repository is private and not currently accepting external contributions.
+Distributed under the **MIT License**. See `LICENSE` for more information.
