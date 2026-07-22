@@ -1,6 +1,6 @@
 # Nexon 🚀
 
-An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and hierarchical RAG loops directly on your phone.
+An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and 3-agent Deep Research loops directly on your phone.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
@@ -34,9 +34,9 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 |                             |    python_bridge Server                |
 | +------------------------+  |  +-----------------------------------+ |
 | | IDE / Shell Exec Layer |  |  | Deep Research Engine              | |
-| | (hybrid_tools.py)      |  |  | - Embedder Lifecycle Management   | |
-| | - File Read/Write/Edit |  |  | - Hierarchical RAG                | |
-| | - Arbitrary Termux Cmds|  |  | - SQLite + Numpy Vector Store     | |
+| | (hybrid_tools.py)      |  |  | - 3-Agent Autonomous Pipeline     | |
+| | - File Read/Write/Edit |  |  | - Structured Fact/Finding Memory  | |
+| | - Arbitrary Termux Cmds|  |  | - Dynamic Context Synthesizer     | |
 | +---------+--------------+  |  +-----------------+-----------------+ |
 +-----------+-----------------+--------------------+-------------------+
             |                                      |
@@ -73,9 +73,10 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 *   **Unified Sync**: Bundles conversation sessions, settings, AI memory, and credentials into `nexon_backup.json` on Google Drive.
 *   **Non-Destructive Merge**: Smart syncing preserves local un-synced chats while restoring remote backups smoothly.
 
-### 6. 🔬 Deep Research (Hierarchical RAG)
-*   **Guided Pipeline**: Guided UI pipeline moving through Planner, Researcher, and Synthesizer phases.
-*   **On-Device Vector Math**: Computes embeddings stored in SQLite using NumPy vector math (`float32`), operating smoothly on mobile hardware.
+### 6. 🔬 Deep Research Engine
+*   **3-Agent Autonomous Pipeline**: Guided pipeline moving through Planner, Researcher, and Synthesizer phases.
+*   **Structured Fact & Finding Storage**: Iteratively extracts precise `FACT` records (numeric metrics, dates, claims) and `FINDING` insights into state storage without heavy embedding models or vector databases.
+*   **Configurable Context Budget**: Dynamically budget and throttle evidence tokens passed into the synthesis phase for maximum response quality.
 
 ### 7. 🔔 Automatic Release Notifications
 *   **Version Checker**: Integrated `UpdateService` notifies users when a new version or APK release is available.
@@ -88,8 +89,8 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 |---|---|
 | **Frontend UI** | Flutter (Dart), Material 3 Design, `flutter_markdown`, `flutter_svg`, `fl_chart` |
 | **Local Storage** | Flutter Secure Storage, SharedPreferences, local JSON |
-| **Python Bridge** | Python 3, `aiohttp`, `websockets`, `numpy`, `python-docx` |
-| **Vector & Search Engine** | SQLite + NumPy float32 Vector Math (Lightweight on-device math) |
+| **Python Bridge** | Python 3, `aiohttp`, `websockets`, `python-docx` |
+| **Research Storage** | Structured Fact/Finding JSON Store (Zero vector/embedding overhead) |
 | **Third-Party APIs**| Supabase Auth, Google Drive v3 REST API, Tavily Web Search API |
 
 ---
