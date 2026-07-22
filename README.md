@@ -137,4 +137,4 @@ Contributions, bug reports, and feature requests are open and welcome! Feel free
 
 ## 📜 License & Usage
 
-Distributed under the **Nexon Non-Commercial License**. Free for personal, academic, and non-commercial usage. Commercial use, re-selling, or commercial integration requires an active Nexon Pro subscription or commercial licensing agreement. See [`LICENSE`](LICENSE) for details.
+Distributed under the **Nexon Non-Commercial License**. Free strictly for personal, academic, and non-commercial usage. **Commercial use in any form (as-is, modified, or re-branded) is strictly prohibited.** Subscriptions are coming soon; commercial licensing options will open once subscriptions launch. See [`LICENSE`](LICENSE) for details.
