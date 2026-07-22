@@ -19,7 +19,8 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
                 constraints: const BoxConstraints(
-                  minWidth: 110.0,
+                  minWidth: 140.0,
+                  maxWidth: 380.0,
                 ),
                 child: SelectableText.rich(
                   TextSpan(
@@ -53,13 +54,15 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
     if (rows.isEmpty) return const SizedBox.shrink();
 
     return ScrollableTableWrapper(
-      child: Table(
-        border: TableBorder.all(
-          color: const Color(0xFFCBD5E1),
-          width: 1.0,
+      child: IntrinsicWidth(
+        child: Table(
+          border: TableBorder.all(
+            color: const Color(0xFFCBD5E1),
+            width: 1.0,
+          ),
+          defaultColumnWidth: const IntrinsicColumnWidth(),
+          children: rows,
         ),
-        defaultColumnWidth: const IntrinsicColumnWidth(),
-        children: rows,
       ),
     );
   }
