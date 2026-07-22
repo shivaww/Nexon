@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class UpdateService {
-  static const String currentVersion = '0.1.0';
-  static const int currentVersionCode = 1;
+  static const String currentVersion = '1.0.3';
+  static const int currentVersionCode = 4;
   static const String defaultBackendUrl = 'https://nexon-jyp1.onrender.com';
   static const String githubReleasesUrl = 'https://api.github.com/repos/shivaww/Nexon/releases/latest';
 
