@@ -14086,21 +14086,31 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     final steps = widget.stateMap['steps'] as List? ?? [];
     final status = widget.stateMap['status'] as String? ?? 'running';
 
-    return Container(
+    return WarmGlassContainer(
       margin: const EdgeInsets.only(bottom: 12, top: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF0F4F8),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFC0D3E5)),
-      ),
+      borderRadius: BorderRadius.circular(14),
+      sigma: 14,
+      backgroundColor: const Color(0xFFEAF3FF).withValues(alpha: 0.80),
+      border: Border.all(color: const Color(0xFF8EB9DF).withValues(alpha: 0.72)),
+      boxShadow: [
+        BoxShadow(
+          color: const Color(0xFF2C5282).withValues(alpha: 0.12),
+          blurRadius: 18,
+          offset: const Offset(0, 7),
+        ),
+      ],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: const BoxDecoration(
-              color: Color(0xFFE2ECF5),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(11)),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xD9D7E9FA), Color(0xBFD9ECFA)],
+              ),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(13)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
