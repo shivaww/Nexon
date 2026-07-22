@@ -52,18 +52,14 @@ jobs:
 
       - name: Build release APK
         run: |
-          flutter build apk --release || true
-          if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            if [ -f android/app/build/outputs/flutter-apk/app-release.apk ]; then
-              mkdir -p build/app/outputs/flutter-apk
-              cp android/app/build/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-release.apk
-            elif [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
-              mkdir -p build/app/outputs/flutter-apk
-              cp android/app/build/outputs/apk/release/app-release.apk build/app/outputs/flutter-apk/app-release.apk
-            fi
-          fi
-          if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            echo "Error: Release APK was not generated!"
+          flutter build apk --release --no-tree-shake-icons || true
+          mkdir -p build/app/outputs/flutter-apk
+          FOUND_APK=$(find . -name "*release*.apk" -o -name "app*.apk" | head -n 1)
+          if [ -n "$FOUND_APK" ]; then
+            echo "Found APK at: $FOUND_APK"
+            cp "$FOUND_APK" build/app/outputs/flutter-apk/app-release.apk
+          else
+            echo "Error: No APK file was generated!"
             exit 1
           fi
 
