@@ -1222,10 +1222,12 @@ jobs:
 
           if (_svgVisualsEnabled) {
             systemPromptText +=
-                "- SVG (ONLY for non-graph diagrams like flowcharts, architecture, illustrations): ```svg\n"
+                "- SVG VISUALS (flowcharts, architecture, state-machines, illustrations): ```svg\n"
                 "  Root: width=\"100%\" viewBox=\"0 0 800 450\" preserveAspectRatio=\"xMidYMid meet\"\n"
                 "  IMPORTANT: SVGs MUST be strictly enclosed with `<svg>` and `</svg>` tags.\n"
-                "  NEVER use SVG for charts, graphs, or mind maps. Use ```chart instead.\n\n";
+                "  SELECTIVE INTERACTIVITY GUIDANCE:\n"
+                "  - Static Diagrams (Architecture, Pipelines): Keep SVG clean without scripts/events.\n"
+                "  - Interactive Diagrams (Toggle Switches, State Machines, Interactive Components): Include embedded `onclick=\"this.classList.toggle('active')\"`, CSS hover effects, or state transitions if interactivity enhances understanding.\n\n";
           }
 
         systemPromptText +=
@@ -1340,10 +1342,10 @@ jobs:
 
         if (_svgVisualsEnabled) {
           systemPromptText +=
-              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, mind maps, architecture, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
+              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, architecture, state-machines, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
         } else {
           systemPromptText +=
-              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. NEVER use SVG for charts.\n";
+              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Do NOT generate SVG visuals.\n";
         }
 
         if (_agenticEnabled) {
@@ -15092,53 +15094,89 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
 
 class SvgDiagramWidget extends StatefulWidget {
   final String svgString;
-  const SvgDiagramWidget({super.key, required this.svgString});
+  final Function(String errorDetails)? onError;
+
+  const SvgDiagramWidget({
+    super.key,
+    required this.svgString,
+    this.onError,
+  });
 
   @override
   State<SvgDiagramWidget> createState() => _SvgDiagramWidgetState();
 }
 
 class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
-  // Cache processed SVG so we don't re-run regex on every parent rebuild.
   late String _cachedSvg;
   late bool _isComplete;
+  bool _hasError = false;
+  String _errorMessage = '';
+  Timer? _timeoutTimer;
 
   @override
   void initState() {
     super.initState();
+    _processSvg();
+  }
+
+  void _processSvg() {
     _cachedSvg = _cleanSvg(widget.svgString);
     _isComplete = _cachedSvg.trim().endsWith('</svg>');
+    
+    if (!_isComplete) {
+      _startTimeoutTimer();
+    } else {
+      _timeoutTimer?.cancel();
+      _validateSvg();
+    }
+  }
+
+  void _startTimeoutTimer() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = Timer(const Duration(seconds: 15), () {
+      if (mounted && !_isComplete) {
+        setState(() {
+          _hasError = true;
+          _errorMessage = 'Incomplete SVG visual stream (missing </svg> tag)';
+        });
+        widget.onError?.call(_errorMessage);
+      }
+    });
+  }
+
+  void _validateSvg() {
+    if (!_cachedSvg.contains('<svg')) {
+      _hasError = true;
+      _errorMessage = 'Invalid SVG content (missing <svg> tag)';
+      widget.onError?.call(_errorMessage);
+      return;
+    }
+    _hasError = false;
   }
 
   @override
   void didUpdateWidget(SvgDiagramWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Only reprocess when the raw string actually changes.
     if (oldWidget.svgString != widget.svgString) {
-      _cachedSvg = _cleanSvg(widget.svgString);
-      final nowComplete = _cachedSvg.trim().endsWith('</svg>');
-      // If we just became complete, trigger exactly one rebuild to show SVG.
-      if (nowComplete != _isComplete) {
-        _isComplete = nowComplete;
-        // setState is safe here — didUpdateWidget is called during the build phase
-        // but setState schedules a new frame, not an immediate rebuild.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
-        });
-      } else {
-        _isComplete = nowComplete;
-      }
+      _processSvg();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
     }
   }
 
-  /// Strip everything before <svg and normalize width/height to 100%
+  @override
+  void dispose() {
+    _timeoutTimer?.cancel();
+    super.dispose();
+  }
+
   String _cleanSvg(String raw) {
     String s = raw.trim();
     final svgIdx = s.indexOf('<svg');
-    if (svgIdx < 0) return s; // not SVG at all, return as-is
+    if (svgIdx < 0) return s;
     if (svgIdx > 0) s = s.substring(svgIdx);
 
-    // Remove fixed pixel width/height so we control sizing via LayoutBuilder
     s = s.replaceFirstMapped(
       RegExp(
         r'''(<svg[^>]*?)\s+width=["']?[\d.%]+["']?''',
@@ -15158,8 +15196,36 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
 
   @override
   Widget build(BuildContext context) {
+    if (_hasError) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF2F2),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFFCA5A5)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Failed to render visual: ${_errorMessage.length > 55 ? "${_errorMessage.substring(0, 55)}…" : _errorMessage}',
+                style: const TextStyle(
+                  color: Color(0xFF991B1B),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (!_isComplete) {
-      // Streaming in progress — show a subtle shimmer placeholder
       return Container(
         width: double.infinity,
         height: 80,
@@ -15167,7 +15233,7 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
         decoration: BoxDecoration(
           color: const Color(0xFF0D1B2A),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF1E3A5F).withOpacity(0.5)),
+          border: Border.all(color: const Color(0xFF1E3A5F).withValues(alpha: 0.5)),
         ),
         child: const Row(
           mainAxisAlignment: MainAxisAlignment.center,
