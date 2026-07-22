@@ -322,6 +322,11 @@ class _SummaryCard extends StatelessWidget {
     return GlassCard(
       padding: const EdgeInsets.all(12),
       borderRadius: 12,
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [color.withValues(alpha: 0.14), color.withValues(alpha: 0.025)],
+      ),
       child: Column(
         children: [
           Icon(icon, size: 20, color: color),
@@ -354,6 +359,11 @@ class _AgentCard extends StatelessWidget {
     return GlassCard(
       padding: const EdgeInsets.all(14),
       borderRadius: 14,
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [agent.statusColor.withValues(alpha: 0.12), Colors.transparent],
+      ),
       borderColor: agent.status == 'error'
           ? AppColors.error.withValues(alpha: 0.3)
           : null,

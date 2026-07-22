@@ -92,6 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 8),
           GlassCard(
             padding: const EdgeInsets.all(8),
+            enableBlur: false,
             child: ReorderableListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),

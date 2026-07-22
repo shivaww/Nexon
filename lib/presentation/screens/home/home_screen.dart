@@ -787,6 +787,7 @@ class _RightSidebar extends StatelessWidget {
           GlassCard(
             padding: const EdgeInsets.all(12),
             borderRadius: 12,
+            gradient: AppColors.cardGradient,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -812,6 +813,7 @@ class _RightSidebar extends StatelessWidget {
           GlassCard(
             padding: const EdgeInsets.all(12),
             borderRadius: 12,
+            gradient: AppColors.cardGradient,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -839,6 +841,7 @@ class _RightSidebar extends StatelessWidget {
           GlassCard(
             padding: const EdgeInsets.all(12),
             borderRadius: 12,
+            gradient: AppColors.cardGradient,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
