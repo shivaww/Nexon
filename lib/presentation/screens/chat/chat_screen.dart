@@ -1067,6 +1067,7 @@ class _MessageBubble extends StatelessWidget {
     return MarkdownBody(
       data: message.content,
       selectable: true,
+      extensionSet: md.ExtensionSet.gitHubFlavored,
       builders: {
         'table': ScrollableTableBuilder(),
       },

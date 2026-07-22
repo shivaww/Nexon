@@ -15406,6 +15406,7 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                    child: MarkdownBody(
                     data: widget.docxContent,
                     selectable: true,
+                    extensionSet: md.ExtensionSet.gitHubFlavored,
                     builders: {
                       'table': ScrollableTableBuilder(),
                     },
@@ -15718,6 +15719,7 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                   child: MarkdownBody(
                     data: widget.mdContent,
                     selectable: true,
+                    extensionSet: md.ExtensionSet.gitHubFlavored,
                     builders: {
                       'table': ScrollableTableBuilder(),
                     },
