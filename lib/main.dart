@@ -114,6 +114,247 @@ class WarmGlassContainer extends StatelessWidget {
   }
 }
 
+/// Custom painter for Liquid Glass rim highlights.
+/// Traces a thin specular edge highlight line along the top/outer boundary of a pill or circle shape.
+class _LiquidGlassRimPainter extends CustomPainter {
+  final BorderRadius? borderRadius;
+  final bool isCircle;
+  final double borderWidth;
+
+  _LiquidGlassRimPainter({
+    this.borderRadius,
+    this.isCircle = false,
+    this.borderWidth = 1.2,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.width <= 0 || size.height <= 0) return;
+    final rect = Offset.zero & size;
+    final path = Path();
+
+    if (isCircle) {
+      path.addOval(rect.deflate(borderWidth / 2));
+    } else if (borderRadius != null) {
+      path.addRRect(borderRadius!.toRRect(rect).deflate(borderWidth / 2));
+    } else {
+      path.addRect(rect.deflate(borderWidth / 2));
+    }
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderWidth
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          const Color(0xFFFFFFFF).withValues(alpha: 0.95), // Bright specular top rim highlight
+          const Color(0xFFFFFDF8).withValues(alpha: 0.50), // Translucent side rim
+          const Color(0xFFE2D6C7).withValues(alpha: 0.40), // Warm bottom border shadow
+        ],
+        stops: const [0.0, 0.45, 1.0],
+      ).createShader(rect);
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LiquidGlassRimPainter oldDelegate) => false;
+}
+
+/// Shared liquid glass surface widget matching Nexon's warm cream/tan palette.
+class LiquidGlassSurface extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final EdgeInsetsGeometry? margin;
+  final BorderRadius? borderRadius;
+  final bool isCircle;
+  final Color? backgroundColor;
+  final double sigma;
+  final VoidCallback? onTap;
+  final String? tooltip;
+  final double? width;
+  final double? height;
+
+  const LiquidGlassSurface({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.borderRadius,
+    this.isCircle = false,
+    this.backgroundColor,
+    this.sigma = 12.0,
+    this.onTap,
+    this.tooltip,
+    this.width,
+    this.height,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final highContrast = MediaQuery.maybeOf(context)?.highContrast ?? false;
+    final effectiveRadius = isCircle
+        ? null
+        : (borderRadius ?? BorderRadius.circular(30));
+
+    final effectiveBg = backgroundColor ??
+        const Color(0xFFFFFDF8).withValues(alpha: highContrast ? 0.96 : 0.72);
+
+    Widget innerContent = Container(
+      width: width,
+      height: height,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: effectiveBg,
+        shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
+        borderRadius: effectiveRadius,
+      ),
+      child: child,
+    );
+
+    if (!highContrast) {
+      innerContent = isCircle
+          ? ClipOval(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                child: innerContent,
+              ),
+            )
+          : ClipRRect(
+              borderRadius: effectiveRadius!,
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                child: innerContent,
+              ),
+            );
+    }
+
+    Widget decorated = Container(
+      margin: margin,
+      decoration: BoxDecoration(
+        shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
+        borderRadius: effectiveRadius,
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF3D2817).withValues(alpha: 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: CustomPaint(
+        foregroundPainter: _LiquidGlassRimPainter(
+          borderRadius: effectiveRadius,
+          isCircle: isCircle,
+        ),
+        child: innerContent,
+      ),
+    );
+
+    if (onTap != null) {
+      decorated = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: isCircle
+              ? const CircleBorder()
+              : RoundedRectangleBorder(borderRadius: effectiveRadius!),
+          child: decorated,
+        ),
+      );
+    }
+
+    if (tooltip != null) {
+      decorated = Tooltip(message: tooltip!, child: decorated);
+    }
+
+    return decorated;
+  }
+}
+
+/// Circular liquid glass button widget (Target #1 & Target #2).
+class LiquidGlassIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+  final String? tooltip;
+  final double size;
+  final Color? iconColor;
+  final Color? backgroundColor;
+
+  const LiquidGlassIconButton({
+    super.key,
+    required this.icon,
+    required this.onPressed,
+    this.tooltip,
+    this.size = 42,
+    this.iconColor,
+    this.backgroundColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LiquidGlassSurface(
+      isCircle: true,
+      width: size,
+      height: size,
+      backgroundColor: backgroundColor,
+      onTap: onPressed,
+      tooltip: tooltip,
+      child: Center(
+        child: Icon(
+          icon,
+          size: size * 0.50,
+          color: iconColor ?? const Color(0xFF5C3D26),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pill-shaped liquid glass suggestion chip widget (Target #4).
+class LiquidGlassChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const LiquidGlassChip({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LiquidGlassSurface(
+      borderRadius: BorderRadius.circular(24),
+      onTap: onTap,
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 15,
+            color: const Color(0xFF7B4E2E),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF4A3424),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Shared warm glass dialog wrapper for modal popups.
 class WarmGlassDialog extends StatelessWidget {
   final Widget? title;
@@ -5374,7 +5615,7 @@ class ChatSurface extends StatelessWidget {
   }
 }
 
-class ChatHeader extends StatelessWidget {
+class ChatHeader extends StatefulWidget {
   const ChatHeader({
     required this.provider,
     required this.settings,
@@ -5391,83 +5632,107 @@ class ChatHeader extends StatelessWidget {
   final VoidCallback onOpenModel;
 
   @override
+  State<ChatHeader> createState() => _ChatHeaderState();
+}
+
+class _ChatHeaderState extends State<ChatHeader> {
+  bool _isMuted = false;
+
+  @override
   Widget build(BuildContext context) {
-    final hasKey = settings.apiKey.trim().isNotEmpty;
+    final hasKey = widget.settings.apiKey.trim().isNotEmpty;
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
       child: Row(
         children: [
+          // Target #1: Hamburger menu button -> circular glass button
           Builder(
             builder: (context) {
               final hasDrawer = Scaffold.hasDrawer(context);
               if (!hasDrawer) return const SizedBox.shrink();
-              return IconButton(
+              return LiquidGlassIconButton(
+                icon: Icons.menu_rounded,
+                size: 42,
                 tooltip: 'Chats',
                 onPressed: () => Scaffold.of(context).openDrawer(),
-                icon: const Icon(Icons.menu),
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+          // Target #2: Mute/speaker button -> circular glass button, same size as #1
+          LiquidGlassIconButton(
+            icon: _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+            size: 42,
+            tooltip: _isMuted ? 'Unmute Audio' : 'Mute Audio',
+            iconColor: _isMuted ? const Color(0xFF9B4D39) : const Color(0xFF5C3D26),
+            onPressed: () {
+              setState(() {
+                _isMuted = !_isMuted;
+              });
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(_isMuted ? 'Audio muted' : 'Audio enabled'),
+                  duration: const Duration(seconds: 1),
+                  behavior: SnackBarBehavior.floating,
+                ),
               );
             },
           ),
           const SizedBox(width: 8),
           GestureDetector(
-            onTap: onOpenProvider,
+            onTap: widget.onOpenProvider,
             child: Tooltip(
-              message: '${provider.name} settings',
-              child: ProviderAvatar(label: provider.shortName, small: true),
+              message: '${widget.provider.name} settings',
+              child: ProviderAvatar(label: widget.provider.shortName, small: true),
             ),
           ),
           const SizedBox(width: 10),
+          // Target #3: Model selector -> pill-shaped glass container
           Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: GestureDetector(
-                    onTap: onOpenModel,
-                    child: WarmGlassContainer(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                      backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.78),
-                      sigma: 10.0,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.tune,
-                            size: 16,
-                            color: Color(0xFF7B4E2E),
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              model,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF2D241C),
-                              ),
-                            ),
-                          ),
-                        ],
+            child: LiquidGlassSurface(
+              borderRadius: BorderRadius.circular(30),
+              onTap: widget.onOpenModel,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.auto_awesome,
+                    size: 16,
+                    color: Color(0xFF7B4E2E),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      widget.model,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2D241C),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Icon(
-                  hasKey || !provider.requiresKey
-                      ? Icons.lock_outline
-                      : Icons.lock_open_outlined,
-                  size: 18,
-                  color: hasKey || !provider.requiresKey
-                      ? const Color(0xFF36764D)
-                      : const Color(0xFF9B4D39),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: Color(0xFF7B4E2E),
+                  ),
+                ],
+              ),
             ),
+          ),
+          const SizedBox(width: 8),
+          Icon(
+            hasKey || !widget.provider.requiresKey
+                ? Icons.lock_outline
+                : Icons.lock_open_outlined,
+            size: 18,
+            color: hasKey || !widget.provider.requiresKey
+                ? const Color(0xFF36764D)
+                : const Color(0xFF9B4D39),
           ),
         ],
       ),
@@ -8529,69 +8794,115 @@ class Composer extends StatelessWidget {
                 ),
               ),
             ),
-          WarmGlassContainer(
-            borderRadius: BorderRadius.circular(22),
-            padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
-            backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.82),
-            sigma: 10.0,
+          // Target #4: Suggestion chips row -> individual pill-shaped glass buttons
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10.0),
+            child: SizedBox(
+              height: 38,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                children: [
+                  LiquidGlassChip(
+                    label: 'Deep Research',
+                    icon: Icons.psychology_outlined,
+                    onTap: () {
+                      controller.text = 'Perform deep research on ';
+                      controller.selection = TextSelection.fromPosition(
+                        TextPosition(offset: controller.text.length),
+                      );
+                    },
+                  ),
+                  LiquidGlassChip(
+                    label: 'Code Swarm',
+                    icon: Icons.hub_outlined,
+                    onTap: () {
+                      controller.text = 'Run code swarm agent to inspect ';
+                      controller.selection = TextSelection.fromPosition(
+                        TextPosition(offset: controller.text.length),
+                      );
+                    },
+                  ),
+                  LiquidGlassChip(
+                    label: 'Web Search',
+                    icon: Icons.public_outlined,
+                    onTap: () {
+                      controller.text = 'Search web for ';
+                      controller.selection = TextSelection.fromPosition(
+                        TextPosition(offset: controller.text.length),
+                      );
+                    },
+                  ),
+                  LiquidGlassChip(
+                    label: 'Slides',
+                    icon: Icons.slideshow_outlined,
+                    onTap: () {
+                      controller.text = 'Create a presentation slide deck for ';
+                      controller.selection = TextSelection.fromPosition(
+                        TextPosition(offset: controller.text.length),
+                      );
+                    },
+                  ),
+                  LiquidGlassChip(
+                    label: 'Summarize',
+                    icon: Icons.summarize_outlined,
+                    onTap: () {
+                      controller.text = 'Summarize current findings';
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Target #5: Bottom message input -> full-width pill glass container
+          LiquidGlassSurface(
+            borderRadius: BorderRadius.circular(30),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                GestureDetector(
-                  onTap: onPlusPressed,
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 2, right: 8),
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFFFFF8EA),
-                      border: Border.all(
-                        color: const Color(0xFFD8B98D),
-                        width: 1.5,
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.add,
-                      color: Color(0xFF7B4E2E),
-                      size: 20,
-                    ),
-                  ),
+                LiquidGlassIconButton(
+                  icon: Icons.add_rounded,
+                  size: 38,
+                  onPressed: onPlusPressed,
+                  tooltip: 'Attach media or file',
                 ),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: TextField(
-                    controller: controller,
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.newline,
-                    decoration: InputDecoration(
-                      hintText: 'Message any provider...',
-                      border: InputBorder.none,
-                      isDense: true,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: TextField(
+                      controller: controller,
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: TextInputAction.newline,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF2D241C),
+                      ),
+                      decoration: const InputDecoration(
+                        hintText: 'Message Nexon...',
+                        hintStyle: TextStyle(
+                          color: Color(0xFF8C7A6B),
+                          fontSize: 14,
+                        ),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  decoration: BoxDecoration(
-                    color: isSending
-                        ? const Color(0xFFCBBBA4)
-                        : const Color(0xFF2E241C),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: IconButton(
-                    tooltip: isSending ? 'Stop response' : 'Send',
-                    onPressed: isSending ? onStop : onSend,
-                    icon: isSending
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.arrow_upward, color: Colors.white),
-                  ),
+                LiquidGlassIconButton(
+                  icon: isSending
+                      ? Icons.stop_rounded
+                      : Icons.arrow_upward_rounded,
+                  size: 38,
+                  backgroundColor: const Color(0xFF7B4E2E),
+                  iconColor: Colors.white,
+                  onPressed: isSending ? (onStop ?? () {}) : onSend,
+                  tooltip: isSending ? 'Stop response' : 'Send message',
                 ),
               ],
             ),
