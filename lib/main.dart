@@ -23,6 +23,7 @@ import 'package:nexon/services/update_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:nexon/services/voice/live_voice_engine.dart';
 import 'package:nexon/widgets/live_voice_overlay.dart';
 import 'package:path_provider/path_provider.dart';
@@ -1514,9 +1515,12 @@ jobs:
     });
   }
 
-  Future<void> _sendMessage() async {
-    final prompt = _messageController.text.trim();
+  Future<void> _sendMessage({String? promptText, String? userTextOverride}) async {
+    final prompt = (promptText ?? userTextOverride ?? _messageController.text).trim();
     if (prompt.isEmpty) return;
+    if (promptText == null && userTextOverride == null) {
+      _messageController.clear();
+    }
 
     final targetSessionId = _activeSessionId;
     if (targetSessionId == null) return;
@@ -5731,12 +5735,12 @@ class ChatSurface extends StatelessWidget {
                 child: SafeArea(
                   bottom: false,
                   child: ChatHeader(
-                    provider: widget.provider,
-                    settings: widget.settings,
-                    model: widget.model,
-                    onOpenProvider: widget.onOpenProvider,
-                    onOpenModel: widget.onOpenModel,
-                    onOpenLiveVoice: _openLiveVoiceMode,
+                    provider: provider,
+                    settings: settings,
+                    model: model,
+                    onOpenProvider: onOpenProvider,
+                    onOpenModel: onOpenModel,
+                    onOpenLiveVoice: onOpenLiveVoice,
                   ),
                 ),
               ),
@@ -5752,7 +5756,7 @@ class ChatSurface extends StatelessWidget {
                 AnimatedSize(
                   duration: const Duration(milliseconds: 250),
                   curve: Curves.easeInOut,
-                  child: widget.toolStatus.isNotEmpty
+                  child: toolStatus.isNotEmpty
                       ? LiquidGlassSurface(
                           margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                           borderRadius: BorderRadius.circular(16),
@@ -5778,7 +5782,7 @@ class ChatSurface extends StatelessWidget {
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: Text(
-                                    widget.toolStatus,
+                                    toolStatus,
                                     style: const TextStyle(
                                       fontSize: 12.5,
                                       fontWeight: FontWeight.w500,
@@ -5919,7 +5923,7 @@ class _ChatHeaderState extends State<ChatHeader> {
               icon: Icons.graphic_eq_rounded,
               size: 38,
               tooltip: 'Live Voice Mode',
-              onPressed: widget.onOpenLiveVoice,
+              onPressed: widget.onOpenLiveVoice!,
             ),
           ],
           const SizedBox(width: 8),
@@ -9444,6 +9448,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   int? _liveSubscriptionCredits;
   int? _liveTopupCredits;
   Timer? _walletSyncTimer;
+  String? _selectedVoiceName;
 
   @override
   void initState() {

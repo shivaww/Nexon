@@ -275,7 +275,7 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
             fontWeight: FontWeight.w600,
             color: statusColor,
           ),
-          textAlign: TextAlign.Center,
+          textAlign: TextAlign.center,
         ),
       ),
     );
@@ -433,7 +433,7 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
               fontWeight: FontWeight.w500,
               color: Color(0xFF2D241C),
             ),
-            textAlign: TextAlign.Center,
+            textAlign: TextAlign.center,
           ),
         ),
       ),

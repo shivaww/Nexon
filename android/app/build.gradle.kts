@@ -16,7 +16,7 @@ val flutterVersionName = localProperties.getProperty("flutter.versionName") ?: "
 
 android {
     namespace = "com.termuxforge.app"
-    compileSdk = 35
+    compileSdk = 36
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -30,7 +30,7 @@ android {
     defaultConfig {
         applicationId = "com.termuxforge.app"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         // Use an auto-incrementing timestamp-based versionCode for developer builds
         // to avoid Android "App not installed" update conflicts.
         versionCode = if (flutterVersionCode <= 1) {
