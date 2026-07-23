@@ -650,7 +650,42 @@ class DriveSyncService {
       }
     } catch (_) {}
 
-    // Delegate token refresh to server-side Supabase Edge Function refresh-google-drive-token
+    // 1. Try Render Backend Endpoint (https://nexon-jyp1.onrender.com/api/refresh-google-drive-token)
+    try {
+      final jwtToken = Supabase.instance.client.auth.currentSession?.accessToken;
+      final response = await http.post(
+        Uri.parse('https://nexon-jyp1.onrender.com/api/refresh-google-drive-token'),
+        headers: {
+          'Content-Type': 'application/json',
+          if (jwtToken != null && jwtToken.isNotEmpty) 'Authorization': 'Bearer $jwtToken',
+        },
+        body: jsonEncode({'refresh_token': refreshToken}),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        final accessToken = payload['access_token'] as String?;
+        final updatedRefreshToken = payload['refresh_token'] as String?;
+        if (accessToken != null && accessToken.isNotEmpty) {
+          final expiresIn = payload['expires_in'];
+          final expirySeconds = (expiresIn is num && expiresIn > 120)
+              ? expiresIn.toInt() - 120
+              : 3000;
+          final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
+          await _storeGoogleTokens(
+            accessToken: accessToken,
+            refreshToken: updatedRefreshToken,
+            expiry: expiry,
+          );
+          diagnostics?.add('✅ Refreshed Google token via Render backend server');
+          return _RefreshResult(token: accessToken);
+        }
+      }
+    } catch (e) {
+      diagnostics?.add('⚠️ Render backend refresh attempt failed: $e');
+    }
+
+    // 2. Delegate token refresh to server-side Supabase Edge Function refresh-google-drive-token
     try {
       final res = await Supabase.instance.client.functions.invoke(
         'refresh-google-drive-token',
