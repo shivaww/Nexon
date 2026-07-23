@@ -120,11 +120,15 @@ class _LiquidGlassRimPainter extends CustomPainter {
   final BorderRadius? borderRadius;
   final bool isCircle;
   final double borderWidth;
+  final Color? highlightColor;
+  final Color? shadowColor;
 
   _LiquidGlassRimPainter({
     this.borderRadius,
     this.isCircle = false,
     this.borderWidth = 1.2,
+    this.highlightColor,
+    this.shadowColor,
   });
 
   @override
@@ -141,6 +145,9 @@ class _LiquidGlassRimPainter extends CustomPainter {
       path.addRect(rect.deflate(borderWidth / 2));
     }
 
+    final topHighlight = highlightColor ?? const Color(0xFFFFFFFF);
+    final botShadow = shadowColor ?? const Color(0xFFE2D6C7);
+
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = borderWidth
@@ -148,9 +155,9 @@ class _LiquidGlassRimPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          const Color(0xFFFFFFFF).withValues(alpha: 0.95), // Bright specular top rim highlight
-          const Color(0xFFFFFDF8).withValues(alpha: 0.50), // Translucent side rim
-          const Color(0xFFE2D6C7).withValues(alpha: 0.40), // Warm bottom border shadow
+          topHighlight.withValues(alpha: 0.95), // Bright specular top rim highlight
+          topHighlight.withValues(alpha: 0.45), // Translucent side rim
+          botShadow.withValues(alpha: 0.40),    // Warm/semantic bottom border shadow
         ],
         stops: const [0.0, 0.45, 1.0],
       ).createShader(rect);
@@ -162,7 +169,7 @@ class _LiquidGlassRimPainter extends CustomPainter {
   bool shouldRepaint(covariant _LiquidGlassRimPainter oldDelegate) => false;
 }
 
-/// Shared liquid glass surface widget matching Nexon's warm cream/tan palette.
+/// Shared liquid glass surface widget matching Nexon's warm cream/tan palette and semantic tool tints.
 class LiquidGlassSurface extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
@@ -170,7 +177,10 @@ class LiquidGlassSurface extends StatelessWidget {
   final BorderRadius? borderRadius;
   final bool isCircle;
   final Color? backgroundColor;
+  final Color? highlightColor;
+  final Color? shadowColor;
   final double sigma;
+  final bool enableBlur;
   final VoidCallback? onTap;
   final String? tooltip;
   final double? width;
@@ -184,7 +194,10 @@ class LiquidGlassSurface extends StatelessWidget {
     this.borderRadius,
     this.isCircle = false,
     this.backgroundColor,
+    this.highlightColor,
+    this.shadowColor,
     this.sigma = 12.0,
+    this.enableBlur = true,
     this.onTap,
     this.tooltip,
     this.width,
@@ -213,7 +226,7 @@ class LiquidGlassSurface extends StatelessWidget {
       child: child,
     );
 
-    if (!highContrast) {
+    if (enableBlur && !highContrast) {
       innerContent = isCircle
           ? ClipOval(
               child: BackdropFilter(
@@ -247,6 +260,8 @@ class LiquidGlassSurface extends StatelessWidget {
         foregroundPainter: _LiquidGlassRimPainter(
           borderRadius: effectiveRadius,
           isCircle: isCircle,
+          highlightColor: highlightColor,
+          shadowColor: shadowColor,
         ),
         child: innerContent,
       ),
@@ -5389,7 +5404,7 @@ class ChatSurface extends StatelessWidget {
           Positioned.fill(
             child: ListView.builder(
               controller: scrollController,
-              padding: const EdgeInsets.fromLTRB(18, 64, 18, 90),
+              padding: const EdgeInsets.fromLTRB(18, 84, 18, 90),
               itemCount: messages.length,
               itemBuilder: (context, int index) {
                 AvatarAnimationState state = AvatarAnimationState.idle;
@@ -5471,21 +5486,11 @@ class ChatSurface extends StatelessWidget {
           ),
           if (messages.isEmpty && deepResearchEnabled)
             Center(
-              child: Container(
+              child: LiquidGlassSurface(
                 margin: const EdgeInsets.symmetric(horizontal: 24),
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF9F2),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFFEADCC9), width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF7B4E2E).withValues(alpha: 0.08),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
+                borderRadius: BorderRadius.circular(20),
+                backgroundColor: const Color(0xFFFFF9F2).withValues(alpha: 0.85),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -5528,12 +5533,22 @@ class ChatSurface extends StatelessWidget {
             top: 0,
             left: 0,
             right: 0,
-            child: ChatHeader(
-              provider: provider,
-              settings: settings,
-              model: model,
-              onOpenProvider: onOpenProvider,
-              onOpenModel: onOpenModel,
+            child: ClipRect(
+              child: LiquidGlassSurface(
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                margin: EdgeInsets.zero,
+                padding: const EdgeInsets.only(bottom: 2),
+                child: SafeArea(
+                  bottom: false,
+                  child: ChatHeader(
+                    provider: provider,
+                    settings: settings,
+                    model: model,
+                    onOpenProvider: onOpenProvider,
+                    onOpenModel: onOpenModel,
+                  ),
+                ),
+              ),
             ),
           ),
           Positioned(
@@ -5547,47 +5562,43 @@ class ChatSurface extends StatelessWidget {
                   duration: const Duration(milliseconds: 250),
                   curve: Curves.easeInOut,
                   child: toolStatus.isNotEmpty
-                      ? Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 9,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEEF4FF),
-                            border: Border(
-                              top: BorderSide(
-                                color: const Color(0xFFBDD3F8),
-                                width: 1,
-                              ),
+                      ? LiquidGlassSurface(
+                          margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          borderRadius: BorderRadius.circular(16),
+                          backgroundColor: const Color(0xFFEEF4FF).withValues(alpha: 0.85),
+                          highlightColor: const Color(0xFF93C5FD),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 9,
                             ),
-                          ),
-                          child: Row(
-                            children: [
-                              const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Color(0xFF3B82F6),
+                            child: Row(
+                              children: [
+                                const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Color(0xFF3B82F6),
+                                    ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  toolStatus,
-                                  style: const TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w500,
-                                    color: Color(0xFF1D4ED8),
-                                    fontFamily: 'monospace',
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    toolStatus,
+                                    style: const TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: Color(0xFF1D4ED8),
+                                      fontFamily: 'monospace',
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         )
                       : const SizedBox.shrink(),
@@ -6319,19 +6330,19 @@ class _McpToolBlockState extends State<McpToolBlock> {
 
     final (icon, color, label, subtitle) = _describe(method, params);
 
-    return Container(
+    return LiquidGlassSurface(
       margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.25)),
-      ),
+      borderRadius: BorderRadius.circular(14),
+      backgroundColor: color.withValues(alpha: 0.12),
+      highlightColor: color.withValues(alpha: 0.50),
+      shadowColor: color.withValues(alpha: 0.20),
+      enableBlur: false, // Optimized for scrolling list performance
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Row(
@@ -6356,7 +6367,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
                             subtitle,
                             style: TextStyle(
                               fontSize: 11,
-                              color: color.withOpacity(0.75),
+                              color: color.withValues(alpha: 0.75),
                               fontFamily: 'monospace',
                             ),
                           ),
@@ -6368,7 +6379,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
                         ? Icons.keyboard_arrow_up
                         : Icons.keyboard_arrow_down,
                     size: 18,
-                    color: color.withOpacity(0.6),
+                    color: color.withValues(alpha: 0.6),
                   ),
                 ],
               ),
@@ -14407,19 +14418,13 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     final steps = widget.stateMap['steps'] as List? ?? [];
     final status = widget.stateMap['status'] as String? ?? 'running';
 
-    return WarmGlassContainer(
+    return LiquidGlassSurface(
       margin: const EdgeInsets.only(bottom: 12, top: 4),
-      borderRadius: BorderRadius.circular(14),
-      sigma: 14,
-      backgroundColor: const Color(0xFFEAF3FF).withValues(alpha: 0.80),
-      border: Border.all(color: const Color(0xFF8EB9DF).withValues(alpha: 0.72)),
-      boxShadow: [
-        BoxShadow(
-          color: const Color(0xFF2C5282).withValues(alpha: 0.12),
-          blurRadius: 18,
-          offset: const Offset(0, 7),
-        ),
-      ],
+      borderRadius: BorderRadius.circular(16),
+      backgroundColor: const Color(0xFFEAF3FF).withValues(alpha: 0.85),
+      highlightColor: const Color(0xFF90CDF4),
+      shadowColor: const Color(0xFF2C5282),
+      enableBlur: false, // In-feed scrolling list performance optimization
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
