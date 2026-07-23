@@ -23,7 +23,8 @@ import 'package:nexon/services/update_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:permission_handler/permission_handler.dart';
-
+import 'package:nexon/services/voice/live_voice_engine.dart';
+import 'package:nexon/widgets/live_voice_overlay.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:docx_creator/docx_creator.dart' hide PdfDocument;
 
@@ -111,6 +112,74 @@ class WarmGlassContainer extends StatelessWidget {
           ),
       ),
     );
+  }
+}
+
+/// Helper class for Text-To-Speech audio playback of model outputs.
+class NexonTts {
+  static final FlutterTts _flutterTts = FlutterTts();
+  static String? _speakingText;
+  static bool _isSpeaking = false;
+
+  static Future<void> toggleSpeak(String text, VoidCallback onStateChange) async {
+    try {
+      if (_isSpeaking && _speakingText == text) {
+        await _flutterTts.stop();
+        _isSpeaking = false;
+        _speakingText = null;
+        onStateChange();
+        return;
+      }
+      await _flutterTts.stop();
+      _speakingText = text;
+      _isSpeaking = true;
+      onStateChange();
+
+      _flutterTts.setCompletionHandler(() {
+        _isSpeaking = false;
+        _speakingText = null;
+        onStateChange();
+      });
+
+      _flutterTts.setCancelHandler(() {
+        _isSpeaking = false;
+        _speakingText = null;
+        onStateChange();
+      });
+
+      _flutterTts.setErrorHandler((msg) {
+        _isSpeaking = false;
+        _speakingText = null;
+        onStateChange();
+      });
+
+      await _flutterTts.setLanguage("en-US");
+      await _flutterTts.setSpeechRate(0.48);
+      await _flutterTts.setVolume(1.0);
+      await _flutterTts.speak(text);
+    } catch (_) {
+      _isSpeaking = false;
+      _speakingText = null;
+      onStateChange();
+    }
+  }
+
+  static bool isSpeaking(String text) {
+    return _isSpeaking && _speakingText == text;
+  }
+
+  static Future<List<dynamic>> getVoices() async {
+    try {
+      final voices = await _flutterTts.getVoices;
+      if (voices is List) return voices;
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<void> setVoice(Map<String, String> voice) async {
+    try {
+      await _flutterTts.setVoice(voice);
+    } catch (_) {}
   }
 }
 
@@ -678,6 +747,30 @@ class _ChatHomePageState extends State<ChatHomePage> {
       client.close(force: true);
     }
     return 1024 * 1024 * 1024;
+  }
+
+  late final LiveVoiceEngine _liveVoiceEngine = LiveVoiceEngine();
+  String? _selectedVoiceName;
+
+  void _openLiveVoiceMode() {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: 'Live Voice Mode',
+      transitionDuration: const Duration(milliseconds: 300),
+      pageBuilder: (context, anim1, anim2) {
+        return LiveVoiceOverlay(
+          engine: _liveVoiceEngine,
+          onSendPrompt: (prompt) {
+            _sendMessage(promptText: prompt);
+          },
+          onClose: () {
+            _liveVoiceEngine.interrupt();
+            Navigator.of(context).pop();
+          },
+        );
+      },
+    );
   }
 
   String _toolStatus = ''; // live tool status shown in UI banner
@@ -1835,6 +1928,17 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             "\nMemory Tool: Use <memory action=\"read\"></memory>, <memory action=\"append\">text</memory>, or <memory action=\"replace\">text</memory> to save/read personal details across sessions. Limit 10KB. Use only when essential.\n";
         }
 
+        if (_liveVoiceEngine.state != LiveVoiceState.idle) {
+          systemPromptText += "\n\n━━ LIVE VOICE MODE (TTS ACTIVE) ━━\n"
+              "Your text output is being read aloud via Text-to-Speech. Apply these output rules strictly on top of all other capabilities (Agentic, Web Search):\n\n"
+              "1. PERSONA: Always address the user as 'Boss' (e.g., 'Yes Boss...', 'Right away, Boss.').\n"
+              "2. EXTREME CONCISENESS: Keep spoken text brief and conversational (1-3 sentences max). Get straight to the point.\n"
+              "3. NO MARKDOWN: NEVER use markdown formatting (*, #, or code blocks). Speak in plain, natural sentences.\n"
+              "4. TOOL ACKNOWLEDGMENT: When using ANY tools (Agentic, Git, or Web Search), provide a 1-sentence spoken acknowledgment first (e.g., 'Working on it, Boss.'), then emit your ONE tool tag. Do NOT explain the code or search process out loud.\n"
+              "5. RESULT REPORTING: After a tool result returns, provide a brief spoken summary of the outcome (e.g., 'Done, Boss. Pushed it to GitHub.' or 'Here is the information, Boss.').\n"
+              "6. RESTRICTIONS: Do NOT launch Deep Research or heavy SVG rendering. Keep all actions lightweight and fast.\n";
+        }
+
         if (systemPromptText.isNotEmpty) {
           historyForApi.add(
             ChatMessage(role: MessageRole.system, text: systemPromptText),
@@ -1906,6 +2010,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 reasoningText += textChunk;
               } else {
                 fullText += textChunk;
+                if (_liveVoiceEngine.state == LiveVoiceState.thinking || _liveVoiceEngine.state == LiveVoiceState.speaking) {
+                  _liveVoiceEngine.feedStreamToken(textChunk);
+                }
               }
             }
 
@@ -1933,9 +2040,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             }
           },
           onError: (Object err) {
+            if (_liveVoiceEngine.state == LiveVoiceState.thinking || _liveVoiceEngine.state == LiveVoiceState.speaking) {
+              _liveVoiceEngine.interrupt();
+            }
             if (!completer.isCompleted) completer.completeError(err);
           },
           onDone: () {
+            if (_liveVoiceEngine.state == LiveVoiceState.thinking || _liveVoiceEngine.state == LiveVoiceState.speaking) {
+              _liveVoiceEngine.endStreamResponse();
+            }
             if (!completer.isCompleted) completer.complete();
           },
           cancelOnError: true,
@@ -2104,17 +2217,49 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             String urlResult = '';
             try {
               var targetUrl = url;
-              if (!targetUrl.startsWith('http'))
+              if (!targetUrl.startsWith('http')) {
                 targetUrl = 'https://$targetUrl';
+              }
               final client = HttpClient()
                 ..findProxy = ((uri) => "DIRECT")
                 ..connectionTimeout = const Duration(seconds: 15);
-              final request = await client
-                  .getUrl(Uri.parse(targetUrl))
-                  .timeout(const Duration(seconds: 60));
-              final response = await request.close().timeout(
-                const Duration(seconds: 60),
-              );
+
+              var currentUrl = targetUrl;
+              HttpClientResponse response;
+              int redirectCount = 0;
+
+              while (true) {
+                final request = await client
+                    .getUrl(Uri.parse(currentUrl))
+                    .timeout(const Duration(seconds: 45));
+                request.followRedirects = true;
+                request.maxRedirects = 10;
+                request.headers.set(
+                  HttpHeaders.userAgentHeader,
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                );
+                request.headers.set(
+                  HttpHeaders.acceptHeader,
+                  'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                );
+                request.headers.set(HttpHeaders.acceptLanguageHeader, 'en-US,en;q=0.9');
+
+                response = await request.close().timeout(
+                  const Duration(seconds: 45),
+                );
+
+                if ((response.isRedirect || (response.statusCode >= 300 && response.statusCode < 400)) && redirectCount < 8) {
+                  final location = response.headers.value(HttpHeaders.locationHeader);
+                  if (location != null && location.isNotEmpty) {
+                    await response.drain<void>();
+                    redirectCount++;
+                    final resolvedUri = Uri.parse(currentUrl).resolve(location);
+                    currentUrl = resolvedUri.toString();
+                    continue;
+                  }
+                }
+                break;
+              }
 
               if (response.statusCode < 200 || response.statusCode >= 300) {
                 await response.drain<void>();
@@ -5034,6 +5179,7 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                 deepResearchEnabled: _deepResearchEnabled,
                 onStartResearch: _startResearchLoop,
                 fileName: _getResearchFileName(activeSession.title),
+                onOpenLiveVoice: _openLiveVoiceMode,
               ),
             ),
           ],
@@ -5084,6 +5230,155 @@ class ChatHistoryPanel extends StatelessWidget {
 
     final displayedSessions = sortedSessions.take(visibleLimit).toList();
 
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final yesterdayStart = todayStart.subtract(const Duration(days: 1));
+    final sevenDaysStart = todayStart.subtract(const Duration(days: 7));
+
+    String getBucket(DateTime date) {
+      if (date.isAfter(todayStart) || date.isAtSameMomentAs(todayStart)) {
+        return 'Today';
+      } else if (date.isAfter(yesterdayStart) || date.isAtSameMomentAs(yesterdayStart)) {
+        return 'Yesterday';
+      } else if (date.isAfter(sevenDaysStart) || date.isAtSameMomentAs(sevenDaysStart)) {
+        return 'Previous 7 Days';
+      } else {
+        return 'Older';
+      }
+    }
+
+    final buckets = ['Today', 'Yesterday', 'Previous 7 Days', 'Older'];
+    final Map<String, List<ChatSession>> grouped = {
+      for (final b in buckets) b: <ChatSession>[],
+    };
+
+    for (final session in displayedSessions) {
+      final b = getBucket(session.updatedAt);
+      grouped[b]!.add(session);
+    }
+
+    final List<Widget> listItems = [];
+    for (final bucket in buckets) {
+      final items = grouped[bucket]!;
+      if (items.isEmpty) continue;
+
+      listItems.add(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
+          child: Text(
+            bucket.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.8,
+              color: Color(0xFF8C7A6B),
+            ),
+          ),
+        ),
+      );
+
+      for (final session in items) {
+        final selected = session.id == activeSessionId;
+        final messageCount = session.messages.length;
+        listItems.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 4.0),
+            child: LiquidGlassSurface(
+              borderRadius: BorderRadius.circular(14),
+              backgroundColor: selected
+                  ? const Color(0xFFFFF6E5).withValues(alpha: 0.95)
+                  : const Color(0xFFFFFDF8).withValues(alpha: 0.65),
+              child: ListTile(
+                dense: true,
+                selected: selected,
+                leading: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (session.isPinned)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 4.0),
+                        child: Icon(
+                          Icons.push_pin,
+                          size: 12,
+                          color: Color(0xFF7B4E2E),
+                        ),
+                      ),
+                    const Icon(Icons.chat_bubble_outline, size: 18, color: Color(0xFF5C3D26)),
+                  ],
+                ),
+                title: Text(
+                  session.title,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    color: const Color(0xFF33291F),
+                    fontSize: 13,
+                  ),
+                ),
+                subtitle: Text(
+                  '$messageCount message${messageCount == 1 ? '' : 's'}',
+                  style: const TextStyle(
+                    color: Color(0xFF6C5946),
+                    fontSize: 11,
+                  ),
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  color: const Color(0xFF9B4D39),
+                  onPressed: () => onSessionDelete(session.id),
+                ),
+                onTap: () => onSessionTap(session.id),
+                onLongPress: () {
+                  _showOptionsSheet(context, session);
+                },
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    listItems.add(
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 14.0, horizontal: 6.0),
+        child: OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            side: const BorderSide(color: Color(0xFFD8B98D), width: 1.2),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            backgroundColor: const Color(0xFFFFF8EA),
+          ),
+          onPressed: isLoadingMore ? null : onLoadMore,
+          icon: isLoadingMore
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF7B4E2E),
+                  ),
+                )
+              : const Icon(
+                  Icons.history,
+                  size: 18,
+                  color: Color(0xFF7B4E2E),
+                ),
+          label: Text(
+            isLoadingMore
+                ? 'Loading previous chats…'
+                : 'Load More Previous Chats (+25)',
+            style: const TextStyle(
+              color: Color(0xFF7B4E2E),
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
+    );
+
     return Container(
       color: const Color(0xFFEFE6D6),
       child: Column(
@@ -5114,116 +5409,9 @@ class ChatHistoryPanel extends StatelessWidget {
           ),
           const Divider(color: Color(0xFFDCCBB8), height: 1),
           Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 18),
-              itemCount: displayedSessions.length + 1,
-              itemBuilder: (context, index) {
-                if (index == displayedSessions.length) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 6.0),
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                        side: const BorderSide(color: Color(0xFFD8B98D), width: 1.2),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        backgroundColor: const Color(0xFFFFF8EA),
-                      ),
-                      onPressed: isLoadingMore ? null : onLoadMore,
-                      icon: isLoadingMore
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Color(0xFF7B4E2E),
-                              ),
-                            )
-                          : const Icon(
-                              Icons.history,
-                              size: 18,
-                              color: Color(0xFF7B4E2E),
-                            ),
-                      label: Text(
-                        isLoadingMore
-                            ? 'Loading previous chats…'
-                            : 'Load More Previous Chats (+25)',
-                        style: const TextStyle(
-                          color: Color(0xFF7B4E2E),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  );
-                }
-
-                final session = displayedSessions[index];
-                final selected = session.id == activeSessionId;
-                final messageCount = session.messages.length;
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  margin: const EdgeInsets.symmetric(vertical: 3),
-                  decoration: BoxDecoration(
-                    color: selected
-                        ? const Color(0xFFFFF8EA)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected
-                          ? const Color(0xFFD8B98D)
-                          : Colors.transparent,
-                    ),
-                  ),
-                  child: ListTile(
-                    dense: true,
-                    selected: selected,
-                    leading: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (session.isPinned)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 4.0),
-                            child: Icon(
-                              Icons.push_pin,
-                              size: 12,
-                              color: Color(0xFF7B4E2E),
-                            ),
-                          ),
-                        const Icon(Icons.chat_bubble_outline, size: 20),
-                      ],
-                    ),
-                    title: Text(
-                      session.title,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontWeight: selected
-                            ? FontWeight.w800
-                            : FontWeight.w600,
-                        color: const Color(0xFF33291F),
-                      ),
-                    ),
-                    subtitle: Text(
-                      '$messageCount message${messageCount == 1 ? '' : 's'}',
-                      style: const TextStyle(
-                        color: Color(0xFF6C5946),
-                        fontSize: 11,
-                      ),
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      color: const Color(0xFF9B4D39),
-                      onPressed: () => onSessionDelete(session.id),
-                    ),
-                    onTap: () => onSessionTap(session.id),
-                    onLongPress: () {
-                      _showOptionsSheet(context, session);
-                    },
-                  ),
-                );
-              },
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(6, 4, 6, 18),
+              children: listItems,
             ),
           ),
         ],
@@ -5357,6 +5545,7 @@ class ChatSurface extends StatelessWidget {
     this.activeBranchIndex,
     this.onBranchChanged,
     this.onStop,
+    this.onOpenLiveVoice,
     super.key,
   });
 
@@ -5373,6 +5562,7 @@ class ChatSurface extends StatelessWidget {
   final VoidCallback onOpenModel;
   final VoidCallback onSend;
   final VoidCallback onPlusPressed;
+  final VoidCallback? onOpenLiveVoice;
   final List<String> attachedImages;
   final ValueChanged<int> onRemoveImage;
   final List<AttachedFile> attachedFiles;
@@ -5541,11 +5731,12 @@ class ChatSurface extends StatelessWidget {
                 child: SafeArea(
                   bottom: false,
                   child: ChatHeader(
-                    provider: provider,
-                    settings: settings,
-                    model: model,
-                    onOpenProvider: onOpenProvider,
-                    onOpenModel: onOpenModel,
+                    provider: widget.provider,
+                    settings: widget.settings,
+                    model: widget.model,
+                    onOpenProvider: widget.onOpenProvider,
+                    onOpenModel: widget.onOpenModel,
+                    onOpenLiveVoice: _openLiveVoiceMode,
                   ),
                 ),
               ),
@@ -5561,7 +5752,7 @@ class ChatSurface extends StatelessWidget {
                 AnimatedSize(
                   duration: const Duration(milliseconds: 250),
                   curve: Curves.easeInOut,
-                  child: toolStatus.isNotEmpty
+                  child: widget.toolStatus.isNotEmpty
                       ? LiquidGlassSurface(
                           margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                           borderRadius: BorderRadius.circular(16),
@@ -5587,7 +5778,7 @@ class ChatSurface extends StatelessWidget {
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: Text(
-                                    toolStatus,
+                                    widget.toolStatus,
                                     style: const TextStyle(
                                       fontSize: 12.5,
                                       fontWeight: FontWeight.w500,
@@ -5609,6 +5800,7 @@ class ChatSurface extends StatelessWidget {
                   onSend: onSend,
                   onStop: onStop,
                   onPlusPressed: onPlusPressed,
+                  onOpenLiveVoice: onOpenLiveVoice,
                   attachedImages: attachedImages,
                   onRemoveImage: onRemoveImage,
                   attachedFiles: attachedFiles,
@@ -5633,6 +5825,7 @@ class ChatHeader extends StatefulWidget {
     required this.model,
     required this.onOpenProvider,
     required this.onOpenModel,
+    this.onOpenLiveVoice,
     super.key,
   });
 
@@ -5641,6 +5834,7 @@ class ChatHeader extends StatefulWidget {
   final String model;
   final VoidCallback onOpenProvider;
   final VoidCallback onOpenModel;
+  final VoidCallback? onOpenLiveVoice;
 
   @override
   State<ChatHeader> createState() => _ChatHeaderState();
@@ -5661,36 +5855,20 @@ class _ChatHeaderState extends State<ChatHeader> {
             builder: (context) {
               final hasDrawer = Scaffold.hasDrawer(context);
               if (!hasDrawer) return const SizedBox.shrink();
-              return LiquidGlassIconButton(
-                icon: Icons.menu_rounded,
-                size: 42,
-                tooltip: 'Chats',
-                onPressed: () => Scaffold.of(context).openDrawer(),
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LiquidGlassIconButton(
+                    icon: Icons.menu_rounded,
+                    size: 42,
+                    tooltip: 'Chats',
+                    onPressed: () => Scaffold.of(context).openDrawer(),
+                  ),
+                  const SizedBox(width: 8),
+                ],
               );
             },
           ),
-          const SizedBox(width: 8),
-          // Target #2: Mute/speaker button -> circular glass button, same size as #1
-          LiquidGlassIconButton(
-            icon: _isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-            size: 42,
-            tooltip: _isMuted ? 'Unmute Audio' : 'Mute Audio',
-            iconColor: _isMuted ? const Color(0xFF9B4D39) : const Color(0xFF5C3D26),
-            onPressed: () {
-              setState(() {
-                _isMuted = !_isMuted;
-              });
-              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(_isMuted ? 'Audio muted' : 'Audio enabled'),
-                  duration: const Duration(seconds: 1),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            },
-          ),
-          const SizedBox(width: 8),
           GestureDetector(
             onTap: widget.onOpenProvider,
             child: Tooltip(
@@ -5735,6 +5913,15 @@ class _ChatHeaderState extends State<ChatHeader> {
               ),
             ),
           ),
+          if (widget.onOpenLiveVoice != null) ...[
+            const SizedBox(width: 8),
+            LiquidGlassIconButton(
+              icon: Icons.graphic_eq_rounded,
+              size: 38,
+              tooltip: 'Live Voice Mode',
+              onPressed: widget.onOpenLiveVoice,
+            ),
+          ],
           const SizedBox(width: 8),
           Icon(
             hasKey || !widget.provider.requiresKey
@@ -7909,32 +8096,60 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ],
                   const Spacer(),
-                  IconButton(
-                    tooltip: 'Copy text',
-                    icon: const Icon(
-                      Icons.content_copy_rounded,
-                      size: 14,
-                      color: Color(0xFF6C5946),
-                    ),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: message.text));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Message copied to clipboard'),
-                        ),
-                      );
-                    },
-                  ),
-                  if (isUser)
-                    IconButton(
-                      tooltip: 'Edit message',
-                      icon: const Icon(
-                        Icons.edit_outlined,
-                        size: 14,
-                        color: Color(0xFF6C5946),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      LiquidGlassIconButton(
+                        icon: Icons.content_copy_rounded,
+                        size: 28,
+                        tooltip: 'Copy text',
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: message.text));
+                          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Message copied to clipboard'),
+                              duration: Duration(seconds: 1),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        },
                       ),
-                      onPressed: onEditUserMessage,
-                    ),
+                      if (!isUser) ...[
+                        const SizedBox(width: 6),
+                        StatefulBuilder(
+                          builder: (context, setTtsState) {
+                            final speaking = NexonTts.isSpeaking(message.text);
+                            return LiquidGlassIconButton(
+                              icon: speaking
+                                  ? Icons.stop_circle_rounded
+                                  : Icons.volume_up_rounded,
+                              size: 28,
+                              tooltip: speaking ? 'Stop audio' : 'Read aloud (TTS)',
+                              iconColor: speaking
+                                  ? const Color(0xFF9B4D39)
+                                  : const Color(0xFF5C3D26),
+                              onPressed: () {
+                                NexonTts.toggleSpeak(
+                                  message.text,
+                                  () => setTtsState(() {}),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ],
+                      if (isUser) ...[
+                        const SizedBox(width: 6),
+                        LiquidGlassIconButton(
+                          icon: Icons.edit_rounded,
+                          size: 28,
+                          tooltip: 'Edit message',
+                          onPressed: onEditUserMessage,
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -8636,6 +8851,7 @@ class Composer extends StatelessWidget {
     required this.isEditing,
     required this.onCancelEdit,
     this.onStop,
+    this.onOpenLiveVoice,
     super.key,
   });
 
@@ -8644,6 +8860,7 @@ class Composer extends StatelessWidget {
   final VoidCallback onSend;
   final VoidCallback? onStop;
   final VoidCallback onPlusPressed;
+  final VoidCallback? onOpenLiveVoice;
   final List<String> attachedImages;
   final ValueChanged<int> onRemoveImage;
   final List<AttachedFile> attachedFiles;
@@ -8805,66 +9022,6 @@ class Composer extends StatelessWidget {
                 ),
               ),
             ),
-          // Target #4: Suggestion chips row -> individual pill-shaped glass buttons
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10.0),
-            child: SizedBox(
-              height: 38,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                physics: const BouncingScrollPhysics(),
-                children: [
-                  LiquidGlassChip(
-                    label: 'Deep Research',
-                    icon: Icons.psychology_outlined,
-                    onTap: () {
-                      controller.text = 'Perform deep research on ';
-                      controller.selection = TextSelection.fromPosition(
-                        TextPosition(offset: controller.text.length),
-                      );
-                    },
-                  ),
-                  LiquidGlassChip(
-                    label: 'Code Swarm',
-                    icon: Icons.hub_outlined,
-                    onTap: () {
-                      controller.text = 'Run code swarm agent to inspect ';
-                      controller.selection = TextSelection.fromPosition(
-                        TextPosition(offset: controller.text.length),
-                      );
-                    },
-                  ),
-                  LiquidGlassChip(
-                    label: 'Web Search',
-                    icon: Icons.public_outlined,
-                    onTap: () {
-                      controller.text = 'Search web for ';
-                      controller.selection = TextSelection.fromPosition(
-                        TextPosition(offset: controller.text.length),
-                      );
-                    },
-                  ),
-                  LiquidGlassChip(
-                    label: 'Slides',
-                    icon: Icons.slideshow_outlined,
-                    onTap: () {
-                      controller.text = 'Create a presentation slide deck for ';
-                      controller.selection = TextSelection.fromPosition(
-                        TextPosition(offset: controller.text.length),
-                      );
-                    },
-                  ),
-                  LiquidGlassChip(
-                    label: 'Summarize',
-                    icon: Icons.summarize_outlined,
-                    onTap: () {
-                      controller.text = 'Summarize current findings';
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
           // Target #5: Bottom message input -> full-width pill glass container
           LiquidGlassSurface(
             borderRadius: BorderRadius.circular(30),
@@ -8878,6 +9035,15 @@ class Composer extends StatelessWidget {
                   onPressed: onPlusPressed,
                   tooltip: 'Attach media or file',
                 ),
+                if (onOpenLiveVoice != null) ...[
+                  const SizedBox(width: 6),
+                  LiquidGlassIconButton(
+                    icon: Icons.mic_rounded,
+                    size: 38,
+                    onPressed: onOpenLiveVoice!,
+                    tooltip: 'Live Voice Mode',
+                  ),
+                ],
                 const SizedBox(width: 8),
                 Expanded(
                   child: Padding(
@@ -9956,13 +10122,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Dropdowns Group Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF7EC),
-            border: Border.all(color: const Color(0xFFEADCC9)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             children: [
               Row(
@@ -10142,16 +10304,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
 
         // Token Slider Section
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -10290,16 +10448,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
         // Thinking / Reasoning Switch Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -10341,13 +10495,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // File Access Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFFF7EC),
-            border: Border.all(color: const Color(0xFFEADCC9)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             children: [
               Row(
@@ -10419,16 +10569,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
         // Web Search Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             children: [
               Row(
@@ -10531,16 +10677,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
-        // Artifacts Card
-        Container(
+        // Markdown Artifacts Card
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -10576,16 +10718,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
         // SVG Visuals Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -10621,16 +10759,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
         // Agentic Deep Research Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -10672,6 +10806,107 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   }
                   setState(() => _deepResearchEnabled = val);
                   widget.onDeepResearchEnabledChanged(val);
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Audio Feedback / TTS Card
+        LiquidGlassSurface(
+          padding: const EdgeInsets.all(16),
+          borderRadius: BorderRadius.circular(18),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Audio Feedback / TTS',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Text-to-Speech audio button on model outputs',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6C5946),
+                    ),
+                  ),
+                ],
+              ),
+              Icon(
+                Icons.volume_up_rounded,
+                color: Color(0xFF7B4E2E),
+                size: 24,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Live Voice & TTS Engine Voice Selection Card
+        LiquidGlassSurface(
+          padding: const EdgeInsets.all(16),
+          borderRadius: BorderRadius.circular(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Live Voice & TTS Engine Voice',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D241C),
+                ),
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'Select on-device TTS voice for live voice mode and read-aloud',
+                style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+              ),
+              const SizedBox(height: 12),
+              FutureBuilder<List<dynamic>>(
+                future: NexonTts.getVoices(),
+                builder: (context, snapshot) {
+                  final voices = snapshot.data ?? [];
+                  if (voices.isEmpty) {
+                    return const Text(
+                      'Default System Voice',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF7B4E2E)),
+                    );
+                  }
+                  return DropdownButtonFormField<String>(
+                    value: _selectedVoiceName,
+                    dropdownColor: const Color(0xFFFFFBF2),
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                    items: voices.map((v) {
+                      final name = v is Map ? (v['name']?.toString() ?? 'Voice') : v.toString();
+                      final lang = v is Map ? (v['locale']?.toString() ?? '') : '';
+                      return DropdownMenuItem<String>(
+                        value: name,
+                        child: Text(
+                          '$name ${lang.isNotEmpty ? "($lang)" : ""}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _selectedVoiceName = val);
+                        NexonTts.setVoice({"name": val, "locale": "en-US"});
+                      }
+                    },
+                  );
                 },
               ),
             ],
@@ -10823,13 +11058,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Cloud Sync & Backup Card
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             children: [
               Row(
@@ -11683,13 +11914,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
+          borderRadius: BorderRadius.circular(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -13692,6 +13919,7 @@ class ChatSession {
   final bool isPinned;
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
+  final DateTime updatedAt;
 
   ChatSession({
     required this.id,
@@ -13705,7 +13933,16 @@ class ChatSession {
     this.isPinned = false,
     this.branches,
     this.activeBranchIndex,
-  });
+    DateTime? updatedAt,
+  }) : updatedAt = updatedAt ?? _parseIdDate(id);
+
+  static DateTime _parseIdDate(String id) {
+    final ms = int.tryParse(id);
+    if (ms != null && ms > 1000000000000) {
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    return DateTime.now();
+  }
 
   ChatSession copyWith({
     String? id,
@@ -13719,6 +13956,7 @@ class ChatSession {
     bool? isPinned,
     List<List<ChatMessage>>? branches,
     int? activeBranchIndex,
+    DateTime? updatedAt,
   }) {
     List<List<ChatMessage>>? updatedBranches = branches ?? this.branches;
     int? updatedActiveIndex = activeBranchIndex ?? this.activeBranchIndex;
@@ -13748,6 +13986,7 @@ class ChatSession {
       isPinned: isPinned ?? this.isPinned,
       branches: updatedBranches,
       activeBranchIndex: updatedActiveIndex,
+      updatedAt: updatedAt ?? (messages != null ? DateTime.now() : this.updatedAt),
     );
   }
 
@@ -13791,6 +14030,7 @@ class ChatSession {
         )
         .toList(),
     'activeBranchIndex': activeBranchIndex,
+    'updatedAt': updatedAt.toIso8601String(),
   };
 
   factory ChatSession.fromJson(Map<String, dynamic> json) {
@@ -13860,6 +14100,12 @@ class ChatSession {
               .toList(),
         )
         .toList();
+
+    final rawDate = json['updatedAt']?.toString();
+    final parsedDate = (rawDate != null && rawDate.isNotEmpty)
+        ? (DateTime.tryParse(rawDate) ?? _parseIdDate(json['id']?.toString() ?? ''))
+        : _parseIdDate(json['id']?.toString() ?? '');
+
     return ChatSession(
       id: json['id']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
@@ -13883,6 +14129,7 @@ class ChatSession {
       isPinned: json['isPinned'] as bool? ?? false,
       branches: branchesList,
       activeBranchIndex: json['activeBranchIndex'] as int?,
+      updatedAt: parsedDate,
     );
   }
 }

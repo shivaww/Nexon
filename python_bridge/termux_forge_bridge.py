@@ -25,7 +25,9 @@ import argparse
 import asyncio
 from aiohttp import web
 import hashlib
+import inspect
 import json
+import ipaddress
 import logging
 import os
 import re
@@ -236,11 +238,17 @@ class TermuxForgeBridge:
         r.register("mcp_server_manage", self._mcp_server_manage)
         r.register("mcp_tool_discover", self._mcp_tool_discover)
         r.register("mcp_transport_handle", self._mcp_transport_handle)
+        r.register("mcp_request", self._mcp_request)
+        r.register("mcp_call", self._mcp_request)
 
         # ── Deep research ────────────────────────────────────────────
         r.register("deep_research.export_temp", self._deep_research_export_temp)
+        r.register("deep_research.export_for_writer", self._deep_research_export_for_writer)
         r.register("deep_research.reset", self._deep_research_reset)
         r.register("deep_research.update_phase", self._deep_research_update_phase)
+        r.register("deep_research.save_checkpoint", self._deep_research_save_checkpoint)
+        r.register("deep_research.load_checkpoint", self._deep_research_load_checkpoint)
+        r.register("deep_research.clear_checkpoint", self._deep_research_clear_checkpoint)
         r.register("web_search", self._web_search)
         r.register("read_url", self._read_url)
 
@@ -925,9 +933,20 @@ class TermuxForgeBridge:
         content = self.deep_research.export_temp()
         return {"content": content}
 
-    async def _deep_research_reset(self) -> dict:
+    async def _deep_research_export_for_writer(
+        self,
+        max_evidence_tokens: int = 26000,
+        prefer_facts: bool = True,
+    ) -> dict:
+        """Budget-aware evidence export (facts first, round-robin findings)."""
+        return self.deep_research.export_for_writer(
+            max_evidence_tokens=int(max_evidence_tokens or 26000),
+            prefer_facts=bool(prefer_facts),
+        )
+
+    async def _deep_research_reset(self, keep_checkpoint: bool = False) -> dict:
         """Clear temp.json and in-memory caches."""
-        return self.deep_research.reset_run()
+        return self.deep_research.reset_run(keep_checkpoint=bool(keep_checkpoint))
 
     async def _deep_research_update_phase(
         self,
@@ -937,6 +956,7 @@ class TermuxForgeBridge:
         findings: list = None,
         skipped_pdfs: list = None,
         failed_fetches: list = None,
+        status: str = "running",
     ) -> dict:
         """Update phase facts and findings in temp.json."""
         return self.deep_research.update_phase(
@@ -946,7 +966,30 @@ class TermuxForgeBridge:
             findings=findings or [],
             skipped_pdfs=skipped_pdfs or [],
             failed_fetches=failed_fetches or [],
+            status=status or "running",
         )
+
+    async def _deep_research_save_checkpoint(
+        self,
+        run_id: str = "",
+        status: str = "running",
+        current_phase_index: int = 0,
+        steps: list = None,
+        stats: dict = None,
+    ) -> dict:
+        return self.deep_research.save_checkpoint(
+            run_id=run_id or "",
+            status=status or "running",
+            current_phase_index=int(current_phase_index or 0),
+            steps=steps or [],
+            stats=stats or {},
+        )
+
+    async def _deep_research_load_checkpoint(self) -> dict:
+        return self.deep_research.load_checkpoint()
+
+    async def _deep_research_clear_checkpoint(self) -> dict:
+        return self.deep_research.clear_checkpoint()
 
     async def _web_search(
         self,
@@ -1019,60 +1062,129 @@ class TermuxForgeBridge:
             return {"error": f"Tavily search execution failed: {e}"}
 
     async def _read_url(
-        self, url: str = "", uri: str = "", stage_id: str = "stage_mcp", query_id: str = "query_mcp"
+        self,
+        url: str = "",
+        uri: str = "",
+        stage_id: str = "stage_mcp",
+        query_id: str = "query_mcp",
+        allow_pdf: bool = False,
     ) -> dict:
+        """Fetch a URL via the bridge (single I/O path for Deep Research).
+
+        HTML is cleaned with TextCleaner. PDFs are deliberately never extracted:
+        a large PDF can exhaust the mobile process and writer context budget.
+        """
         target_url = url or uri
         if not target_url:
             return {"error": "Fetch failed: URL is required."}
         if not target_url.startswith("http"):
             target_url = "https://" + target_url
 
-        is_pdf = target_url.lower().endswith(".pdf")
-        if is_pdf:
-            logger.info("Skipping PDF URL (extension): %s", target_url)
-            return {
-                "status": "skipped_pdf",
-                "reason": "PDF files are excluded from Deep Research",
-                "url": target_url,
-                "parse_format": "skipped_pdf"
-            }
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(target_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                return {"error": "Fetch failed: only public HTTP(S) URLs are allowed."}
+            host = parsed.hostname.lower()
+            if host in {"localhost", "metadata.google.internal"}:
+                return {"error": "Fetch failed: local/private URLs are not allowed."}
+            try:
+                address = ipaddress.ip_address(host)
+                if not address.is_global:
+                    return {"error": "Fetch failed: local/private URLs are not allowed."}
+            except ValueError:
+                pass
+        except Exception:
+            return {"error": "Fetch failed: invalid URL."}
+
+        looks_like_pdf = target_url.lower().split("?", 1)[0].endswith(".pdf")
 
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            }
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(
+                    target_url, allow_redirects=True, max_redirects=10, timeout=aiohttp.ClientTimeout(total=45)
+                ) as resp:
                     if resp.status < 200 or resp.status >= 300:
-                        return {"error": f"Fetch failed: HTTP {resp.status}"}
-                    
-                    content_type = resp.headers.get("content-type", "").lower()
-                    if "application/pdf" in content_type:
-                        logger.info("Skipping PDF URL (Content-Type): %s", target_url)
+                        return {"error": f"Fetch failed: HTTP {resp.status}", "url": target_url}
+
+                    content_type = (resp.headers.get("content-type") or "").lower()
+                    is_pdf = looks_like_pdf or "application/pdf" in content_type
+
+                    if is_pdf:
                         return {
                             "status": "skipped_pdf",
-                            "reason": "PDF files are excluded from Deep Research",
+                            "reason": "PDF files are excluded from Deep Research to protect memory and context budget",
                             "url": target_url,
-                            "parse_format": "skipped_pdf"
+                            "parse_format": "skipped_pdf",
                         }
 
                     try:
-                        body = await resp.text()
+                        body = await resp.text(errors="replace")
                         from deep_research.cleaner import TextCleaner
                         text = TextCleaner().clean(body)
                         return {
                             "status": "success",
                             "content": text,
                             "url": target_url,
-                            "parse_format": "html"
+                            "parse_format": "html",
                         }
                     except Exception as e:
-                        return {"error": f"Extraction failed: {e}"}
+                        return {"error": f"Extraction failed: {e}", "url": target_url}
         except Exception as e:
-            return {"error": f"Fetch failed: {e}"}
+            return {"error": f"Fetch failed: {e}", "url": target_url}
 
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,
     ) -> dict:
         return await self.mcp.route_request(server, method, params)
+
+    async def _mcp_request(self, **kwargs) -> dict:
+        """Dispatcher for <mcp_request> tool calls.
+
+        Extracts method/tool name and params, routing to registered bridge methods
+        (e.g., web_search, read_url, deep_research.*) or underlying MCP servers.
+        """
+        method = kwargs.get("method") or kwargs.get("name") or kwargs.get("tool") or kwargs.get("action")
+        params = kwargs.get("params") or kwargs.get("arguments") or kwargs.get("args") or {}
+        if not isinstance(params, dict):
+            params = {}
+
+        for k, v in kwargs.items():
+            if k not in {"method", "name", "tool", "action", "params", "arguments", "args"}:
+                params[k] = v
+
+        if not method:
+            return {"error": "mcp_request missing target method/tool name."}
+
+        handler = self.router._methods.get(str(method))
+        if handler:
+            sig = inspect.signature(handler)
+            has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            call_params = params if has_var_kw else {k: v for k, v in params.items() if k in sig.parameters}
+            if inspect.iscoroutinefunction(handler):
+                return await handler(**call_params)
+            else:
+                return handler(**call_params)
+
+        server = kwargs.get("server") or "default"
+        return await self.mcp.route_request(server, str(method), params)
 
     # ── Workflows ─────────────────────────────────────────────────────
 
@@ -2289,33 +2401,22 @@ class TermuxForgeBridge:
             # Dispatch as internal JSON-RPC
             rpc_req = JsonRpcRequest(method=method, params=params, id="http-req", jsonrpc="2.0")
             try:
-                # For deep_research.ingest the semaphore is acquired BEFORE the
-                # timeout starts, so queue-wait time never eats into the 110s
-                # processing budget (fixes the 504/656749ms failure from logs).
+                # Legacy ingest was removed; all evidence now flows through
+                # update_phase / read_url / export_*.
                 if method == "deep_research.ingest":
-                    # Phase 1: acquire the ingest slot — no timeout clock running.
-                    await self.deep_research.acquire_ingest_slot()
-                    try:
-                        # Phase 2: run real work — now start the timeout.
-                        resolved_params = dict(params)
-                        rpc_resp = await asyncio.wait_for(
-                            self.deep_research.ingest_work(
-                                resolved_params.get("stage_id", ""),
-                                resolved_params.get("query_id", ""),
-                                resolved_params.get("source_url", ""),
-                                resolved_params.get("text", ""),
-                            ),
-                            timeout=MCP_HTTP_TIMEOUT_SECONDS,
-                        )
-                        # Wrap raw dict result in JsonRpcResponse format
-                        rpc_resp = JsonRpcResponse(id="http-req", result=rpc_resp)
-                    finally:
-                        self.deep_research.release_ingest_slot()
-                else:
-                    rpc_resp = await asyncio.wait_for(
-                        self.router.dispatch(rpc_req),
-                        timeout=MCP_HTTP_TIMEOUT_SECONDS,
+                    return web.json_response(
+                        {
+                            "error": (
+                                "deep_research.ingest is no longer supported. "
+                                "Use read_url + deep_research.update_phase instead."
+                            )
+                        },
+                        status=410,
                     )
+                rpc_resp = await asyncio.wait_for(
+                    self.router.dispatch(rpc_req),
+                    timeout=MCP_HTTP_TIMEOUT_SECONDS,
+                )
             except asyncio.TimeoutError:
                 logger.error("MCP HTTP request timed out: method=%s", method)
                 return web.json_response(

@@ -8,6 +8,7 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     final rows = <TableRow>[];
     final columnCharCounts = <int, int>{};
+    final columnMaxWordLen = <int, int>{};
 
     for (final child in element.children!.whereType<md.Element>()) {
       if (child.tag == 'thead' || child.tag == 'tbody') {
@@ -26,8 +27,19 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
               columnCharCounts[colIdx] = 0;
             }
 
+            final words = cellText.split(RegExp(r'\s+'));
+            int longestWordLen = 0;
+            for (final word in words) {
+              if (word.length > longestWordLen) longestWordLen = word.length;
+            }
+            final currentWordMax = columnMaxWordLen[colIdx] ?? 0;
+            if (longestWordLen > currentWordMax) {
+              columnMaxWordLen[colIdx] = longestWordLen;
+            }
+
             cells.add(
               Container(
+                constraints: const BoxConstraints(minWidth: 140.0),
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
                 alignment: Alignment.centerLeft,
                 child: SelectableText.rich(
@@ -65,7 +77,10 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
     final columnWidths = <int, TableColumnWidth>{};
     for (int i = 0; i < columnCharCounts.length; i++) {
       final maxChars = columnCharCounts[i] ?? 10;
-      final w = (maxChars * 8.5 + 28.0).clamp(110.0, 320.0);
+      final maxWord = columnMaxWordLen[i] ?? 5;
+      final minNeededForWord = maxWord * 11.0 + 32.0;
+      final minNeededForText = maxChars * 9.0 + 32.0;
+      final w = (minNeededForWord > minNeededForText ? minNeededForWord : minNeededForText).clamp(140.0, 450.0);
       columnWidths[i] = FixedColumnWidth(w);
     }
 
