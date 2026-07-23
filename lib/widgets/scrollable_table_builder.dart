@@ -7,20 +7,29 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     final rows = <TableRow>[];
+    final columnCharCounts = <int, int>{};
 
     for (final child in element.children!.whereType<md.Element>()) {
       if (child.tag == 'thead' || child.tag == 'tbody') {
         final isHeaderSection = child.tag == 'thead';
         for (final row in child.children!.whereType<md.Element>()) {
           final cells = <Widget>[];
+          int colIdx = 0;
           for (final cell in row.children!.whereType<md.Element>()) {
             final isHeader = cell.tag == 'th' || isHeaderSection;
+            final cellText = _extractPlainText(cell).trim();
+            final charLen = cellText.length;
+            final currentMax = columnCharCounts[colIdx] ?? 0;
+            if (charLen > currentMax) {
+              columnCharCounts[colIdx] = charLen;
+            } else if (!columnCharCounts.containsKey(colIdx)) {
+              columnCharCounts[colIdx] = 0;
+            }
+
             cells.add(
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
-                constraints: BoxConstraints(
-                  minWidth: isHeader ? 130.0 : 110.0,
-                ),
+                alignment: Alignment.centerLeft,
                 child: SelectableText.rich(
                   TextSpan(
                     children: cell.children
@@ -31,6 +40,7 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
                 ),
               ),
             );
+            colIdx++;
           }
           rows.add(
             TableRow(
@@ -52,16 +62,21 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
 
     if (rows.isEmpty) return const SizedBox.shrink();
 
+    final columnWidths = <int, TableColumnWidth>{};
+    for (int i = 0; i < columnCharCounts.length; i++) {
+      final maxChars = columnCharCounts[i] ?? 10;
+      final w = (maxChars * 8.5 + 28.0).clamp(110.0, 320.0);
+      columnWidths[i] = FixedColumnWidth(w);
+    }
+
     return ScrollableTableWrapper(
-      child: IntrinsicWidth(
-        child: Table(
-          border: TableBorder.all(
-            color: const Color(0xFFCBD5E1),
-            width: 1.0,
-          ),
-          defaultColumnWidth: const IntrinsicColumnWidth(),
-          children: rows,
+      child: Table(
+        columnWidths: columnWidths,
+        border: TableBorder.all(
+          color: const Color(0xFFCBD5E1),
+          width: 1.0,
         ),
+        children: rows,
       ),
     );
   }
