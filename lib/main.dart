@@ -11056,79 +11056,75 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                 ),
               const Divider(height: 32, color: Color(0xFFE5DDD3)),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Account',
-                        style: TextStyle(
+                  const Text(
+                    'Account',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF6C5946),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    Supabase
+                            .instance
+                            .client
+                            .auth
+                            .currentSession
+                            ?.user
+                            .email ??
+                        'Not logged in',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF2D241C),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (Supabase.instance.client.auth.currentSession !=
+                      null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Active Plan: ${_activePlanTier.isEmpty ? "FREE" : _activePlanTier.toUpperCase()}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF7B4E2E),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Daily Pool: ${_liveDailyPool != null ? "${_formatNumber(_liveDailyPool!)} / ${_formatNumber(_getTotalDailyCap(_activePlanTier))}" : "Loading..."}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF6C5946),
+                      ),
+                    ),
+                    if (_activePlanTier.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Monthly Pool: ${_liveSubscriptionCredits != null ? "${_formatNumber(_liveSubscriptionCredits!)} / ${_formatNumber(_getTotalMonthlyCap(_activePlanTier))}" : "Loading..."}',
+                        style: const TextStyle(
                           fontSize: 12,
-                          fontWeight: FontWeight.bold,
                           color: Color(0xFF6C5946),
                         ),
                       ),
+                    ],
+                    if (_liveTopupCredits != null &&
+                        _liveTopupCredits! > 0) ...[
                       const SizedBox(height: 2),
                       Text(
-                        Supabase
-                                .instance
-                                .client
-                                .auth
-                                .currentSession
-                                ?.user
-                                .email ??
-                            'Not logged in',
+                        'Top-up Credits: ${_formatNumber(_liveTopupCredits!)}',
                         style: const TextStyle(
-                          fontSize: 14,
-                          color: Color(0xFF2D241C),
-                          fontWeight: FontWeight.w500,
+                          fontSize: 12,
+                          color: Color(0xFF6C5946),
                         ),
                       ),
-                      if (Supabase.instance.client.auth.currentSession !=
-                          null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'Active Plan: ${_activePlanTier.isEmpty ? "FREE" : _activePlanTier.toUpperCase()}',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFF7B4E2E),
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Daily Pool: ${_liveDailyPool != null ? "${_formatNumber(_liveDailyPool!)} / ${_formatNumber(_getTotalDailyCap(_activePlanTier))}" : "Loading..."}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF6C5946),
-                          ),
-                        ),
-                        if (_activePlanTier.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            'Monthly Pool: ${_liveSubscriptionCredits != null ? "${_formatNumber(_liveSubscriptionCredits!)} / ${_formatNumber(_getTotalMonthlyCap(_activePlanTier))}" : "Loading..."}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF6C5946),
-                            ),
-                          ),
-                        ],
-                        if (_liveTopupCredits != null &&
-                            _liveTopupCredits! > 0) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            'Top-up Credits: ${_formatNumber(_liveTopupCredits!)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Color(0xFF6C5946),
-                            ),
-                          ),
-                        ],
-                      ],
                     ],
-                  ),
+                  ],
+                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 4,

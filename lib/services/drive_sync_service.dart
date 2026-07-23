@@ -650,53 +650,90 @@ class DriveSyncService {
       }
     } catch (_) {}
 
-    if (_googleOAuthClientId.isEmpty) {
-      diagnostics?.add('❌ GOOGLE_OAUTH_CLIENT_ID is not configured');
-      return const _RefreshResult(
-        error: 'Google Drive refresh is not configured in this build.',
-      );
-    }
-
+    // Delegate token refresh to server-side Supabase Edge Function refresh-google-drive-token
     try {
-      final response = await http.post(
-        Uri.parse('https://oauth2.googleapis.com/token'),
-        headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {
-          'client_id': _googleOAuthClientId,
-          'grant_type': 'refresh_token',
-          'refresh_token': refreshToken,
-        },
-      ).timeout(const Duration(seconds: 15));
-      final body = response.body;
-      if (response.statusCode == 200) {
-        final payload = jsonDecode(body) as Map<String, dynamic>;
+      final res = await Supabase.instance.client.functions.invoke(
+        'refresh-google-drive-token',
+        body: {'refresh_token': refreshToken},
+      );
+      final data = res.data;
+      if (res.status == 200 && data != null) {
+        final payload = data is Map<String, dynamic>
+            ? data
+            : (data is Map
+                ? Map<String, dynamic>.from(data)
+                : jsonDecode(data.toString()) as Map<String, dynamic>);
         final accessToken = payload['access_token'] as String?;
-        if (accessToken == null || accessToken.isEmpty) {
-          return const _RefreshResult(error: 'Google did not return an access token.');
+        final updatedRefreshToken = payload['refresh_token'] as String?;
+        if (accessToken != null && accessToken.isNotEmpty) {
+          final expiresIn = payload['expires_in'];
+          final expirySeconds = (expiresIn is num && expiresIn > 120)
+              ? expiresIn.toInt() - 120
+              : 3000;
+          final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
+          await _storeGoogleTokens(
+            accessToken: accessToken,
+            refreshToken: updatedRefreshToken,
+            expiry: expiry,
+          );
+          diagnostics?.add('✅ Refreshed Google token via Supabase Edge Function');
+          return _RefreshResult(token: accessToken);
         }
-        final expiresIn = payload['expires_in'];
-        final expirySeconds = (expiresIn is num && expiresIn > 120)
-            ? expiresIn.toInt() - 120
-            : 3000;
-        final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
-        await _storeGoogleTokens(accessToken: accessToken, expiry: expiry);
-        diagnostics?.add('✅ Google Drive access token refreshed silently');
-        return _RefreshResult(token: accessToken);
+      } else {
+        final errText = data is Map ? (data['error'] ?? data['message']) : data.toString();
+        diagnostics?.add('⚠️ Edge Function status ${res.status}: $errText');
+        if (errText.toString().toLowerCase().contains('invalid_grant')) {
+          return const _RefreshResult(
+            error: 'Google Drive authorization was revoked or expired. Please sign in again.',
+            needsRelogin: true,
+          );
+        }
       }
-
-      final failure = _DriveFailure.fromResponse(response.statusCode, body);
-      _debugDriveFailure('Google refresh', failure);
-      if (failure.invalidGrant) {
-        return const _RefreshResult(
-          error: 'Google Drive authorization was revoked or expired. Please sign in again.',
-          needsRelogin: true,
-        );
-      }
-      return _RefreshResult(error: 'Unable to refresh Google Drive access (${failure.label}).');
     } catch (e) {
-      debugPrint('[drive-token-refresh] request failed: $e');
-      return const _RefreshResult(error: 'Could not contact Google to refresh Drive access.');
+      diagnostics?.add('⚠️ Edge Function refresh request failed: $e');
     }
+
+    // Direct fallback for public mobile client IDs (no client_secret passed)
+    if (_googleOAuthClientId.isNotEmpty) {
+      try {
+        final response = await http.post(
+          Uri.parse('https://oauth2.googleapis.com/token'),
+          headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: {
+            'client_id': _googleOAuthClientId,
+            'grant_type': 'refresh_token',
+            'refresh_token': refreshToken,
+          },
+        ).timeout(const Duration(seconds: 15));
+        final body = response.body;
+        if (response.statusCode == 200) {
+          final payload = jsonDecode(body) as Map<String, dynamic>;
+          final accessToken = payload['access_token'] as String?;
+          if (accessToken != null && accessToken.isNotEmpty) {
+            final expiresIn = payload['expires_in'];
+            final expirySeconds = (expiresIn is num && expiresIn > 120)
+                ? expiresIn.toInt() - 120
+                : 3000;
+            final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
+            await _storeGoogleTokens(accessToken: accessToken, expiry: expiry);
+            diagnostics?.add('✅ Google Drive access token refreshed silently');
+            return _RefreshResult(token: accessToken);
+          }
+        }
+        final failure = _DriveFailure.fromResponse(response.statusCode, body);
+        if (failure.invalidGrant) {
+          return const _RefreshResult(
+            error: 'Google Drive authorization was revoked or expired. Please sign in again.',
+            needsRelogin: true,
+          );
+        }
+      } catch (_) {}
+    }
+
+    return const _RefreshResult(
+      error: 'Unable to refresh Google Drive token via Edge Function or direct fallback. Please sign in again.',
+      needsRelogin: true,
+    );
   }
 
   static Future<_StoredGoogleTokens> _readGoogleTokens() async {
