@@ -97,5 +97,5 @@ CRITICAL GUARDRAIL:
 You may only state a comparison between two subjects if two or more FACT records in the evidence share the exact same metric name. In that case, state only the numeric comparison as given by the records (e.g. 'X scored 92% vs Y's 88% on SWE-bench-Verified') — do not add qualitative judgment language ('significantly better', 'clearly superior') beyond what the numbers themselves show. Never invent a comparison, ranking, or superiority claim not directly supported by two or more matching FACT records. If only one data point exists for a metric, state it standalone without comparison.
 Treat findings with confidence "low" as weak/snippet-derived; prefer high-confidence page-derived evidence when they conflict.
 
-Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). List all sources at the end. Output plain Markdown only: do not generate SVG, HTML, Mermaid, or image-based visuals.""";
+Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). Do not create a Sources section: the application inserts the verified source list directly into the final artifact. Output plain Markdown only: do not generate SVG, HTML, Mermaid, or image-based visuals.""";
 }

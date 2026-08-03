@@ -33,6 +33,7 @@ class FindingRecord:
 class PhaseRecord:
     stage_id: str
     phase_title: str
+    summary: str = ""
     facts: list[dict[str, str]] = field(default_factory=list)
     findings: list[dict[str, str]] = field(default_factory=list)
     skipped_pdfs: list[dict[str, str]] = field(default_factory=list)
@@ -43,6 +44,7 @@ class PhaseRecord:
         return {
             "stage_id": self.stage_id,
             "phase_title": self.phase_title,
+            "summary": self.summary,
             "facts": self.facts,
             "findings": self.findings,
             "skipped_pdfs": self.skipped_pdfs,

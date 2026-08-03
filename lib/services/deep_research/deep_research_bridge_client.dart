@@ -58,6 +58,7 @@ class DeepResearchBridgeClient {
   Future<void> updatePhase({
     required String stageId,
     required String phaseTitle,
+    String summary = '',
     required List<dynamic> facts,
     required List<dynamic> findings,
     required List<dynamic> skippedPdfs,
@@ -69,6 +70,7 @@ class DeepResearchBridgeClient {
       params: {
         'stage_id': stageId,
         'phase_title': phaseTitle,
+        'summary': summary,
         'facts': facts,
         'findings': findings,
         'skipped_pdfs': skippedPdfs,

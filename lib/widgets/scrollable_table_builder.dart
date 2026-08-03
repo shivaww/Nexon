@@ -7,41 +7,18 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
   @override
   Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) {
     final rows = <TableRow>[];
-    final columnCharCounts = <int, int>{};
-    final columnMaxWordLen = <int, int>{};
 
     for (final child in element.children!.whereType<md.Element>()) {
       if (child.tag == 'thead' || child.tag == 'tbody') {
         final isHeaderSection = child.tag == 'thead';
         for (final row in child.children!.whereType<md.Element>()) {
           final cells = <Widget>[];
-          int colIdx = 0;
           for (final cell in row.children!.whereType<md.Element>()) {
             final isHeader = cell.tag == 'th' || isHeaderSection;
-            final cellText = _extractPlainText(cell).trim();
-            final charLen = cellText.length;
-            final currentMax = columnCharCounts[colIdx] ?? 0;
-            if (charLen > currentMax) {
-              columnCharCounts[colIdx] = charLen;
-            } else if (!columnCharCounts.containsKey(colIdx)) {
-              columnCharCounts[colIdx] = 0;
-            }
-
-            final words = cellText.split(RegExp(r'\s+'));
-            int longestWordLen = 0;
-            for (final word in words) {
-              if (word.length > longestWordLen) longestWordLen = word.length;
-            }
-            final currentWordMax = columnMaxWordLen[colIdx] ?? 0;
-            if (longestWordLen > currentWordMax) {
-              columnMaxWordLen[colIdx] = longestWordLen;
-            }
 
             cells.add(
-              Container(
-                constraints: const BoxConstraints(minWidth: 140.0),
+              Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 10.0),
-                alignment: Alignment.centerLeft,
                 child: SelectableText.rich(
                   TextSpan(
                     children: cell.children
@@ -52,7 +29,6 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
                 ),
               ),
             );
-            colIdx++;
           }
           rows.add(
             TableRow(
@@ -74,19 +50,9 @@ class ScrollableTableBuilder extends MarkdownElementBuilder {
 
     if (rows.isEmpty) return const SizedBox.shrink();
 
-    final columnWidths = <int, TableColumnWidth>{};
-    for (int i = 0; i < columnCharCounts.length; i++) {
-      final maxChars = columnCharCounts[i] ?? 10;
-      final maxWord = columnMaxWordLen[i] ?? 5;
-      final minNeededForWord = maxWord * 11.0 + 32.0;
-      final minNeededForText = maxChars * 9.0 + 32.0;
-      final w = (minNeededForWord > minNeededForText ? minNeededForWord : minNeededForText).clamp(140.0, 450.0);
-      columnWidths[i] = FixedColumnWidth(w);
-    }
-
     return ScrollableTableWrapper(
       child: Table(
-        columnWidths: columnWidths,
+        defaultColumnWidth: const IntrinsicColumnWidth(),
         border: TableBorder.all(
           color: const Color(0xFFCBD5E1),
           width: 1.0,
@@ -220,6 +186,7 @@ class _ScrollableTableWrapperState extends State<ScrollableTableWrapper> {
                   controller: _scrollController,
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
+                  clipBehavior: Clip.antiAlias,
                   child: widget.child,
                 ),
                 if (_showLeftIndicator)

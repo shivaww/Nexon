@@ -952,6 +952,7 @@ class TermuxForgeBridge:
         self,
         stage_id: str = "",
         phase_title: str = "",
+        summary: str = "",
         facts: list = None,
         findings: list = None,
         skipped_pdfs: list = None,
@@ -962,6 +963,7 @@ class TermuxForgeBridge:
         return self.deep_research.update_phase(
             stage_id=stage_id,
             phase_title=phase_title,
+            summary=summary,
             facts=facts or [],
             findings=findings or [],
             skipped_pdfs=skipped_pdfs or [],
@@ -1598,6 +1600,11 @@ class TermuxForgeBridge:
         """Apply multiple search-replace patches atomically with unified diff output."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        if not isinstance(patches, list):
+            raise JsonRpcError(
+                ErrorCode.INVALID_PARAMS,
+                "patches must be a JSON array of {search, replace, count?, label?} objects",
+            )
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
             checkpoint = await self._auto_checkpoint("patch_file", [path], workspace_dir) if auto_checkpoint else None

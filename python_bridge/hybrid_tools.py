@@ -1055,9 +1055,9 @@ def patch_file_rich(
     """
     Apply multiple search-and-replace patches to a file atomically.
 
-    All patches are applied in order to the in-memory content, then the
-    result is written atomically. If any patch's search text is not found,
-    it's reported in patches_failed but others still apply.
+    All patches are validated and applied in order to in-memory content. The
+    updated file is committed only when every patch succeeds; a failed patch
+    leaves the target file unchanged. This makes the tool genuinely atomic.
 
     The result includes a unified diff so the AI can verify exactly what changed.
 
@@ -1079,22 +1079,32 @@ def patch_file_rich(
     original = p.read_text(encoding=encoding)
     lines_before = original.count("\n") + 1
 
-    if backup:
-        backup_path = str(p) + ".bak"
-        shutil.copy2(str(p), backup_path)
-
     content = original
     applied = 0
     failed: list[str] = []
 
     for i, spec in enumerate(patches):
+        if not isinstance(spec, dict):
+            failed.append(f"patch #{i + 1}: must be an object with search and replace fields")
+            continue
+
         search_text = spec.get("search", "")
         replace_text = spec.get("replace", "")
-        count = int(spec.get("count", 1))
+        try:
+            count = int(spec.get("count", 1))
+        except (TypeError, ValueError):
+            failed.append(f"{spec.get('label', f'patch #{i + 1}')}: count must be an integer")
+            continue
         label = spec.get("label", f"patch #{i + 1}")
 
-        if not search_text:
+        if not isinstance(search_text, str) or not search_text:
             failed.append(f"{label}: empty search string")
+            continue
+        if not isinstance(replace_text, str):
+            failed.append(f"{label}: replace text must be a string")
+            continue
+        if count < 0:
+            failed.append(f"{label}: count must be zero or a positive integer")
             continue
 
         if search_text not in content:
@@ -1107,7 +1117,32 @@ def patch_file_rich(
             content = content.replace(search_text, replace_text, count)
         applied += 1
 
-    # Compute diff before writing
+    # Do not partially modify a file: errors mean no commit and no backup.
+    if failed:
+        size_bytes = p.stat().st_size
+        header = OutputRenderer.write_header(
+            path=str(p), action="PATCH ABORTED",
+            lines_before=lines_before, lines_after=lines_before,
+            size_bytes=size_bytes,
+        )
+        parts = [header, "  ✗ No changes written; every patch must match before committing."]
+        parts.append("\n  ✗ FAILED PATCHES:")
+        for f_msg in failed:
+            parts.append(f"    • {f_msg}")
+        parts.append(f"\n{OutputRenderer._divider()}")
+        parts.append(f"  Next: read_file_rich path={path} and retry with exact text")
+        return PatchResult(
+            path=str(p),
+            patches_applied=0,
+            patches_failed=failed,
+            lines_before=lines_before,
+            lines_after=lines_before,
+            size_bytes=size_bytes,
+            diff="",
+            block="\n".join(parts),
+        )
+
+    # Compute diff before writing.
     diff_lines = list(difflib.unified_diff(
         original.splitlines(keepends=True),
         content.splitlines(keepends=True),
@@ -1117,7 +1152,10 @@ def patch_file_rich(
     ))
     diff_text = "".join(diff_lines[:200])  # cap diff at 200 lines
 
-    # Atomic write
+    # Create the backup only for a successful commit, then write atomically.
+    if backup:
+        backup_path = str(p) + ".bak"
+        shutil.copy2(str(p), backup_path)
     write_file_rich(path, content, encoding, backup=False)
 
     size_bytes = p.stat().st_size

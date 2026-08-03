@@ -661,7 +661,7 @@ Read all facts and findings. Decide a hierarchical document structure: Chapter p
 CRITICAL GUARDRAIL:
 You may only state a comparison between two subjects if two or more FACT records in the evidence share the exact same metric name. In that case, state only the numeric comparison as given by the records (e.g. 'X scored 92% vs Y's 88% on SWE-bench-Verified') — do not add qualitative judgment language ('significantly better', 'clearly superior') beyond what the numbers themselves show. Never invent a comparison, ranking, or superiority claim not directly supported by two or more matching FACT records. If only one data point exists for a metric, state it standalone without comparison.
 
-Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). List all sources at the end. Output plain Markdown only: do not generate SVG, HTML, Mermaid, or image-based visuals.""";
+Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). Do not create a Sources section: the application inserts the verified source list directly into the final artifact. Output plain Markdown only: do not generate SVG, HTML, Mermaid, or image-based visuals.""";
 }
 
 class ChatHomePage extends StatefulWidget {
@@ -932,19 +932,23 @@ class _ChatHomePageState extends State<ChatHomePage> {
   Future<void> _updateDeepResearchPhase({
     required String stageId,
     required String phaseTitle,
+    String summary = '',
     required List<dynamic> facts,
     required List<dynamic> findings,
     required List<dynamic> skippedPdfs,
     required List<dynamic> failedFetches,
+    String status = 'running',
   }) async {
     try {
       await _deepResearchBridge.updatePhase(
         stageId: stageId,
         phaseTitle: phaseTitle,
+        summary: summary,
         facts: facts,
         findings: findings,
         skippedPdfs: skippedPdfs,
         failedFetches: failedFetches,
+        status: status,
       );
     } catch (e) {
       throw StateError('Deep Research bridge phase update failed: $e');
@@ -1061,6 +1065,88 @@ class _ChatHomePageState extends State<ChatHomePage> {
     return _deepResearchBridge.exportForWriter(
       maxEvidenceTokens: maxEvidenceTokens.clamp(1, 200000) as int,
     );
+  }
+
+  String _deepResearchNow() {
+    final now = DateTime.now();
+    final offset = now.timeZoneOffset;
+    final sign = offset.isNegative ? '-' : '+';
+    final hours = offset.inHours.abs().toString().padLeft(2, '0');
+    final minutes = (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+    return '${now.toIso8601String()} ${now.timeZoneName} (UTC$sign$hours:$minutes)';
+  }
+
+  String _buildDeepResearchPhaseSummary({
+    required String phaseTitle,
+    required String stepContent,
+    required List<dynamic> facts,
+    required List<dynamic> findings,
+    required List<dynamic> skippedPdfs,
+    required List<dynamic> failedFetches,
+  }) {
+    final items = <String>[
+      'Phase: $phaseTitle.',
+      '${facts.length} facts and ${findings.length} findings were extracted.',
+    ];
+    for (final fact in facts.take(3)) {
+      if (fact is Map) {
+        final subject = fact['subject']?.toString().trim() ?? '';
+        final metric = fact['metric']?.toString().trim() ?? '';
+        final value = fact['value']?.toString().trim() ?? '';
+        if (subject.isNotEmpty || metric.isNotEmpty || value.isNotEmpty) {
+          items.add('$subject $metric: $value.'.trim());
+        }
+      }
+    }
+    for (final finding in findings.take(2)) {
+      if (finding is Map) {
+        final text = finding['text']?.toString().trim() ?? '';
+        if (text.isNotEmpty) items.add(text);
+      }
+    }
+    if (skippedPdfs.isNotEmpty) items.add('${skippedPdfs.length} PDF source(s) skipped.');
+    if (failedFetches.isNotEmpty) items.add('${failedFetches.length} source fetch(es) failed.');
+    if (items.length == 2 && stepContent.trim().isNotEmpty) {
+      final cleaned = stepContent
+          .replaceAll(RegExp(r'<[^>]+>'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (cleaned.isNotEmpty) {
+        items.add(cleaned.substring(0, cleaned.length.clamp(0, 800).toInt()));
+      }
+    }
+    return items.join(' ');
+  }
+
+  List<String> _evidenceSourceUrls(String tempJsonContent) {
+    try {
+      final decoded = jsonDecode(tempJsonContent);
+      if (decoded is! List) return const [];
+      final urls = <String>{};
+      for (final phase in decoded) {
+        if (phase is! Map) continue;
+        for (final key in ['facts', 'findings']) {
+          final records = phase[key];
+          if (records is! List) continue;
+          for (final record in records) {
+            if (record is! Map) continue;
+            final source = record['source']?.toString().trim() ?? '';
+            if (Uri.tryParse(source)?.hasScheme == true) urls.add(source);
+          }
+        }
+      }
+      return urls.toList()..sort();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  String _unwrapMarkdownArtifact(String text) {
+    final match = RegExp(
+      r'^\s*```(?:markdown|md)\s*\n([\s\S]*?)\n?```\s*$',
+      caseSensitive: false,
+    ).firstMatch(text);
+    return match?.group(1)?.trim() ?? text.trim();
   }
 
   void _switchSession(String sessionId) {
@@ -1822,8 +1908,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
   <tool_request><method>tree</method><path>/projects/myapp</path><max_depth>3</max_depth></tool_request>
 
 ── EDIT & CREATE ──
-• patch_file: Multi search-and-replace, atomic, outputs unified diff. Search text must EXACTLY match including whitespace.
-  <tool_request><method>patch_file</method><path>/absolute/path.ext</path><patches>[{"search":"old code","replace":"new code","label":"fix"}]</patches></tool_request>
+• patch_file: Multi search-and-replace, atomic, outputs unified diff. The tool request and all parameter tags are XML; the VALUE inside `<patches>` MUST be a valid JSON array because this parameter is a list of patch objects. Each item has string `search` and `replace`, plus optional integer `count` (0 = all matches) and `label`. Escape newlines inside the JSON strings as `\n`; search text must EXACTLY match, including whitespace. If any item fails, NO changes are written.
+  <tool_request><method>patch_file</method><path>/absolute/path.ext</path><patches>[{"search":"old code\n","replace":"new code\n","count":1,"label":"fix"}]</patches></tool_request>
 • replace_lines: Replace a specific line range (use after reading exact line numbers).
   <tool_request><method>replace_lines</method><path>/file.ext</path><start_line>45</start_line><end_line>52</end_line><new_content>  // New code</new_content></tool_request>
 • write_file_rich: Create or overwrite entire file. For existing files, pass `<expected_sha256>` if available.
@@ -3730,7 +3816,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         ChatMessage(
           role: MessageRole.user,
           text: "Analyze the user's research request and output a detailed research plan. "
-              "Research Request: \"$prompt\"",
+              "Research Request: \"$prompt\"\n\n"
+              "Current date and time: ${_deepResearchNow()}. Plan for information that is current as of this timestamp. "
+              "For time-sensitive topics, require each phase to find and verify the latest available primary or authoritative sources.",
         ),
       ];
 
@@ -3806,6 +3894,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         final stageId = steps[i]['id'] as String;
         final phaseTitle = steps[i]['title'] as String;
         final queryText = steps[i]['query_text'] as String;
+        final phaseCurrentTime = _deepResearchNow();
         // Keep each temp.json phase scoped to evidence gathered for that phase.
         phaseFacts.clear();
         phaseFindings.clear();
@@ -3930,6 +4019,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             role: MessageRole.user,
             text: "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
+                "Current date and time: $phaseCurrentTime. You MUST use the latest information available as of this timestamp. "
+                "For time-sensitive claims, search with a suitable recency filter, verify dates on the fetched source, and never rely on model memory.\n\n"
                 "Please formulate search queries or read specific URLs to gather evidence. "
                 "Citing specific metrics, comparisons, and sources in your final response. "
                 "When you are finished, write a concise summary of your findings and emit <step_complete/>.",
@@ -4579,6 +4670,30 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
           }
         }
 
+        final phaseSummary = _buildDeepResearchPhaseSummary(
+          phaseTitle: phaseTitle,
+          stepContent: stepContent,
+          facts: phaseFacts,
+          findings: phaseFindings,
+          skippedPdfs: phaseSkippedPdfs,
+          failedFetches: phaseFailedFetches,
+        );
+        try {
+          await _updateDeepResearchPhase(
+            stageId: stageId,
+            phaseTitle: phaseTitle,
+            summary: phaseSummary,
+            facts: phaseFacts,
+            findings: phaseFindings,
+            skippedPdfs: phaseSkippedPdfs,
+            failedFetches: phaseFailedFetches,
+            status: stepFailed ? 'failed' : 'completed',
+          );
+        } catch (e) {
+          stepFailed = true;
+          stepFailure = 'Could not persist this phase to temp.json: $e';
+        }
+
         steps[i]['status'] = stepFailed ? 'failed' : 'completed';
         if (stepFailed) {
           steps[i]['error'] = stepFailure;
@@ -4610,12 +4725,30 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
       _publishResearchState(sessionIndex, messageIndex, stateMap);
 
       String tempJsonContent = '[]';
+      String? writerInputFailure;
       try {
         final int userBudget = _writerContextBudget;
         final int reserve = (userBudget * 0.18).round();
         final int maxEvidenceTokens = userBudget - reserve;
         final writerExport = await _exportDeepResearchForWriter(maxEvidenceTokens);
         tempJsonContent = writerExport['content']?.toString() ?? '[]';
+        final rawTempJson = await _deepResearchBridge.exportTemp();
+        final rawPhases = jsonDecode(rawTempJson);
+        final exportedPhases = jsonDecode(tempJsonContent);
+        final rawHasPhases = rawPhases is List && rawPhases.isNotEmpty;
+        final exportedHasPhases = exportedPhases is List && exportedPhases.isNotEmpty;
+        if (!exportedHasPhases && rawHasPhases) {
+          // Never discard successfully persisted phase summaries just because
+          // a budget export was unexpectedly empty.
+          tempJsonContent = rawTempJson;
+          executionIssues.add({
+            'step': 'Writer input export',
+            'status': 'warning',
+            'error': 'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
+          });
+        } else if (!rawHasPhases) {
+          writerInputFailure = 'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
+        }
         final truncatedFacts = (writerExport['truncated_facts'] as num?)?.toInt() ?? 0;
         final truncatedFindings = (writerExport['truncated_findings'] as num?)?.toInt() ?? 0;
         final truncatedPhases = (writerExport['truncated_phases'] as num?)?.toInt() ?? 0;
@@ -4628,11 +4761,18 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
         }
       } catch (e) {
         debugPrint("Error exporting/processing deep-research temp.json: $e");
+        writerInputFailure = 'The writer could not load the bridge-owned retrieval data.';
         executionIssues.add({
           'step': 'Writer input export',
           'status': 'failed',
           'error': 'The writer could not load the bridge-owned retrieval data: ${_truncateEventText(e.toString(), 300)}',
         });
+      }
+
+      final verifiedSourceUrls = _evidenceSourceUrls(tempJsonContent);
+      if (writerInputFailure == null && verifiedSourceUrls.isEmpty) {
+        writerInputFailure =
+            'No verified source URLs were persisted to temp.json, so a research artifact cannot be generated safely.';
       }
 
       List<ChatMessage> writerMessages = [
@@ -4647,7 +4787,8 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
               "${jsonEncode(executionIssues)}\n\n"
               "Please write the final, comprehensive research report in Markdown format. "
               "Use clear headings, detailed paragraphs, and tables. Do not use SVG, HTML, Mermaid, "
-              "or image-based visuals. List all sources at the end.",
+              "or image-based visuals. Use only the URLs provided in temp.json; do not invent, infer, or search for sources. "
+              "The app will insert the verified source list directly into the final artifact.",
         ),
       ];
 
@@ -4655,9 +4796,9 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
       String finalReasoningText = '';
       bool finalReportDone = false;
       int writerRetries = 0;
-      String? writerFailure;
+      String? writerFailure = writerInputFailure;
 
-      while (!finalReportDone && writerRetries < 3) {
+      while (!finalReportDone && writerFailure == null && writerRetries < 3) {
         if (!mounted) return;
         if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
           break;
@@ -4730,10 +4871,16 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
         writerFailure = 'Writer stopped before producing a report.';
       }
       if (writerFailure == null) {
-        finalReportText = _stripSvgVisuals(finalReportText).trim();
+        finalReportText = _unwrapMarkdownArtifact(
+          _stripSvgVisuals(finalReportText),
+        );
         if (finalReportText.isEmpty) {
           writerFailure = 'Writer returned an empty report.';
         } else {
+          if (verifiedSourceUrls.isNotEmpty) {
+            final sources = verifiedSourceUrls.map((url) => '- <$url>').join('\n');
+            finalReportText = '$finalReportText\n\n## Verified retrieved sources\n$sources';
+          }
           stateMap['final_report'] = finalReportText;
           try {
             stateMap['report_path'] = await _persistResearchReport(
@@ -4758,7 +4905,7 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
           
           String text = _updateResearchStateInText(msgs[messageIndex].text, stateMap);
           if (writerFailure == null) {
-            text += "\n\n$finalReportText";
+            text += "\n\n```markdown\n$finalReportText\n```";
           } else {
             text += "\n\n⚠️ Writer agent failed: $writerFailure";
           }
@@ -10864,7 +11011,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Live Voice & TTS Engine Voice',
+                'Native TTS Fallback Voice',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
@@ -10873,7 +11020,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               ),
               const SizedBox(height: 2),
               const Text(
-                'Select on-device TTS voice for live voice mode and read-aloud',
+                'Used for read-aloud and Live Voice only if KittenTTS is unavailable. KittenTTS voices are selected inside Live Voice Mode.',
                 style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
               ),
               const SizedBox(height: 12),
@@ -13651,6 +13798,9 @@ class ChatClient {
     }
     if (activeApiKey.isNotEmpty) {
       request.headers.set('Authorization', 'Bearer $activeApiKey');
+      if (provider.id == 'sarvam') {
+        request.headers.set('api-subscription-key', activeApiKey);
+      }
     }
     if (!isManaged) {
       for (final entry in provider.extraHeaders.entries) {
@@ -14281,6 +14431,14 @@ const providerCatalog = <ProviderDefinition>[
     keyLabel: 'CEREBRAS_API_KEY',
     baseUrl: 'https://api.cerebras.ai/v1',
     models: ['llama-4-scout-17b-16e-instruct', 'llama3.1-70b'],
+  ),
+  ProviderDefinition(
+    id: 'sarvam',
+    name: 'Sarvam AI',
+    shortName: 'SV',
+    keyLabel: 'SARVAM_API_KEY',
+    baseUrl: 'https://api.sarvam.ai/v1',
+    models: ['sarvam-105b', 'sarvam-30b', 'sarvam-2b', 'sarvam-m'],
   ),
   ProviderDefinition(
     id: 'sambanova',

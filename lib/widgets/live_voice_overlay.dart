@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../services/voice/live_voice_engine.dart';
 import '../main.dart' show LiquidGlassSurface;
 
@@ -20,78 +23,175 @@ class LiveVoiceOverlay extends StatefulWidget {
   State<LiveVoiceOverlay> createState() => _LiveVoiceOverlayState();
 }
 
-class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
+class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
+    with SingleTickerProviderStateMixin {
   bool _showCaptions = true;
+  late final Timer _orbTimer;
+  bool _pulseUp = false;
+  bool _thinkingSweep = false;
+  late final AnimationController _thinkingCtrl;
 
   @override
   void initState() {
     super.initState();
     widget.engine.addListener(_onEngineChange);
+    _thinkingCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..repeat();
+    _orbTimer = Timer.periodic(const Duration(milliseconds: 1050), (_) {
+      if (!mounted) return;
+      setState(() {
+        _pulseUp = !_pulseUp;
+        if (widget.engine.state == LiveVoiceState.thinking) {
+          _thinkingSweep = !_thinkingSweep;
+        }
+      });
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndPromptMicPermission();
     });
   }
 
+  // ── Permission flow ───────────────────────────────────────────────────────
+
   Future<void> _checkAndPromptMicPermission() async {
-    final granted = await widget.engine.checkMicPermission();
-    if (!granted && mounted) {
-      final shouldRequest = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFFFFFDF8),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: const BorderSide(color: Color(0xFFE5DDD3)),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.mic_rounded, color: Color(0xFF7B4E2E)),
-              SizedBox(width: 10),
-              Text(
-                'Microphone Access',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D241C),
-                ),
+    final status = await widget.engine.micPermissionStatus();
+
+    if (status.isGranted) {
+      // Already granted — start directly.
+      if (widget.engine.state == LiveVoiceState.idle) {
+        widget.engine.startListening(onFinalResult: widget.onSendPrompt);
+      }
+      return;
+    }
+
+    if (status.isPermanentlyDenied) {
+      _showPermanentlyDeniedDialog();
+      return;
+    }
+
+    // Not yet asked — show our custom rationale dialog, then fire the OS dialog.
+    if (!mounted) return;
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDF8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Color(0xFFE5DDD3)),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.mic_rounded, color: Color(0xFF7B4E2E)),
+            SizedBox(width: 10),
+            Text(
+              'Microphone Access',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2D241C),
               ),
-            ],
-          ),
-          content: const Text(
-            'Nexon Live Voice Mode uses your microphone to listen to your voice commands and converse with you hands-free.\n\nTap "Grant Permission" to allow OS microphone access.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF6C5946), height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Cancel', style: TextStyle(color: Color(0xFF8C7A6B))),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF7B4E2E),
-                foregroundColor: const Color(0xFFFFF8EA),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Grant Permission'),
             ),
           ],
         ),
-      );
+        content: const Text(
+          'Nexon Live Voice Mode uses your microphone to listen to your voice '
+          'commands and converse with you hands-free.\n\nTap "Grant Permission" '
+          'to allow OS microphone access.',
+          style: TextStyle(fontSize: 13, color: Color(0xFF6C5946), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF8C7A6B))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF7B4E2E),
+              foregroundColor: const Color(0xFFFFF8EA),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Grant Permission'),
+          ),
+        ],
+      ),
+    );
 
-      if (shouldRequest == true) {
-        await widget.engine.requestMicPermission();
-      }
-    }
+    if (shouldRequest != true || !mounted) return;
 
-    if (widget.engine.state == LiveVoiceState.idle) {
+    // requestMicPermission() fires the real Android RECORD_AUDIO OS dialog.
+    final granted = await widget.engine.requestMicPermission();
+    if (granted && mounted && widget.engine.state == LiveVoiceState.idle) {
       widget.engine.startListening(onFinalResult: widget.onSendPrompt);
+    } else if (!granted && mounted) {
+      // Check again — might be permanently denied now.
+      final newStatus = await widget.engine.micPermissionStatus();
+      if (newStatus.isPermanentlyDenied && mounted) {
+        _showPermanentlyDeniedDialog();
+      }
     }
   }
 
+  void _showPermanentlyDeniedDialog() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFDF8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: const BorderSide(color: Color(0xFFE5DDD3)),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.mic_off_rounded, color: Color(0xFFA2675A)),
+            SizedBox(width: 10),
+            Text(
+              'Microphone Blocked',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF2D241C),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Microphone access is permanently blocked. Open Android Settings → '
+          'Apps → Nexon → Permissions and enable Microphone.',
+          style: TextStyle(fontSize: 13, color: Color(0xFF6C5946), height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Dismiss', style: TextStyle(color: Color(0xFF8C7A6B))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF7B4E2E),
+              foregroundColor: const Color(0xFFFFF8EA),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
   @override
   void dispose() {
+    _orbTimer.cancel();
+    _thinkingCtrl.dispose();
     widget.engine.removeListener(_onEngineChange);
     super.dispose();
   }
@@ -100,133 +200,159 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
     if (mounted) setState(() {});
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     final state = widget.engine.state;
     final soundLevel = widget.engine.soundLevel;
 
-    return Material(
-      color: Colors.transparent,
-      child: Stack(
-        children: [
-          // Fullscreen Backdrop
-          Positioned.fill(
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Color(0xFFFFFDF8),
-                    Color(0xFFF7EFE2),
-                    Color(0xFFEBE0D0),
-                  ],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarBrightness: Brightness.light,
+        statusBarIconBrightness: Brightness.dark,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: Stack(
+          children: [
+            // ── Fullscreen backdrop ────────────────────────────────────────
+            Positioned.fill(
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Color(0xFFFFFDF8),
+                      Color(0xFFF7EFE2),
+                      Color(0xFFEBE0D0),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
                 ),
               ),
             ),
-          ),
 
-          // Main Layout
-          SafeArea(
-            child: Column(
-              children: [
-                // Top Header Bar
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF7B4E2E).withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.graphic_eq_rounded,
-                              color: Color(0xFF7B4E2E),
-                              size: 20,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            'Live Voice Mode',
-                            style: GoogleFonts.notoSerif(
-                              fontSize: 19,
-                              fontWeight: FontWeight.bold,
-                              color: const Color(0xFF2D241C),
-                            ),
-                          ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          // Toggle Captions Button
-                          IconButton(
-                            tooltip: _showCaptions ? 'Hide Captions' : 'Show Captions',
-                            style: IconButton.styleFrom(
-                              backgroundColor: _showCaptions
-                                  ? const Color(0xFF7B4E2E).withValues(alpha: 0.15)
-                                  : Colors.transparent,
-                            ),
-                            icon: Icon(
-                              _showCaptions
-                                  ? Icons.subtitles_rounded
-                                  : Icons.subtitles_off_outlined,
-                              color: const Color(0xFF7B4E2E),
-                            ),
-                            onPressed: () {
-                              setState(() => _showCaptions = !_showCaptions);
-                            },
-                          ),
-                          const SizedBox(width: 8),
-                          // Exit Button
-                          IconButton(
-                            tooltip: 'Exit Voice Mode',
-                            style: IconButton.styleFrom(
-                              backgroundColor: const Color(0xFF7B4E2E).withValues(alpha: 0.12),
-                            ),
-                            icon: const Icon(
-                              Icons.close_rounded,
-                              color: Color(0xFF2D241C),
-                              size: 24,
-                            ),
-                            onPressed: widget.onClose,
-                          ),
-                        ],
-                      ),
-                    ],
+            // ── Main content ───────────────────────────────────────────────
+            SafeArea(
+              child: Column(
+                children: [
+                  // Top header bar
+                  _buildTopBar(),
+
+                  // Status pill
+                  _buildStatusHeader(state),
+                  if (widget.engine.isPreparingTts) _buildTtsDownloadProgress(),
+
+                  // Orb
+                  Expanded(
+                    child: Center(
+                      child: _buildAnimatedLiquidOrb(state, soundLevel),
+                    ),
                   ),
-                ),
 
-                // Status Banner
-                _buildStatusHeader(state),
+                  // Live captions
+                  if (_showCaptions) _buildLiveCaptionsBox(state),
+                  const SizedBox(height: 16),
 
-                // Center Animated Glass Orb Focal Point
-                Expanded(
-                  child: Center(
-                    child: _buildAnimatedLiquidOrb(state, soundLevel),
-                  ),
-                ),
+                  // Bottom mic / barge-in
+                  _buildBottomControls(state),
+                  const SizedBox(height: 12),
 
-                // Live Captions Subtitle Box
-                if (_showCaptions) _buildLiveCaptionsBox(state),
-
-                const SizedBox(height: 16),
-
-                // Bottom Action Bar & Barge-in Controls
-                _buildBottomControls(state),
-
-                const SizedBox(height: 24),
-              ],
+                  // Voice picker (KittenTTS voices)
+                  _buildVoicePicker(),
+                  const SizedBox(height: 24),
+                ],
+              ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Top bar ───────────────────────────────────────────────────────────────
+
+  Widget _buildTopBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              // Icon pill with glass
+              LiquidGlassSurface(
+                isCircle: true,
+                width: 40,
+                height: 40,
+                padding: EdgeInsets.zero,
+                backgroundColor: const Color(0xFF7B4E2E).withValues(alpha: 0.12),
+                highlightColor: Colors.white.withValues(alpha: 0.5),
+                sigma: 8,
+                child: const Icon(
+                  Icons.graphic_eq_rounded,
+                  color: Color(0xFF7B4E2E),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Live Voice Mode',
+                style: GoogleFonts.notoSerif(
+                  fontSize: 19,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF2D241C),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              _glassIconButton(
+                tooltip: _showCaptions ? 'Hide Captions' : 'Show Captions',
+                icon: _showCaptions
+                    ? Icons.subtitles_rounded
+                    : Icons.subtitles_off_outlined,
+                onPressed: () => setState(() => _showCaptions = !_showCaptions),
+              ),
+              const SizedBox(width: 8),
+              _glassIconButton(
+                tooltip: 'Exit Voice Mode',
+                icon: Icons.close_rounded,
+                onPressed: widget.onClose,
+              ),
+            ],
           ),
         ],
       ),
     );
   }
+
+  Widget _glassIconButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: LiquidGlassSurface(
+        width: 42,
+        height: 42,
+        borderRadius: BorderRadius.circular(15),
+        padding: EdgeInsets.zero,
+        backgroundColor: const Color(0xFFFFFDF8).withValues(alpha: 0.52),
+        highlightColor: Colors.white.withValues(alpha: 0.6),
+        sigma: 10,
+        child: IconButton(
+          icon: Icon(icon, color: const Color(0xFF7B4E2E)),
+          onPressed: onPressed,
+        ),
+      ),
+    );
+  }
+
+  // ── Status pill ───────────────────────────────────────────────────────────
 
   Widget _buildStatusHeader(LiveVoiceState state) {
     String statusText;
@@ -249,7 +375,8 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
         statusText = widget.engine.errorMessage.isNotEmpty
             ? widget.engine.errorMessage
             : 'Voice error occurred.';
-        statusColor = const Color(0xFFB9381E);
+        // Muted app accent — NOT solid red.
+        statusColor = const Color(0xFFA2675A);
         break;
       case LiveVoiceState.idle:
       default:
@@ -260,14 +387,14 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
 
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 250),
-      child: Container(
+      child: LiquidGlassSurface(
         key: ValueKey(statusText),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-        decoration: BoxDecoration(
-          color: statusColor.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: statusColor.withValues(alpha: 0.2)),
-        ),
+        borderRadius: BorderRadius.circular(20),
+        margin: const EdgeInsets.symmetric(horizontal: 20),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        backgroundColor: statusColor.withValues(alpha: 0.10),
+        highlightColor: Colors.white.withValues(alpha: 0.5),
+        sigma: 8,
         child: Text(
           statusText,
           style: TextStyle(
@@ -281,11 +408,47 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
     );
   }
 
+  // ── TTS download progress ─────────────────────────────────────────────────
+
+  Widget _buildTtsDownloadProgress() {
+    final progress = widget.engine.ttsDownloadProgress;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 10, 28, 0),
+      child: LiquidGlassSurface(
+        borderRadius: BorderRadius.circular(16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        highlightColor: Colors.white.withValues(alpha: 0.55),
+        sigma: 10,
+        child: Column(
+          children: [
+            Text(
+              widget.engine.ttsStatus.isEmpty
+                  ? 'Preparing voice model…'
+                  : widget.engine.ttsStatus,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+            ),
+            const SizedBox(height: 7),
+            LinearProgressIndicator(
+              value: progress > 0 ? progress : null,
+              minHeight: 5,
+              borderRadius: BorderRadius.circular(99),
+              color: const Color(0xFF9B6B43),
+              backgroundColor: const Color(0xFFE5D5C0),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Liquid glass orb ──────────────────────────────────────────────────────
+
   Widget _buildAnimatedLiquidOrb(LiveVoiceState state, double soundLevel) {
-    // Determine gradient colors & scale per state using implicit animations
     List<Color> gradientColors;
     double orbScale;
     double blurSigma;
+    // Sweep direction for thinking animation
+    Alignment gradientCenter;
 
     switch (state) {
       case LiveVoiceState.listening:
@@ -294,8 +457,10 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
           const Color(0xFFD8B98D),
           const Color(0xFFB88E5E),
         ];
-        orbScale = 1.0 + (soundLevel * 0.35);
+        // Amplitude-reactive: soundLevel drives extra scale.
+        orbScale = 1.0 + (soundLevel * 0.35) + (_pulseUp ? 0.025 : 0.0);
         blurSigma = 18.0;
+        gradientCenter = Alignment.topLeft;
         break;
       case LiveVoiceState.thinking:
         gradientColors = [
@@ -303,8 +468,11 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
           const Color(0xFF7B4E2E),
           const Color(0xFF56331A),
         ];
-        orbScale = 1.05;
+        orbScale = 1.04 + (_pulseUp ? 0.025 : 0.0);
         blurSigma = 24.0;
+        // Sweep back and forth for gradient-sweep effect.
+        gradientCenter =
+            _thinkingSweep ? Alignment.bottomRight : Alignment.topLeft;
         break;
       case LiveVoiceState.speaking:
         gradientColors = [
@@ -312,17 +480,20 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
           const Color(0xFFE4B373),
           const Color(0xFFC58B49),
         ];
-        orbScale = 1.15;
+        orbScale = 1.10 + (_pulseUp ? 0.05 : 0.0);
         blurSigma = 20.0;
+        gradientCenter = Alignment.topLeft;
         break;
       case LiveVoiceState.error:
+        // Muted app accent — NOT solid red.
         gradientColors = [
-          const Color(0xFFF8D7DA),
-          const Color(0xFFE29399),
-          const Color(0xFFB9381E),
+          const Color(0xFFF0E2DD),
+          const Color(0xFFD4AFA6),
+          const Color(0xFFA2675A),
         ];
-        orbScale = 0.95;
+        orbScale = 0.97;
         blurSigma = 12.0;
+        gradientCenter = Alignment.topLeft;
         break;
       case LiveVoiceState.idle:
       default:
@@ -331,32 +502,40 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
           const Color(0xFFE5D5C0),
           const Color(0xFFCDB89E),
         ];
-        orbScale = 1.0;
+        // Slow idle pulse.
+        orbScale = _pulseUp ? 1.035 : 1.0;
         blurSigma = 15.0;
+        gradientCenter = Alignment.topLeft;
         break;
     }
 
     return GestureDetector(
       onTap: () {
+        HapticFeedback.lightImpact();
         if (state == LiveVoiceState.speaking) {
           widget.engine.interrupt();
-        } else if (state == LiveVoiceState.idle || state == LiveVoiceState.error) {
+        } else if (state == LiveVoiceState.idle ||
+            state == LiveVoiceState.error) {
           widget.engine.startListening(onFinalResult: widget.onSendPrompt);
         }
       },
       child: AnimatedScale(
         scale: orbScale,
-        duration: const Duration(milliseconds: 180),
+        duration: state == LiveVoiceState.idle
+            ? const Duration(milliseconds: 1050)
+            : const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
+          duration: state == LiveVoiceState.thinking
+              ? const Duration(milliseconds: 1050)
+              : const Duration(milliseconds: 360),
           width: 220,
           height: 220,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: RadialGradient(
               colors: gradientColors,
-              center: Alignment.topLeft,
+              center: gradientCenter,
               radius: 1.1,
             ),
             boxShadow: [
@@ -372,27 +551,27 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
               ),
             ],
           ),
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.4),
-                    width: 2.0,
-                  ),
-                ),
-                child: Center(
-                  child: Icon(
-                    state == LiveVoiceState.speaking
-                        ? Icons.volume_up_rounded
-                        : state == LiveVoiceState.thinking
-                            ? Icons.auto_awesome_rounded
-                            : Icons.mic_rounded,
-                    size: 54,
-                    color: const Color(0xFF2D241C).withValues(alpha: 0.85),
-                  ),
+          child: LiquidGlassSurface(
+            isCircle: true,
+            padding: EdgeInsets.zero,
+            // Translucent fill with blur for the glass look.
+            backgroundColor: gradientColors[0].withValues(alpha: 0.34),
+            // Bright edge highlight — key for the glass effect.
+            highlightColor: Colors.white.withValues(alpha: 0.75),
+            shadowColor: gradientColors.last.withValues(alpha: 0.6),
+            sigma: 14,
+            child: Center(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                child: Icon(
+                  key: ValueKey(state),
+                  state == LiveVoiceState.speaking
+                      ? Icons.volume_up_rounded
+                      : state == LiveVoiceState.thinking
+                          ? Icons.auto_awesome_rounded
+                          : Icons.mic_rounded,
+                  size: 54,
+                  color: const Color(0xFF2D241C).withValues(alpha: 0.85),
                 ),
               ),
             ),
@@ -402,9 +581,12 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
     );
   }
 
+  // ── Captions box ──────────────────────────────────────────────────────────
+
   Widget _buildLiveCaptionsBox(LiveVoiceState state) {
     String textToShow = '';
-    if (state == LiveVoiceState.listening || state == LiveVoiceState.thinking) {
+    if (state == LiveVoiceState.listening ||
+        state == LiveVoiceState.thinking) {
       textToShow = widget.engine.recognizedText;
     } else if (state == LiveVoiceState.speaking) {
       textToShow = widget.engine.spokenText;
@@ -423,6 +605,8 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
       child: LiquidGlassSurface(
         borderRadius: BorderRadius.circular(16),
         padding: const EdgeInsets.all(14),
+        highlightColor: Colors.white.withValues(alpha: 0.55),
+        sigma: 12,
         child: SingleChildScrollView(
           reverse: true,
           child: Text(
@@ -440,40 +624,90 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay> {
     );
   }
 
+  // ── Bottom mic controls ───────────────────────────────────────────────────
+
   Widget _buildBottomControls(LiveVoiceState state) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // Barge-in / Mic Action Button
-        FloatingActionButton.large(
-          elevation: 4,
-          backgroundColor: state == LiveVoiceState.speaking
-              ? const Color(0xFFB5784C)
-              : state == LiveVoiceState.listening
-                  ? const Color(0xFF7B4E2E)
-                  : const Color(0xFF8C5C39),
-          foregroundColor: const Color(0xFFFFF8EA),
-          child: Icon(
-            state == LiveVoiceState.speaking
-                ? Icons.stop_rounded
-                : state == LiveVoiceState.listening
-                    ? Icons.mic_rounded
-                    : Icons.mic_none_rounded,
-            size: 38,
+        LiquidGlassSurface(
+          isCircle: true,
+          width: 76,
+          height: 76,
+          padding: EdgeInsets.zero,
+          backgroundColor: const Color(0xFF9B6B43).withValues(alpha: 0.32),
+          highlightColor: Colors.white.withValues(alpha: 0.65),
+          sigma: 12,
+          child: IconButton(
+            iconSize: 38,
+            color: const Color(0xFF2D241C),
+            icon: Icon(
+              state == LiveVoiceState.speaking
+                  ? Icons.stop_rounded
+                  : state == LiveVoiceState.listening
+                      ? Icons.mic_rounded
+                      : Icons.mic_none_rounded,
+            ),
+            onPressed: () {
+              HapticFeedback.mediumImpact();
+              if (state == LiveVoiceState.speaking) {
+                widget.engine.interrupt();
+                widget.engine.startListening(
+                    onFinalResult: widget.onSendPrompt);
+              } else if (state == LiveVoiceState.listening) {
+                widget.engine.stopListening();
+              } else {
+                widget.engine.startListening(
+                    onFinalResult: widget.onSendPrompt);
+              }
+            },
           ),
-          onPressed: () {
-            if (state == LiveVoiceState.speaking) {
-              // Immediate barge-in interrupt
-              widget.engine.interrupt();
-              widget.engine.startListening(onFinalResult: widget.onSendPrompt);
-            } else if (state == LiveVoiceState.listening) {
-              widget.engine.stopListening();
-            } else {
-              widget.engine.startListening(onFinalResult: widget.onSendPrompt);
-            }
-          },
         ),
       ],
+    );
+  }
+
+  // ── Voice picker ──────────────────────────────────────────────────────────
+
+  Widget _buildVoicePicker() {
+    final voice = widget.engine.kittenVoice;
+    return LiquidGlassSurface(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      borderRadius: BorderRadius.circular(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      highlightColor: Colors.white.withValues(alpha: 0.55),
+      sigma: 10,
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: voice,
+          isExpanded: true,
+          icon: const Icon(Icons.keyboard_arrow_down_rounded),
+          items: widget.engine.kittenVoices
+              .map(
+                (v) => DropdownMenuItem(
+                  value: v,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.record_voice_over_rounded,
+                          size: 16, color: Color(0xFF9B6B43)),
+                      const SizedBox(width: 8),
+                      Text(
+                        'KittenTTS · $v',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF2D241C),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: (v) {
+            if (v != null) widget.engine.setKittenVoice(v);
+          },
+        ),
+      ),
     );
   }
 }

@@ -49,6 +49,7 @@ class DeepResearchOrchestrator:
         self,
         stage_id: str,
         phase_title: str,
+        summary: str = "",
         facts: list[dict[str, str]] | None = None,
         findings: list[dict[str, str]] | None = None,
         skipped_pdfs: list[dict[str, str]] | None = None,
@@ -67,6 +68,7 @@ class DeepResearchOrchestrator:
         new_phase = {
             "stage_id": stage_id,
             "phase_title": phase_title,
+            "summary": summary or "",
             "facts": facts or [],
             "findings": findings or [],
             "skipped_pdfs": skipped_pdfs or [],
@@ -169,6 +171,7 @@ class DeepResearchOrchestrator:
                 {
                     "stage_id": phase.get("stage_id", ""),
                     "phase_title": phase.get("phase_title", ""),
+                    "summary": phase.get("summary", ""),
                     "facts": [f for f in facts if isinstance(f, dict)],
                     "findings": findings_sorted,
                     "skipped_pdfs": list(phase.get("skipped_pdfs") or []),
@@ -193,6 +196,7 @@ class DeepResearchOrchestrator:
             base = {
                 "stage_id": phase["stage_id"],
                 "phase_title": phase["phase_title"],
+                "summary": phase["summary"],
                 "facts": [],
                 "findings": [],
                 "skipped_pdfs": phase["skipped_pdfs"][:10],
@@ -233,7 +237,7 @@ class DeepResearchOrchestrator:
         non_empty = [
             p
             for p in accepted
-            if p["facts"] or p["findings"] or p["skipped_pdfs"] or p["failed_fetches"]
+            if p["summary"] or p["facts"] or p["findings"] or p["skipped_pdfs"] or p["failed_fetches"]
         ]
         truncated_phases = 0
         if not non_empty and accepted:
@@ -289,3 +293,4 @@ class DeepResearchOrchestrator:
             temp_file.replace(path)
         except Exception as e:
             logger.error("Failed to write %s: %s", path, e)
+            raise

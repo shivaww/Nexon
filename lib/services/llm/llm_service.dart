@@ -372,6 +372,9 @@ class LLMService {
   void _setProviderHeaders(HttpClientRequest request, LLMProvider provider) {
     if (provider.apiKey.trim().isNotEmpty) {
       request.headers.set('Authorization', 'Bearer ${provider.apiKey.trim()}');
+      if (provider.id == 'sarvam') {
+        request.headers.set('api-subscription-key', provider.apiKey.trim());
+      }
     }
     for (final entry in provider.customHeaders.entries) {
       request.headers.set(entry.key, entry.value);

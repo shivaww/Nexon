@@ -28,6 +28,11 @@
     <!-- ── Post notifications (Android 13+) ───────────────────────── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ── Live Voice microphone access ───────────────────────────── -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
     <!-- ── Query Termux & Browsers ────────────────────────────────── -->
     <queries>
         <package android:name="com.termux" />

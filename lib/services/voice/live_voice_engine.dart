@@ -1,43 +1,57 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter_kitten_tts/flutter_kitten_tts.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
-enum LiveVoiceState {
-  idle,
-  listening,
-  thinking,
-  speaking,
-  error,
-}
+enum LiveVoiceState { idle, listening, thinking, speaking, error }
 
+/// Hands-free speech recognition and reply playback.
+///
+/// KittenTTS is created only when it is first needed. If model setup or PCM
+/// playback fails, the engine releases it and uses native flutter_tts instead.
 class LiveVoiceEngine extends ChangeNotifier {
-  LiveVoiceEngine() {
-    _initTts();
-  }
-
   final SpeechToText _speechToText = SpeechToText();
-  final FlutterTts _flutterTts = FlutterTts();
+  final List<String> kittenVoices = const [
+    'Bella', 'Jasper', 'Luna', 'Bruno', 'Rosie', 'Hugo', 'Kiki', 'Leo',
+  ];
+
+  FlutterTts? _flutterTts;
+  KittenTTS? _kittenTts;
+  AudioPlayer? _audioPlayer;
+  bool _speechInitialized = false;
+  bool _kittenReady = false;
+  bool _kittenAttempted = false;
+  bool _isPreparingTts = false;
+  double _ttsDownloadProgress = 0;
+  String _ttsStatus = '';
+  String _kittenVoice = 'Jasper';
+  String _activeTtsEngine = 'KittenTTS';
 
   LiveVoiceState _state = LiveVoiceState.idle;
   LiveVoiceState get state => _state;
-
   bool _isSpeechAvailable = false;
   bool get isSpeechAvailable => _isSpeechAvailable;
-
   String _recognizedText = '';
   String get recognizedText => _recognizedText;
-
   String _spokenText = '';
   String get spokenText => _spokenText;
-
   String _errorMessage = '';
   String get errorMessage => _errorMessage;
-
-  double _soundLevel = 0.0;
+  double _soundLevel = 0;
   double get soundLevel => _soundLevel;
+  bool get isPreparingTts => _isPreparingTts;
+  double get ttsDownloadProgress => _ttsDownloadProgress;
+  String get ttsStatus => _ttsStatus;
+  String get activeTtsEngine => _activeTtsEngine;
+  String get kittenVoice => _kittenVoice;
 
   final List<String> _sentenceQueue = [];
   bool _isTtsSpeaking = false;
@@ -50,17 +64,59 @@ class LiveVoiceEngine extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  void setKittenVoice(String voice) {
+    if (!kittenVoices.contains(voice) || voice == _kittenVoice) return;
+    _kittenVoice = voice;
+    notifyListeners();
+  }
+
+  // ── Permission ────────────────────────────────────────────────────────────
+
+  /// Returns the current microphone [PermissionStatus] without requesting it.
+  Future<PermissionStatus> micPermissionStatus() =>
+      Permission.microphone.status;
+
+  /// Returns true if microphone is already granted.
   Future<bool> checkMicPermission() async {
     final status = await Permission.microphone.status;
     return status.isGranted;
   }
 
+  /// Fires the real OS RECORD_AUDIO dialog if not already granted.
+  /// Returns true when the permission is granted after the call.
   Future<bool> requestMicPermission() async {
-    final status = await Permission.microphone.request();
-    return status.isGranted;
+    var status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+
+    if (status.isPermanentlyDenied) {
+      _errorMessage =
+          'Microphone access is blocked. Enable it in Android app settings.';
+      _setState(LiveVoiceState.error);
+      return false;
+    }
+
+    // Fire the real OS dialog.
+    status = await Permission.microphone.request();
+
+    if (status.isGranted) return true;
+
+    _errorMessage = status.isPermanentlyDenied
+        ? 'Microphone access is blocked. Enable it in Android app settings.'
+        : 'Microphone permission was not granted.';
+    _setState(LiveVoiceState.error);
+    return false;
   }
 
   Future<bool> initSpeech() async {
+    // Re-check permission — must be granted before initialising STT.
+    if (!await checkMicPermission()) return false;
+
+    if (_speechInitialized && _isSpeechAvailable) return true;
+
+    // Allow re-initialization if the previous attempt failed.
+    _speechInitialized = false;
+
     try {
       _isSpeechAvailable = await _speechToText.initialize(
         onError: (val) {
@@ -68,54 +124,38 @@ class LiveVoiceEngine extends ChangeNotifier {
           _setState(LiveVoiceState.error);
         },
         onStatus: (status) {
-          if (status == 'done' || status == 'notListening') {
-            if (_state == LiveVoiceState.listening && _recognizedText.isNotEmpty) {
-              _setState(LiveVoiceState.thinking);
-            }
+          if ((status == 'done' || status == 'notListening') &&
+              _state == LiveVoiceState.listening &&
+              _recognizedText.isNotEmpty) {
+            _setState(LiveVoiceState.thinking);
           }
         },
       );
+      _speechInitialized = _isSpeechAvailable; // only mark done when success
       if (!_isSpeechAvailable) {
-        _errorMessage = 'Microphone permission denied or speech recognition unavailable on device.';
+        _errorMessage = 'Speech recognition is unavailable on this device.';
         _setState(LiveVoiceState.error);
       }
       return _isSpeechAvailable;
     } catch (e) {
-      _errorMessage = 'Speech init failed: $e';
+      _errorMessage = 'Speech initialization failed.';
+      debugPrint('LiveVoice speech init failed: $e');
       _setState(LiveVoiceState.error);
       return false;
     }
   }
 
-  void _initTts() {
-    _flutterTts.setCompletionHandler(() {
-      _isTtsSpeaking = false;
-      if (_currentSentenceCompleter != null && !_currentSentenceCompleter!.isCompleted) {
-        _currentSentenceCompleter!.complete();
-      }
-      _playNextSentence();
-    });
-
-    _flutterTts.setErrorHandler((msg) {
-      _isTtsSpeaking = false;
-      if (_currentSentenceCompleter != null && !_currentSentenceCompleter!.isCompleted) {
-        _currentSentenceCompleter!.complete();
-      }
-      _playNextSentence();
-    });
-  }
+  // ── Listening ─────────────────────────────────────────────────────────────
 
   Future<void> startListening({required ValueChanged<String> onFinalResult}) async {
-    if (!_isSpeechAvailable) {
-      final ok = await initSpeech();
-      if (!ok) return;
-    }
+    // Permission must be granted before speech_to_text is used.
+    if (!await requestMicPermission()) return;
+    if (!await initSpeech()) return;
 
     await stopTts();
     _recognizedText = '';
     _errorMessage = '';
     _setState(LiveVoiceState.listening);
-
     await _speechToText.listen(
       onResult: (SpeechRecognitionResult result) {
         _recognizedText = result.recognizedWords;
@@ -125,7 +165,7 @@ class LiveVoiceEngine extends ChangeNotifier {
           onFinalResult(_recognizedText.trim());
         }
       },
-      onSoundLevelChange: (level) {
+      onSoundLevelChange: (double level) {
         _soundLevel = level.clamp(0.0, 10.0) / 10.0;
         notifyListeners();
       },
@@ -136,9 +176,9 @@ class LiveVoiceEngine extends ChangeNotifier {
     );
   }
 
-  Future<void> stopListening() async {
-    await _speechToText.stop();
-  }
+  Future<void> stopListening() => _speechToText.stop();
+
+  // ── TTS streaming ─────────────────────────────────────────────────────────
 
   void startStreamResponse() {
     _streamBuffer.clear();
@@ -151,61 +191,180 @@ class LiveVoiceEngine extends ChangeNotifier {
     _streamBuffer.write(token);
     _spokenText = _streamBuffer.toString();
     notifyListeners();
-
     final currentText = _streamBuffer.toString();
-    final RegExp sentenceEnd = RegExp(r'([.!?\n]+)');
-    final matches = sentenceEnd.allMatches(currentText).toList();
-
-    if (matches.isNotEmpty) {
-      int lastCut = 0;
-      for (final m in matches) {
-        final cutIndex = m.end;
-        final sentence = currentText.substring(lastCut, cutIndex).trim();
-        if (sentence.isNotEmpty) {
-          _enqueueSentence(sentence);
-        }
-        lastCut = cutIndex;
-      }
-      _streamBuffer = StringBuffer(currentText.substring(lastCut));
+    final matches = RegExp(r'([.!?\n]+)').allMatches(currentText).toList();
+    if (matches.isEmpty) return;
+    var lastCut = 0;
+    for (final match in matches) {
+      final sentence = currentText.substring(lastCut, match.end).trim();
+      if (sentence.isNotEmpty) _enqueueSentence(sentence);
+      lastCut = match.end;
     }
+    _streamBuffer = StringBuffer(currentText.substring(lastCut));
   }
 
   void endStreamResponse() {
     final remaining = _streamBuffer.toString().trim();
-    if (remaining.isNotEmpty) {
-      _enqueueSentence(remaining);
-    }
+    if (remaining.isNotEmpty) _enqueueSentence(remaining);
     _streamBuffer.clear();
   }
 
   void _enqueueSentence(String rawSentence) {
     final clean = stripSsml(rawSentence);
-    if (clean.trim().isEmpty) return;
-    _sentenceQueue.add(clean.trim());
+    if (clean.isEmpty) return;
+    _sentenceQueue.add(clean);
+    if (!_isTtsSpeaking) unawaited(_playNextSentence());
+  }
 
-    if (!_isTtsSpeaking) {
-      _playNextSentence();
+  // ── KittenTTS ─────────────────────────────────────────────────────────────
+
+  Future<bool> _ensureKittenTts() async {
+    if (_kittenReady) return true;
+    if (_kittenAttempted) return false;
+    _kittenAttempted = true;
+    _isPreparingTts = true;
+    _ttsDownloadProgress = 0;
+    _ttsStatus = 'Preparing high-quality voice…';
+    notifyListeners();
+    try {
+      await _disposeNativeTts(); // don't keep both loaded
+      final kitten = KittenTTS();
+      await kitten.initialize(onProgress: (double progress, String status) {
+        _ttsDownloadProgress = progress.clamp(0.0, 1.0);
+        _ttsStatus = status;
+        notifyListeners();
+      });
+      _kittenTts = kitten;
+      _kittenReady = true;
+      _activeTtsEngine = 'KittenTTS';
+      debugPrint('LiveVoice active TTS engine: KittenTTS');
+      return true;
+    } catch (e) {
+      await _disposeKittenTts();
+      debugPrint('LiveVoice KittenTTS failed; using flutter_tts fallback: $e');
+      return false;
+    } finally {
+      _isPreparingTts = false;
+      _ttsStatus = '';
+      notifyListeners();
     }
   }
 
   Future<void> _playNextSentence() async {
     if (_sentenceQueue.isEmpty) {
       _isTtsSpeaking = false;
-      if (_state == LiveVoiceState.speaking) {
-        _setState(LiveVoiceState.idle);
-      }
+      if (_state == LiveVoiceState.speaking) _setState(LiveVoiceState.idle);
       return;
     }
-
     _isTtsSpeaking = true;
     _setState(LiveVoiceState.speaking);
     final sentence = _sentenceQueue.removeAt(0);
-
     _currentSentenceCompleter = Completer<void>();
-    await _flutterTts.speak(sentence);
+
+    if (await _ensureKittenTts()) {
+      try {
+        final audio = await _kittenTts!.generate(sentence, voice: _kittenVoice, speed: 1.0);
+        await _playKittenAudio(audio);
+        _finishSentence();
+        return;
+      } catch (e) {
+        debugPrint('LiveVoice KittenTTS generation/playback failed; falling back: $e');
+        await _disposeKittenTts();
+      }
+    }
+
+    // Fallback: native flutter_tts.
+    try {
+      await _speakWithNative(sentence);
+    } catch (e) {
+      debugPrint('LiveVoice native TTS fallback failed: $e');
+      _errorMessage = 'Voice playback is unavailable.';
+      _finishSentence();
+      _setState(LiveVoiceState.error);
+    }
   }
 
-  /// Instantly stops TTS playback, clears speech queues, and triggers barge-in.
+  Future<void> _speakWithNative(String sentence) async {
+    await _disposeKittenTts(); // don't keep both loaded simultaneously
+    final tts = _flutterTts ??= FlutterTts();
+    _activeTtsEngine = 'Native TTS';
+    debugPrint('LiveVoice active TTS engine: Native TTS');
+    tts.setCompletionHandler(_finishSentence);
+    tts.setCancelHandler(_finishSentence);
+    tts.setErrorHandler((message) => _finishSentence());
+    await tts.setLanguage('en-US');
+    await tts.setSpeechRate(0.48);
+    await tts.setVolume(1.0);
+    await tts.speak(sentence);
+  }
+
+  Future<void> _playKittenAudio(Float32List samples) async {
+    if (samples.isEmpty) throw StateError('KittenTTS returned no audio samples');
+    final dir = await getTemporaryDirectory();
+    final file = File('${dir.path}/live_voice_kitten.wav');
+    await file.writeAsBytes(_wavBytes(samples, sampleRate: 24000), flush: true);
+    final player = _audioPlayer ??= AudioPlayer();
+    await player.stop();
+    await player.setFilePath(file.path);
+    final completed = player.playerStateStream.firstWhere(
+      (state) => state.processingState == ProcessingState.completed,
+    );
+    await player.play();
+    await completed;
+  }
+
+  Uint8List _wavBytes(Float32List samples, {required int sampleRate}) {
+    final bytes = ByteData(44 + samples.length * 4);
+    void ascii(int offset, String value) {
+      for (var i = 0; i < value.length; i++) {
+        bytes.setUint8(offset + i, value.codeUnitAt(i));
+      }
+    }
+    const channels = 1;
+    const bitsPerSample = 32;
+    final byteRate = sampleRate * channels * bitsPerSample ~/ 8;
+    final blockAlign = channels * bitsPerSample ~/ 8;
+    final dataSize = samples.length * 4;
+    ascii(0, 'RIFF');
+    bytes.setUint32(4, 36 + dataSize, Endian.little);
+    ascii(8, 'WAVE');
+    ascii(12, 'fmt ');
+    bytes.setUint32(16, 16, Endian.little);
+    bytes.setUint16(20, 3, Endian.little); // IEEE float PCM
+    bytes.setUint16(22, channels, Endian.little);
+    bytes.setUint32(24, sampleRate, Endian.little);
+    bytes.setUint32(28, byteRate, Endian.little);
+    bytes.setUint16(32, blockAlign, Endian.little);
+    bytes.setUint16(34, bitsPerSample, Endian.little);
+    ascii(36, 'data');
+    bytes.setUint32(40, dataSize, Endian.little);
+    for (var i = 0; i < samples.length; i++) {
+      bytes.setFloat32(44 + i * 4, samples[i], Endian.little);
+    }
+    return bytes.buffer.asUint8List();
+  }
+
+  void _finishSentence() {
+    _isTtsSpeaking = false;
+    if (_currentSentenceCompleter != null && !_currentSentenceCompleter!.isCompleted) {
+      _currentSentenceCompleter!.complete();
+    }
+    unawaited(_playNextSentence());
+  }
+
+  Future<void> _disposeNativeTts() async {
+    final tts = _flutterTts;
+    _flutterTts = null;
+    if (tts != null) await tts.stop();
+  }
+
+  Future<void> _disposeKittenTts() async {
+    final kitten = _kittenTts;
+    _kittenTts = null;
+    _kittenReady = false;
+    if (kitten != null) await kitten.dispose();
+  }
+
   Future<void> interrupt() async {
     await stopTts();
     await _speechToText.stop();
@@ -216,18 +375,24 @@ class LiveVoiceEngine extends ChangeNotifier {
     _sentenceQueue.clear();
     _streamBuffer.clear();
     _isTtsSpeaking = false;
-    await _flutterTts.stop();
+    await _audioPlayer?.stop();
+    await _flutterTts?.stop();
+    if (_currentSentenceCompleter != null && !_currentSentenceCompleter!.isCompleted) {
+      _currentSentenceCompleter!.complete();
+    }
   }
 
-  /// Strip or gracefully degrade SSML tags for native OS TTS compatibility.
-  String stripSsml(String text) {
-    return text.replaceAll(RegExp(r'<[^>]*>'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
-  }
+  String stripSsml(String text) => text
+      .replaceAll(RegExp(r'<[^>]*>'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 
   @override
   void dispose() {
     _speechToText.cancel();
-    _flutterTts.stop();
+    _flutterTts?.stop();
+    _kittenTts?.dispose();
+    _audioPlayer?.dispose();
     super.dispose();
   }
 }
