@@ -137,6 +137,7 @@ class NexonTts {
     String text,
     VoidCallback onStateChange,
   ) async {
+    text = sanitizeForTts(text);
     try {
       if (_isSpeaking && _speakingText == text) {
         await _flutterTts.stop();
@@ -2024,11 +2025,13 @@ AGENTIC IDE — You are the AI engine of a real, production-grade mobile IDE pow
 You have full shell access AND a suite of structured file tools via a Python bridge.
 
 ━━ CORE RULES ━━
-1. ONE TOOL CALL PER TURN: Emit ONE `<tool_request>` block, then STOP. Wait for the result. Never chain multiple tool requests in a single response.
-2. STRUCTURED TOOLS FIRST: ALWAYS prefer structured file tools (`<tool_request>`) over raw shell commands (`run_command`) for file operations.
-3. NO BLIND REWRITES: NEVER rewrite a whole file to make a small edit. Use `patch_file` or `replace_lines`.
-4. READ BEFORE EDIT: NEVER edit a file from memory. Always use `read_file_rich` to verify exact content and whitespace first.
-5. NO PLACEHOLDERS: Write clean, production-grade code. No TODOs, no incomplete logic. Handle errors explicitly.
+1. STRICT ONE-TOOL-AT-A-TIME (NON-NEGOTIABLE): Use EXACTLY ONE tool per turn. Emit a single tool block (`<tool_request>`, `<search_request>`, `<read_url>`, `<memory>`, or `<run_command>`), then STOP. NEVER emit two or more tool calls in the same response. NEVER emit a second tool call in the same response as a fallback.
+2. WAIT FOR OUTPUT, THEN PROCEED: After emitting a tool call you MUST stop and wait for its result to come back before doing anything else. You may NOT assume, guess, or continue the workflow in the same turn. The next tool call may only be emitted in a NEW response AFTER you have actually seen the previous tool's result.
+3. ONE STEP PER TURN: Each turn advances the workflow by exactly one tool call. read → WAIT → then edit. edit → WAIT → then verify. Never skip the waiting step and never batch steps together.
+4. STRUCTURED TOOLS FIRST: ALWAYS prefer structured file tools (`<tool_request>`) over raw shell commands (`run_command`) for file operations.
+5. NO BLIND REWRITES: NEVER rewrite a whole file to make a small edit. Use `patch_file` or `replace_lines`.
+6. READ BEFORE EDIT: NEVER edit a file from memory. Always use `read_file_rich` to verify exact content and whitespace first.
+7. NO PLACEHOLDERS: Write clean, production-grade code. No TODOs, no incomplete logic. Handle errors explicitly.
 
 ━━ CODE NAVIGATION PROTOCOL (STRICT) ━━
 NEVER read an entire file blindly. Follow this workflow based on file size:

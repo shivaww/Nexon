@@ -242,8 +242,8 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   void _enqueueSentence(String rawSentence) {
-    final clean = stripSsml(rawSentence);
-    if (clean.isEmpty) return;
+    final clean = sanitizeForNaturalTts(stripSsml(rawSentence));
+    if (clean.length < 2) return;
     _sentenceQueue.add(clean);
     if (!_isTtsSpeaking) unawaited(_playNextSentence());
   }
@@ -293,7 +293,8 @@ class LiveVoiceEngine extends ChangeNotifier {
     }
     _isTtsSpeaking = true;
     _setState(LiveVoiceState.speaking);
-    final sentence = _sentenceQueue.removeAt(0);
+    var sentence = _sentenceQueue.removeAt(0);
+    sentence = sanitizeForNaturalTts(sentence);
     _currentSentenceCompleter = Completer<void>();
 
     if (await _ensureKittenTts()) {
@@ -456,4 +457,156 @@ class LiveVoiceEngine extends ChangeNotifier {
     _audioPlayer?.dispose();
     super.dispose();
   }
+}
+
+/// Sanitizes text before it reaches a TTS engine so markdown, symbols, URLs,
+/// code and emojis are not read out loud (e.g. as "asterisk", "hash" or
+/// "dollar"). Keeps `, . ! ? : ; ( ) ' "` for prosody.
+String sanitizeForTts(String text) {
+  var result = text;
+
+  // SSML-style tags.
+  result = result.replaceAll(RegExp(r'<[^>]*>'), ' ');
+
+  // Fenced code blocks ```...``` -> "code block".
+  result = result.replaceAll(RegExp(r'```[\s\S]*?```'), ' code block ');
+
+  // Inline `code`.
+  result = result.replaceAll(RegExp(r'`[^`\n]*`'), ' code ');
+
+  // Markdown links [text](url) -> text.
+  result = result.replaceAllMapped(
+      RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1] ?? '');
+
+  // Bare http(s):// and www. URLs.
+  result = result.replaceAll(RegExp(r'https?://\S+', caseSensitive: false), ' ');
+  result = result.replaceAll(RegExp(r'www\.\S+', caseSensitive: false), ' ');
+
+  // Currency: $50 / $1,000.00 -> "50 dollars" / "1,000.00 dollars".
+  result = result.replaceAllMapped(
+      RegExp(r'\$\s*(\d[\d,]*(?:\.\d+)?)'), (m) => '${m[1]} dollars');
+
+  // Percent: 50% -> "50 percent".
+  result = result.replaceAllMapped(
+      RegExp(r'(\d[\d,]*(?:\.\d+)?)\s*%'), (m) => '${m[1]} percent');
+
+  // Markdown blockquotes, headings and list markers at line starts.
+  result = result.replaceAll(RegExp(r'^[ \t]*>[ \t]*', multiLine: true), ' ');
+  result = result.replaceAll(RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true), ' ');
+  result = result.replaceAll(RegExp(r'^[ \t]*[-*+][ \t]+', multiLine: true), ' ');
+
+  // Markdown emphasis / strikethrough pairs.
+  result = result.replaceAll(RegExp(r'\*\*'), ' ');
+  result = result.replaceAll(RegExp(r'__'), ' ');
+  result = result.replaceAll(RegExp(r'~~'), ' ');
+
+  // Symbols TTS would otherwise read out as words (after currency/percent).
+  result = result.replaceAll(RegExp(r'[*#%^&{}\[\]@\\|/<>+=~`_\-]'), ' ');
+
+  // Drop the space a removed symbol left in front of kept punctuation.
+  result = result.replaceAll(RegExp(r'\s+(?=[,.!?;:)])'), '');
+
+  // Fix duplicate punctuation (e.g. "ok!!!") while keeping one for prosody.
+  result = result.replaceAllMapped(
+      RegExp(r'([,.!?;:])\1+'), (m) => m[1]!);
+
+  // Emoji and unicode pictographs.
+  result = result.replaceAll(
+      RegExp(
+        r'[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}'
+        r'\u{2190}-\u{21FF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]',
+        unicode: true,
+      ),
+      ' ');
+
+  // Collapse whitespace.
+  result = result.replaceAll(RegExp(r'\s+'), ' ');
+
+  return result.trim();
+}
+
+/// Sanitizes text for natural-sounding TTS: converts meaningful symbols into
+/// spoken words (dollars, percent, times, plus, etc.), strips decorative
+/// markdown/symbols, and keeps prosody punctuation so the engine never says
+/// "comma", "asterisk", "hash" or "dollar".
+String sanitizeForNaturalTts(String text) {
+  if (text.isEmpty) return '';
+
+  var result = text;
+
+  // Fenced code blocks ```...``` -> ' . Code block. '
+  result = result.replaceAll(RegExp(r'```[\s\S]*?```'), ' . Code block. ');
+
+  // Inline `code`.
+  result = result.replaceAll(RegExp(r'`[^`\n]*`'), ' code ');
+
+  // Markdown links [text](url) -> text.
+  result = result.replaceAllMapped(
+      RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1] ?? '');
+
+  // Bare http(s):// and www. URLs.
+  result = result.replaceAll(RegExp(r'https?://\S+', caseSensitive: false), ' ');
+  result = result.replaceAll(RegExp(r'www\.\S+', caseSensitive: false), ' ');
+
+  // $number -> number dollars.
+  result = result.replaceAllMapped(RegExp(r'\$(\d+)'), (m) => '${m[1]} dollars');
+
+  // number% -> number percent.
+  result = result.replaceAllMapped(
+      RegExp(r'(\d+)\s*%'), (m) => '${m[1]} percent');
+
+  // number*number or number x number -> number times number.
+  result = result.replaceAllMapped(
+      RegExp(r'(\d+)\s*[*xX]\s*(\d+)'), (m) => '${m[1]} times ${m[2]}');
+
+  // number-number -> number to number.
+  result = result.replaceAllMapped(
+      RegExp(r'(\d+)\s*-\s*(\d+)'), (m) => '${m[1]} to ${m[2]}');
+
+  // number+number -> number plus number.
+  result = result.replaceAllMapped(
+      RegExp(r'(\d+)\s*\+\s*(\d+)'), (m) => '${m[1]} plus ${m[2]}');
+
+  // number=number -> number equals number.
+  result = result.replaceAllMapped(
+      RegExp(r'(\d+)\s*=\s*(\d+)'), (m) => '${m[1]} equals ${m[2]}');
+
+  // & -> and.
+  result = result.replaceAll('&', ' and ');
+
+  // @ -> at.
+  result = result.replaceAll('@', ' at ');
+
+  // #number -> number number.
+  result = result.replaceAllMapped(RegExp(r'#(\d+)'), (m) => 'number ${m[1]}');
+
+  // -- and — -> , (comma pause).
+  result = result.replaceAll(RegExp(r'--|—'), ',');
+
+  // Markdown headings, blockquotes and list markers at line starts.
+  result = result.replaceAll(RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true), ' ');
+  result = result.replaceAll(RegExp(r'^[ \t]*>[ \t]*', multiLine: true), ' ');
+  result = result.replaceAll(RegExp(r'^[ \t]*[-*+][ \t]+', multiLine: true), ' ');
+
+  // Markdown emphasis / strikethrough pairs.
+  result = result.replaceAll(RegExp(r'\*\*'), ' ');
+  result = result.replaceAll(RegExp(r'__'), ' ');
+  result = result.replaceAll(RegExp(r'~~'), ' ');
+
+  // Remove decorative symbols.
+  result = result.replaceAll(RegExp(r'[*#\$%\^&{}\[\]@\\|/<>=+~`]+'), ' ');
+
+  // Leftover underscore emphasis.
+  result = result.replaceAll('_', ' ');
+
+  // Fix duplicate punctuation (e.g. "ok!!!") keeping one for prosody.
+  result = result.replaceAllMapped(RegExp(r'([.,!?])\1+'), (m) => m[1]!);
+
+  // Remove space a removed symbol left in front of punctuation.
+  result = result.replaceAllMapped(RegExp(r'\s+([.,!?;:])'), (m) => m[1]!);
+
+  // Collapse whitespace.
+  result = result.replaceAll(RegExp(r'\s+'), ' ');
+
+  return result.trim();
 }
