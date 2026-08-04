@@ -6,6 +6,7 @@ lives in checkpoint.json so Resume can continue without re-planning.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -33,19 +34,21 @@ class DeepResearchOrchestrator:
             )
         ).expanduser()
         self.run_ingested_urls: set[str] = set()
+        # Serialize atomic writes across concurrent bridge RPC handlers.
+        self._lock = asyncio.Lock()
 
     # ── Run lifecycle ─────────────────────────────────────────────────
 
-    def reset_run(self, keep_checkpoint: bool = False) -> dict[str, str]:
+    async def reset_run(self, keep_checkpoint: bool = False) -> dict[str, str]:
         """Clear temp.json and in-memory caches for a new research run."""
         self.run_ingested_urls.clear()
-        self._write_temp([])
+        await self._write_temp([])
         if not keep_checkpoint:
-            self._write_checkpoint(RunCheckpoint().to_dict())
+            await self._write_checkpoint(RunCheckpoint().to_dict())
         logger.info("Deep Research run reset (keep_checkpoint=%s).", keep_checkpoint)
         return {"status": "ok"}
 
-    def update_phase(
+    async def update_phase(
         self,
         stage_id: str,
         phase_title: str,
@@ -81,7 +84,7 @@ class DeepResearchOrchestrator:
         else:
             payload.append(new_phase)
 
-        self._write_temp(payload)
+        await self._write_temp(payload)
         logger.info("Updated phase record for %s in temp.json.", stage_id)
         return {"status": "ok"}
 
@@ -97,7 +100,7 @@ class DeepResearchOrchestrator:
 
     # ── Checkpoint / resume ───────────────────────────────────────────
 
-    def save_checkpoint(
+    async def save_checkpoint(
         self,
         run_id: str = "",
         status: str = "running",
@@ -114,15 +117,15 @@ class DeepResearchOrchestrator:
             updated_ms=int(time.time() * 1000),
         )
         data = cp.to_dict()
-        self._write_checkpoint(data)
+        await self._write_checkpoint(data)
         return {"status": "ok", "checkpoint": data}
 
     def load_checkpoint(self) -> dict[str, Any]:
         data = self._read_checkpoint()
         return {"status": "ok", "checkpoint": data}
 
-    def clear_checkpoint(self) -> dict[str, str]:
-        self._write_checkpoint(RunCheckpoint().to_dict())
+    async def clear_checkpoint(self) -> dict[str, str]:
+        await self._write_checkpoint(RunCheckpoint().to_dict())
         return {"status": "ok"}
 
     # ── Budget-aware evidence export ──────────────────────────────────
@@ -140,6 +143,8 @@ class DeepResearchOrchestrator:
         2. Prefer FACT records over FINDING records.
         3. Round-robin findings across phases.
         4. Drop low-confidence findings first.
+        5. After each add, recompute used = estimate_tokens(accepted).
+        6. If still over budget, truncate facts as well.
         """
         phases = self._read_temp()
         if not phases:
@@ -184,7 +189,7 @@ class DeepResearchOrchestrator:
         def estimate_tokens(obj: Any) -> int:
             text = json.dumps(obj, ensure_ascii=True)
             # ~4 chars per token heuristic (more stable than word*1.3)
-            return max(1, (len(text) + 3) // 4)
+            return max(1, (len(text) + 3) // 4) if text else 0
 
         # Start with facts + metadata only
         accepted: list[dict[str, Any]] = []
@@ -203,35 +208,64 @@ class DeepResearchOrchestrator:
                 "failed_fetches": phase["failed_fetches"][:10],
                 "status": phase["status"],
             }
-            # Add facts greedily
-            kept_facts: list[dict] = []
-            for fact in phase["facts"]:
-                trial = {**base, "facts": kept_facts + [fact]}
-                cost = estimate_tokens(trial) - estimate_tokens(base if not kept_facts else {**base, "facts": kept_facts})
-                # simpler: recompute full package later; per-item approx
-                item_cost = estimate_tokens(fact)
-                if used + item_cost + 40 <= max_evidence_tokens:
-                    kept_facts.append(fact)
-                    used += item_cost
-                else:
-                    truncated_facts += 1
-            base["facts"] = kept_facts
             accepted.append(base)
             used = estimate_tokens(accepted)
 
-        # Round-robin findings across phases
+            # Add facts greedily; full recompute after each add.
+            kept_facts: list[dict] = []
+            for fact in phase["facts"]:
+                kept_facts.append(fact)
+                base["facts"] = kept_facts
+                used = estimate_tokens(accepted)
+                if used > max_evidence_tokens:
+                    kept_facts.pop()
+                    base["facts"] = list(kept_facts)
+                    used = estimate_tokens(accepted)
+                    truncated_facts += 1
+            base["facts"] = kept_facts
+
+        # Round-robin findings across phases; full recompute after each add.
         max_rounds = max((len(p["findings"]) for p in working), default=0)
         for round_i in range(max_rounds):
             for p_idx, phase in enumerate(working):
                 if round_i >= len(phase["findings"]):
                     continue
                 finding = phase["findings"][round_i]
-                item_cost = estimate_tokens(finding)
-                if used + item_cost > max_evidence_tokens:
-                    truncated_findings += 1
-                    continue
                 accepted[p_idx]["findings"].append(finding)
-                used += item_cost
+                used = estimate_tokens(accepted)
+                if used > max_evidence_tokens:
+                    accepted[p_idx]["findings"].pop()
+                    used = estimate_tokens(accepted)
+                    truncated_findings += 1
+
+        # If still over budget (headers alone can overshoot), drop facts too.
+        used = estimate_tokens(accepted)
+        if used > max_evidence_tokens:
+            # Drop lowest-priority facts from the end of each phase, round-robin.
+            while used > max_evidence_tokens:
+                dropped_any = False
+                for p in reversed(accepted):
+                    facts_list = p.get("facts") or []
+                    if facts_list:
+                        facts_list.pop()
+                        truncated_facts += 1
+                        dropped_any = True
+                        used = estimate_tokens(accepted)
+                        if used <= max_evidence_tokens:
+                            break
+                if not dropped_any:
+                    # Last resort: strip findings then summaries.
+                    for p in reversed(accepted):
+                        findings_list = p.get("findings") or []
+                        if findings_list:
+                            findings_list.pop()
+                            truncated_findings += 1
+                            used = estimate_tokens(accepted)
+                            dropped_any = True
+                            if used <= max_evidence_tokens:
+                                break
+                    if not dropped_any:
+                        break
 
         # Drop empty phases that contributed nothing (but keep at least one if any)
         non_empty = [
@@ -245,6 +279,11 @@ class DeepResearchOrchestrator:
             truncated_phases = max(0, len(accepted) - 1)
         elif non_empty:
             truncated_phases = max(0, len(phases) - len(non_empty))
+
+        # Final safety: if still over, shrink non_empty further.
+        while non_empty and estimate_tokens(non_empty) > max_evidence_tokens and len(non_empty) > 1:
+            non_empty.pop()
+            truncated_phases += 1
 
         content = json.dumps(non_empty, ensure_ascii=True, indent=2)
         return {
@@ -267,8 +306,8 @@ class DeepResearchOrchestrator:
             logger.warning("Failed to read temp.json: %s", e)
             return []
 
-    def _write_temp(self, payload: list[dict[str, Any]]) -> None:
-        self._atomic_write(self.temp_path, payload)
+    async def _write_temp(self, payload: list[dict[str, Any]]) -> None:
+        await self._atomic_write(self.temp_path, payload)
 
     def _read_checkpoint(self) -> dict[str, Any]:
         if not self.checkpoint_path.exists():
@@ -280,17 +319,18 @@ class DeepResearchOrchestrator:
             logger.warning("Failed to read checkpoint.json: %s", e)
             return RunCheckpoint().to_dict()
 
-    def _write_checkpoint(self, payload: dict[str, Any]) -> None:
-        self._atomic_write(self.checkpoint_path, payload)
+    async def _write_checkpoint(self, payload: dict[str, Any]) -> None:
+        await self._atomic_write(self.checkpoint_path, payload)
 
-    def _atomic_write(self, path: Path, payload: Any) -> None:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temp_file = path.with_suffix(path.suffix + ".tmp")
-            temp_file.write_text(
-                json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
-            )
-            temp_file.replace(path)
-        except Exception as e:
-            logger.error("Failed to write %s: %s", path, e)
-            raise
+    async def _atomic_write(self, path: Path, payload: Any) -> None:
+        async with self._lock:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temp_file = path.with_suffix(path.suffix + ".tmp")
+                temp_file.write_text(
+                    json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
+                )
+                temp_file.replace(path)
+            except Exception as e:
+                logger.error("Failed to write %s: %s", path, e)
+                raise

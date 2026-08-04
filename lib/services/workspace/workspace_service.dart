@@ -5,8 +5,11 @@
 /// project membership.
 library;
 
+import 'dart:io';
+
 import 'package:nexon/data/models/workspace_model.dart';
 import 'package:logger/logger.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 // ---------------------------------------------------------------------------
@@ -149,5 +152,24 @@ class WorkspaceService {
     await _repo.save(updated);
     _log.d('Workspace configured: $workspaceId');
     return updated;
+  }
+
+  /// Ensure `.nexon/{sessions,checkpoints}` exists in [workspacePath].
+  static Future<Directory> ensureWorkspaceSupportDirs(
+    String workspacePath,
+  ) async {
+    final root = Directory('${workspacePath.replaceAll(RegExp(r'/+$'), '')}/.nexon');
+    await Directory('${root.path}/sessions').create(recursive: true);
+    await Directory('${root.path}/checkpoints').create(recursive: true);
+    return root;
+  }
+
+  /// Return the app-documents fallback `.nexon` root and ensure required dirs.
+  static Future<Directory> ensureFallbackSupportDirs() async {
+    final docs = await getApplicationDocumentsDirectory();
+    final root = Directory('${docs.path}/.nexon');
+    await Directory('${root.path}/sessions').create(recursive: true);
+    await Directory('${root.path}/checkpoints').create(recursive: true);
+    return root;
   }
 }

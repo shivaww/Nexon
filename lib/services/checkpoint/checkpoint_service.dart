@@ -5,6 +5,9 @@
 /// memory state so the system can roll back to a known-good point.
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:nexon/data/models/checkpoint_model.dart';
 import 'package:logger/logger.dart';
 import 'package:uuid/uuid.dart';
@@ -47,6 +50,87 @@ class InMemoryCheckpointRepository implements CheckpointRepository {
     bool Function(CheckpointModel) predicate,
   ) async {
     return _store.values.where(predicate).toList();
+  }
+}
+
+/// File-backed [CheckpointRepository] persisted under a directory.
+class FileCheckpointRepository implements CheckpointRepository {
+  FileCheckpointRepository({required this.directoryPath});
+
+  final String directoryPath;
+
+  Directory get _dir => Directory(directoryPath);
+
+  Future<void> _ensureDir() async {
+    if (!await _dir.exists()) {
+      await _dir.create(recursive: true);
+    }
+  }
+
+  String _filePath(String id) => '${_dir.path}/$id.json';
+
+  Future<void> _atomicWrite(String path, String content) async {
+    final file = File(path);
+    final tmp = File('$path.tmp');
+    await tmp.writeAsString(content, flush: true);
+    await tmp.rename(file.path);
+  }
+
+  @override
+  Future<void> save(CheckpointModel checkpoint) async {
+    await _ensureDir();
+    final content = jsonEncode(checkpoint.toJson());
+    await _atomicWrite(_filePath(checkpoint.id), content);
+  }
+
+  @override
+  Future<CheckpointModel?> get(String id) async {
+    await _ensureDir();
+    final file = File(_filePath(id));
+    if (!await file.exists()) return null;
+    final raw = await file.readAsString();
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) return null;
+    return CheckpointModel.fromJson(decoded);
+  }
+
+  @override
+  Future<List<CheckpointModel>> getAll() async {
+    await _ensureDir();
+    final files = await _dir
+        .list()
+        .where((entity) => entity is File && entity.path.endsWith('.json'))
+        .cast<File>()
+        .toList();
+    final out = <CheckpointModel>[];
+    for (final file in files) {
+      try {
+        final raw = await file.readAsString();
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          out.add(CheckpointModel.fromJson(decoded));
+        }
+      } catch (_) {}
+    }
+    out.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return out;
+  }
+
+  @override
+  Future<void> delete(String id) async {
+    await _ensureDir();
+    final file = File(_filePath(id));
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+
+  @override
+  Future<List<CheckpointModel>> query(
+    bool Function(CheckpointModel) predicate,
+  ) async {
+    final all = await getAll();
+    return all.where(predicate).toList();
   }
 }
 

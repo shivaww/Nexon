@@ -3,48 +3,39 @@ import 'dart:io';
 
 /// Thin HTTP client for Deep Research bridge methods (JSON-RPC style).
 class DeepResearchBridgeClient {
-  DeepResearchBridgeClient({
-    this.endpoint = 'http://127.0.0.1:8390/mcp',
-  });
+  DeepResearchBridgeClient({this.endpoint = 'http://127.0.0.1:8390/mcp'});
 
   final String endpoint;
+  static final HttpClient _sharedClient = HttpClient()
+    ..idleTimeout = const Duration(seconds: 10);
 
   Future<Map<String, dynamic>> call(
     String method, {
     Map<String, dynamic> params = const {},
     Duration timeout = const Duration(seconds: 60),
   }) async {
-    final client = HttpClient()..connectionTimeout = timeout;
-    try {
-      final request = await client
-          .postUrl(Uri.parse(endpoint))
-          .timeout(timeout);
-      request.headers.contentType = ContentType.json;
-      final bytes = utf8.encode(jsonEncode({
-        'method': method,
-        'params': params,
-      }));
-      request.headers.contentLength = bytes.length;
-      request.add(bytes);
-      final response = await request.close().timeout(timeout);
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('HTTP ${response.statusCode}: $body');
-      }
-      final decoded = jsonDecode(body);
-      if (decoded is Map && decoded['error'] != null) {
-        throw HttpException(decoded['error'].toString());
-      }
-      final result = decoded is Map ? decoded['result'] : null;
-      if (result is Map<String, dynamic>) return result;
-      if (result is Map) return Map<String, dynamic>.from(result);
-      return {'raw': result};
-    } finally {
-      client.close(force: true);
+    final request = await _sharedClient
+        .postUrl(Uri.parse(endpoint))
+        .timeout(timeout);
+    request.persistentConnection = false;
+    request.headers.set(HttpHeaders.connectionHeader, 'close');
+    request.headers.contentType = ContentType.json;
+    final bytes = utf8.encode(jsonEncode({'method': method, 'params': params}));
+    request.headers.contentLength = bytes.length;
+    request.add(bytes);
+    final response = await request.close().timeout(timeout);
+    final body = await response.transform(utf8.decoder).join().timeout(timeout);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw HttpException('HTTP ${response.statusCode}: $body');
     }
+    final decoded = jsonDecode(body);
+    if (decoded is Map && decoded['error'] != null) {
+      throw HttpException(decoded['error'].toString());
+    }
+    final result = decoded is Map ? decoded['result'] : null;
+    if (result is Map<String, dynamic>) return result;
+    if (result is Map) return Map<String, dynamic>.from(result);
+    return {'raw': result};
   }
 
   Future<void> reset({bool keepCheckpoint = false}) async {
@@ -96,10 +87,7 @@ class DeepResearchBridgeClient {
   }) async {
     return call(
       'deep_research.export_for_writer',
-      params: {
-        'max_evidence_tokens': maxEvidenceTokens,
-        'prefer_facts': true,
-      },
+      params: {'max_evidence_tokens': maxEvidenceTokens, 'prefer_facts': true},
       timeout: const Duration(seconds: 120),
     );
   }
@@ -149,10 +137,7 @@ class DeepResearchBridgeClient {
   }) async {
     return call(
       'read_url',
-      params: {
-        'url': url,
-        'allow_pdf': allowPdf,
-      },
+      params: {'url': url, 'allow_pdf': allowPdf},
       timeout: const Duration(seconds: 90),
     );
   }

@@ -35,6 +35,12 @@ import 'package:nexon/services/drive_sync_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/screens/onboarding_screen.dart';
 import 'package:nexon/services/deep_research/deep_research_bridge_client.dart';
+import 'package:nexon/services/deep_research/deep_research_helpers.dart';
+import 'package:nexon/services/slash_command/slash_command_service.dart';
+import 'package:nexon/services/context_compression/context_compression_service.dart';
+import 'package:nexon/services/checkpoint/checkpoint_service.dart';
+import 'package:nexon/services/workspace/workspace_service.dart';
+import 'package:uuid/uuid.dart';
 
 /// Shared warm cream/tan glassmorphism container matching Nexon's palette.
 class WarmGlassContainer extends StatelessWidget {
@@ -66,13 +72,18 @@ class WarmGlassContainer extends StatelessWidget {
     final highContrast = MediaQuery.maybeOf(context)?.highContrast ?? false;
     final effectiveRadius = borderRadius ?? BorderRadius.circular(16);
     final effectiveBg =
-        backgroundColor ?? const Color(0xFFFFFBF2).withValues(alpha: highContrast ? 0.96 : 0.65);
-    final effectiveBorder = border ??
+        backgroundColor ??
+        const Color(0xFFFFFBF2).withValues(alpha: highContrast ? 0.96 : 0.65);
+    final effectiveBorder =
+        border ??
         Border.all(
-          color: const Color(0xFFE5DDD3).withValues(alpha: highContrast ? 0.95 : 0.70),
+          color: const Color(
+            0xFFE5DDD3,
+          ).withValues(alpha: highContrast ? 0.95 : 0.70),
           width: 1.0,
         );
-    final effectiveShadow = boxShadow ??
+    final effectiveShadow =
+        boxShadow ??
         [
           BoxShadow(
             color: const Color(0xFF2D241C).withValues(alpha: 0.08),
@@ -103,14 +114,14 @@ class WarmGlassContainer extends StatelessWidget {
                 ),
               )
             : Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              color: effectiveBg,
-              borderRadius: effectiveRadius,
-              border: effectiveBorder,
-            ),
-            child: child,
-          ),
+                padding: padding,
+                decoration: BoxDecoration(
+                  color: effectiveBg,
+                  borderRadius: effectiveRadius,
+                  border: effectiveBorder,
+                ),
+                child: child,
+              ),
       ),
     );
   }
@@ -122,7 +133,10 @@ class NexonTts {
   static String? _speakingText;
   static bool _isSpeaking = false;
 
-  static Future<void> toggleSpeak(String text, VoidCallback onStateChange) async {
+  static Future<void> toggleSpeak(
+    String text,
+    VoidCallback onStateChange,
+  ) async {
     try {
       if (_isSpeaking && _speakingText == text) {
         await _flutterTts.stop();
@@ -225,9 +239,13 @@ class _LiquidGlassRimPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          topHighlight.withValues(alpha: 0.95), // Bright specular top rim highlight
+          topHighlight.withValues(
+            alpha: 0.95,
+          ), // Bright specular top rim highlight
           topHighlight.withValues(alpha: 0.45), // Translucent side rim
-          botShadow.withValues(alpha: 0.40),    // Warm/semantic bottom border shadow
+          botShadow.withValues(
+            alpha: 0.40,
+          ), // Warm/semantic bottom border shadow
         ],
         stops: const [0.0, 0.45, 1.0],
       ).createShader(rect);
@@ -281,7 +299,8 @@ class LiquidGlassSurface extends StatelessWidget {
         ? null
         : (borderRadius ?? BorderRadius.circular(30));
 
-    final effectiveBg = backgroundColor ??
+    final effectiveBg =
+        backgroundColor ??
         const Color(0xFFFFFDF8).withValues(alpha: highContrast ? 0.96 : 0.72);
 
     Widget innerContent = Container(
@@ -420,11 +439,7 @@ class LiquidGlassChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            icon,
-            size: 15,
-            color: const Color(0xFF7B4E2E),
-          ),
+          Icon(icon, size: 15, color: const Color(0xFF7B4E2E)),
           const SizedBox(width: 6),
           Text(
             label,
@@ -468,16 +483,14 @@ class WarmGlassDialog extends StatelessWidget {
         backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.92),
         sigma: 10.0,
         padding: const EdgeInsets.all(20),
-        child: child ??
+        child:
+            child ??
             Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (title != null) title!,
-                if (content != null) ...[
-                  const SizedBox(height: 12),
-                  content!,
-                ],
+                if (content != null) ...[const SizedBox(height: 12), content!],
                 if (actions != null && actions!.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   Row(
@@ -571,7 +584,8 @@ class _ForgeChatAppState extends State<ForgeChatApp> {
 }
 
 class DeepResearchPrompts {
-  static const String plannerSystemPrompt = """ROLE: Planner. No searching, no fetching. Output XML only.
+  static const String plannerSystemPrompt =
+      """ROLE: Planner. No searching, no fetching. Output XML only.
 Decide: complexity (STANDARD/COMPLEX), stage_count (5-15) based on user query.
 Generate a phase-by-phase research plan.
 Output format:
@@ -582,7 +596,8 @@ Output format:
 </research_plan>
 No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
 
-  static const String researchSystemPrompt = """ROLE: Research agent. You are running one phase of a multi-step research plan.
+  static const String researchSystemPrompt =
+      """ROLE: Research agent. You are running one phase of a multi-step research plan.
 Your task is to gather enough relevant information to fully address the phase's prompt.
 You have the following tools available:
 1. Web Search: Output <search_request>your query</search_request> to get a list of search results.
@@ -644,7 +659,8 @@ Expected JSON output format:
 }
 No other text, explanations, or Markdown code blocks outside the JSON.""";
 
-  static const String reflectorSystemPrompt = """ROLE: Research Sufficiency Judger.
+  static const String reflectorSystemPrompt =
+      """ROLE: Research Sufficiency Judger.
 You are given a research phase goal and the facts & findings gathered so far in this phase.
 Your task is to judge if the gathered information is sufficient to fully address the phase goal.
 Output ONLY a JSON object:
@@ -698,20 +714,26 @@ class _ChatHomePageState extends State<ChatHomePage> {
   String _customMcpUrl = '';
   final Map<String, StreamSubscription<String>> _activeSubscriptions = {};
   final Map<String, Completer<void>> _activeCompleters = {};
+  final HttpClient _mcpHttpClient = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 30);
   bool _deepResearchEnabled = false;
+
   /// User-configured token budget for writer-phase evidence (set in settings).
   int _writerContextBudget = 32000;
   static const int maxConcurrentFetchCalls = 6;
   // Bounded by fetch limit since backend is now decoupled and parallelised
   static const int maxConcurrentIngestCalls = 6;
-  final SimpleSemaphore _ingestSemaphore = SimpleSemaphore(maxConcurrentIngestCalls);
+  final SimpleSemaphore _ingestSemaphore = SimpleSemaphore(
+    maxConcurrentIngestCalls,
+  );
   final Map<String, Map<String, dynamic>> _runUrlCache = {};
+  CheckpointService? _checkpointService;
 
   DeepResearchBridgeClient get _deepResearchBridge => DeepResearchBridgeClient(
-        endpoint: _customMcpUrl.isNotEmpty
-            ? _customMcpUrl
-            : 'http://127.0.0.1:8390/mcp',
-      );
+    endpoint: _customMcpUrl.isNotEmpty
+        ? _customMcpUrl
+        : 'http://127.0.0.1:8390/mcp',
+  );
 
   String _normalizeQueryOrUrl(String input) {
     return input
@@ -722,19 +744,27 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   Future<int> _getSystemAvailableRamBytes() async {
-    final endpoint = _customMcpUrl.isNotEmpty ? _customMcpUrl : 'http://127.0.0.1:8390/mcp';
+    final endpoint = _customMcpUrl.isNotEmpty
+        ? _customMcpUrl
+        : 'http://127.0.0.1:8390/mcp';
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
     try {
-      final request = await client.postUrl(Uri.parse(endpoint)).timeout(const Duration(seconds: 4));
+      final request = await client
+          .postUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 4));
       request.headers.contentType = ContentType.json;
-      final bytes = utf8.encode(jsonEncode({
-        'method': 'system_ram_headroom',
-        'params': {},
-      }));
+      final bytes = utf8.encode(
+        jsonEncode({'method': 'system_ram_headroom', 'params': {}}),
+      );
       request.headers.contentLength = bytes.length;
       request.add(bytes);
-      final response = await request.close().timeout(const Duration(seconds: 4));
-      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 4));
+      final response = await request.close().timeout(
+        const Duration(seconds: 4),
+      );
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 4));
       final decoded = jsonDecode(body);
       if (decoded is Map && decoded['result'] is Map) {
         final result = decoded['result'] as Map;
@@ -845,8 +875,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
     );
     _sessions = [newSession];
     _activeSessionId = newSession.id;
-    _agenticEnabled = false;        // Default off for new chat
-    _deepResearchEnabled = false;   // Default off for new chat
+    _agenticEnabled = false; // Default off for new chat
+    _deepResearchEnabled = false; // Default off for new chat
   }
 
   Future<void> _loadSessions() async {
@@ -855,7 +885,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     if (raw != null && raw.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(raw) as List<dynamic>;
-        final loadedSessions = decoded.map((s) => ChatSession.fromJson(s as Map<String, dynamic>)).toList();
+        final loadedSessions = decoded
+            .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
+            .toList();
         setState(() {
           _sessions = loadedSessions;
 
@@ -863,11 +895,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
           bool hasEmptySession = false;
           if (_sessions.isNotEmpty) {
             final first = _sessions.first;
-            final userMsgs = first.messages.where((m) => m.role == MessageRole.user);
-            if (userMsgs.isEmpty && (first.title == 'New Chat' || first.title == 'Welcome Chat')) {
+            final userMsgs = first.messages.where(
+              (m) => m.role == MessageRole.user,
+            );
+            if (userMsgs.isEmpty &&
+                (first.title == 'New Chat' || first.title == 'Welcome Chat')) {
               _activeSessionId = first.id;
-              _agenticEnabled = false;        // Default off for new chat
-              _deepResearchEnabled = false;   // Default off for new chat
+              _agenticEnabled = false; // Default off for new chat
+              _deepResearchEnabled = false; // Default off for new chat
               hasEmptySession = true;
             }
           }
@@ -881,7 +916,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
               messages: [
                 const ChatMessage(
                   role: MessageRole.assistant,
-                  text: 'New chat ready. Choose any configured provider and model.',
+                  text:
+                      'New chat ready. Choose any configured provider and model.',
                 ),
               ],
               providerId: _selectedProviderId,
@@ -889,8 +925,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
             );
             _sessions.insert(0, newSession);
             _activeSessionId = newId;
-            _agenticEnabled = false;        // Default off for new chat
-            _deepResearchEnabled = false;   // Default off for new chat
+            _agenticEnabled = false; // Default off for new chat
+            _deepResearchEnabled = false; // Default off for new chat
           }
           _editingMessageIndex = null;
         });
@@ -910,7 +946,25 @@ class _ChatHomePageState extends State<ChatHomePage> {
   Future<void> _saveSessions() async {
     final prefs = _prefs ?? await SharedPreferences.getInstance();
     final serialized = _sessions.map((s) => s.toJson()).toList();
-    await prefs.setString('chat_sessions_v1', jsonEncode(serialized));
+    final allJson = jsonEncode(serialized);
+    final maxPrefsBytes = 1500 * 1024;
+    if (utf8.encode(allJson).length <= maxPrefsBytes) {
+      await prefs.setString('chat_sessions_v1', allJson);
+    } else {
+      final trimmed = _sessions.take(20).map((s) => s.toJson()).toList();
+      await prefs.setString('chat_sessions_v1', jsonEncode(trimmed));
+      try {
+        final backupFile = await _sessionBackupPrefsFile();
+        if (!await backupFile.parent.exists()) {
+          await backupFile.parent.create(recursive: true);
+        }
+        final tmp = File('${backupFile.path}.tmp');
+        await tmp.writeAsString(allJson, flush: true);
+        await tmp.rename(backupFile.path);
+      } catch (e) {
+        debugPrint('Session backup write failed: $e');
+      }
+    }
     if (_activeSessionId != null) {
       await prefs.setString('active_session_id_v1', _activeSessionId!);
     }
@@ -919,7 +973,56 @@ class _ChatHomePageState extends State<ChatHomePage> {
     DriveSyncService.syncToDrive(_sessions);
   }
 
+  Future<String> _expandHomePath(String path) async {
+    if (path == '~') {
+      return Platform.environment['HOME'] ??
+          '/data/data/com.termux/files/home';
+    }
+    if (path.startsWith('~/')) {
+      final home =
+          Platform.environment['HOME'] ?? '/data/data/com.termux/files/home';
+      return '$home/${path.substring(2)}';
+    }
+    return path;
+  }
 
+  String _normalizeFsPath(String input) {
+    final normalized = Uri.file(input).normalizePath().toFilePath();
+    if (normalized.length > 1 && normalized.endsWith('/')) {
+      return normalized.substring(0, normalized.length - 1);
+    }
+    return normalized;
+  }
+
+  Future<Directory> _chooseWritableNexonRoot() async {
+    final expandedWorkspace = await _expandHomePath(_agenticWorkspace);
+    final workspaceRoot = Directory(
+      '${expandedWorkspace.replaceAll(RegExp(r'/+$'), '')}/.nexon',
+    );
+    try {
+      await WorkspaceService.ensureWorkspaceSupportDirs(expandedWorkspace);
+      final probe = File('${workspaceRoot.path}/.write_probe');
+      await probe.writeAsString('ok', flush: true);
+      await probe.delete();
+      return workspaceRoot;
+    } catch (_) {
+      return WorkspaceService.ensureFallbackSupportDirs();
+    }
+  }
+
+  Future<void> _ensureLocalSupportDirs() async {
+    final root = await _chooseWritableNexonRoot();
+    _checkpointService ??= CheckpointService(
+      repository: FileCheckpointRepository(
+        directoryPath: '${root.path}/checkpoints',
+      ),
+    );
+  }
+
+  Future<File> _sessionBackupPrefsFile() async {
+    final root = await _chooseWritableNexonRoot();
+    return File('${root.path}/sessions/prefs_backup.json');
+  }
 
   Future<void> _resetDeepResearch() async {
     try {
@@ -962,9 +1065,16 @@ class _ChatHomePageState extends State<ChatHomePage> {
     required ProviderSettings settings,
     required String model,
   }) async {
-    final truncatedContent = content.length > 12000
-        ? content.substring(0, 12000) + "\n...[content truncated]"
-        : content;
+    // Keep head + tail so long pages retain both lede and late conclusions.
+    final String truncatedContent;
+    if (content.length > 12000) {
+      final head = content.substring(0, 12000);
+      final tailStart = content.length > 2000 ? content.length - 2000 : 0;
+      final tail = content.substring(tailStart);
+      truncatedContent = '$head\n...[middle truncated]...\n$tail';
+    } else {
+      truncatedContent = content;
+    }
     final summarizerMessages = [
       const ChatMessage(
         role: MessageRole.system,
@@ -982,39 +1092,26 @@ class _ChatHomePageState extends State<ChatHomePage> {
         model: model,
         messages: summarizerMessages,
       );
-      final cleanResp = responseText.replaceAll(RegExp(r"```json"), "").replaceAll("```", "").trim();
+      final cleanResp = responseText
+          .replaceAll(RegExp(r"```json"), "")
+          .replaceAll("```", "")
+          .trim();
       final jsonMatch = RegExp(r"\{[\s\S]*\}").firstMatch(cleanResp);
       if (jsonMatch != null) {
         final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-        final List<dynamic> rawFacts = parsed["facts"] is List ? parsed["facts"] as List<dynamic> : [];
-        final List<dynamic> rawFindings = parsed["findings"] is List ? parsed["findings"] as List<dynamic> : [];
-        final List<Map<String, dynamic>> facts = [];
-        for (final item in rawFacts) {
-          if (item is Map) {
-            facts.add({
-              'metric': item['metric']?.toString() ?? '',
-              'subject': item['subject']?.toString() ?? '',
-              'value': item['value']?.toString() ?? '',
-              'date': item['date']?.toString() ?? '',
-              'source': sourceUrl,
-            });
-          }
-        }
-        final List<Map<String, dynamic>> findings = [];
-        for (final item in rawFindings) {
-          if (item is Map) {
-            findings.add({
-              'text': item['text']?.toString() ?? '',
-              'source': sourceUrl,
-            });
-          }
-        }
-        return {'facts': facts, 'findings': findings};
+        // Preserve confidence via shared normalizer (facts + findings).
+        return DeepResearchHelpers.normalizeEvidence(
+          parsed,
+          sourceUrl: sourceUrl,
+        );
       }
     } catch (e) {
       debugPrint("Inline summarization failed for $sourceUrl: $e");
     }
-    return {'facts': [], 'findings': []};
+    return {
+      'facts': <Map<String, dynamic>>[],
+      'findings': <Map<String, dynamic>>[],
+    };
   }
 
   Future<bool> _checkResearchSufficiency({
@@ -1026,9 +1123,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
     required String model,
   }) async {
     if (facts.isEmpty && findings.isEmpty) return false;
-    final factsText = facts.map((f) => "Fact: metric=${f['metric']} | subject=${f['subject']} | value=${f['value']} | source=${f['source']}").join("\n");
-    final findingsText = findings.map((f) => "Finding: ${f['text']} (source=${f['source']})").join("\n");
-    final prompt = "Phase Goal/Prompt: $phaseGoal\n\n"
+    final factsText = facts
+        .map(
+          (f) =>
+              "Fact: metric=${f['metric']} | subject=${f['subject']} | value=${f['value']} | source=${f['source']}",
+        )
+        .join("\n");
+    final findingsText = findings
+        .map((f) => "Finding: ${f['text']} (source=${f['source']})")
+        .join("\n");
+    final prompt =
+        "Phase Goal/Prompt: $phaseGoal\n\n"
         "Facts gathered so far:\n$factsText\n\n"
         "Findings gathered so far:\n$findingsText\n\n"
         "Based ONLY on the facts and findings above, have we gathered sufficient information to address the phase goal/prompt?\n"
@@ -1038,10 +1143,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         role: MessageRole.system,
         text: DeepResearchPrompts.reflectorSystemPrompt,
       ),
-      ChatMessage(
-        role: MessageRole.user,
-        text: prompt,
-      ),
+      ChatMessage(role: MessageRole.user, text: prompt),
     ];
     try {
       final responseText = await _chatClient.sendChat(
@@ -1061,7 +1163,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     return false;
   }
 
-  Future<Map<String, dynamic>> _exportDeepResearchForWriter(int maxEvidenceTokens) {
+  Future<Map<String, dynamic>> _exportDeepResearchForWriter(
+    int maxEvidenceTokens,
+  ) {
     return _deepResearchBridge.exportForWriter(
       maxEvidenceTokens: maxEvidenceTokens.clamp(1, 200000) as int,
     );
@@ -1104,8 +1208,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
         if (text.isNotEmpty) items.add(text);
       }
     }
-    if (skippedPdfs.isNotEmpty) items.add('${skippedPdfs.length} PDF source(s) skipped.');
-    if (failedFetches.isNotEmpty) items.add('${failedFetches.length} source fetch(es) failed.');
+    if (skippedPdfs.isNotEmpty)
+      items.add('${skippedPdfs.length} PDF source(s) skipped.');
+    if (failedFetches.isNotEmpty)
+      items.add('${failedFetches.length} source fetch(es) failed.');
     if (items.length == 2 && stepContent.trim().isNotEmpty) {
       final cleaned = stepContent
           .replaceAll(RegExp(r'<[^>]+>'), ' ')
@@ -1165,8 +1271,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
       }
 
       // Turn off agentic file access and deep research modes if switching to an empty new/welcome chat
-      final userMsgs = session.messages.where((m) => m.role == MessageRole.user);
-      if (userMsgs.isEmpty && (session.title == 'New Chat' || session.title == 'Welcome Chat')) {
+      final userMsgs = session.messages.where(
+        (m) => m.role == MessageRole.user,
+      );
+      if (userMsgs.isEmpty &&
+          (session.title == 'New Chat' || session.title == 'Welcome Chat')) {
         _agenticEnabled = false;
         _deepResearchEnabled = false;
       }
@@ -1263,6 +1372,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   void dispose() {
     _messageController.dispose();
     _scrollController.dispose();
+    _mcpHttpClient.close();
     super.dispose();
   }
 
@@ -1276,7 +1386,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     SearchSettings loadedSearchSettings = SearchSettings.defaults();
     if (searchRaw != null && searchRaw.trim().isNotEmpty) {
       try {
-        loadedSearchSettings = SearchSettings.fromJson(jsonDecode(searchRaw) as Map<String, dynamic>);
+        loadedSearchSettings = SearchSettings.fromJson(
+          jsonDecode(searchRaw) as Map<String, dynamic>,
+        );
       } catch (_) {}
     }
 
@@ -1337,6 +1449,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       }
     });
 
+    await _ensureLocalSupportDirs();
     await _loadSessions();
   }
 
@@ -1601,9 +1714,36 @@ jobs:
     });
   }
 
-  Future<void> _sendMessage({String? promptText, String? userTextOverride}) async {
-    final prompt = (promptText ?? userTextOverride ?? _messageController.text).trim();
+  Future<void> _sendMessage({
+    String? promptText,
+    String? userTextOverride,
+  }) async {
+    final prompt = (promptText ?? userTextOverride ?? _messageController.text)
+        .trim();
     if (prompt.isEmpty) return;
+    if (prompt.startsWith('/')) {
+      if (promptText == null && userTextOverride == null) {
+        _messageController.clear();
+      }
+      await SlashCommandService.handle(
+        prompt,
+        SlashCommandCallbacks(
+          createNew: _slashNew,
+          listSessions: _slashList,
+          switchSession: _slashSwitch,
+          saveSession: ({String? name, String? path}) =>
+              _slashSave(name: name, path: path),
+          resumeSession: _slashResume,
+          summarizeSession: _slashSummarize,
+          createCheckpoint: _slashCheckpoint,
+          restoreCheckpoint: _slashRestoreCheckpoint,
+          listCheckpoints: _slashListCheckpoints,
+          clearCurrent: _slashClear,
+          showSystemMessage: _appendSystemMessage,
+        ),
+      );
+      return;
+    }
     if (promptText == null && userTextOverride == null) {
       _messageController.clear();
     }
@@ -1704,7 +1844,7 @@ jobs:
     bool shouldContinue = true;
 
     try {
-      while (shouldContinue && toolCallCount < 10) {
+      while (shouldContinue && toolCallCount < 30) {
         final curIdx = _sessions.indexWhere((s) => s.id == targetSessionId);
         if (curIdx == -1) {
           shouldContinue = false;
@@ -1733,7 +1873,10 @@ jobs:
         final currentDateStr = DateTime.now().toString().substring(0, 10);
         String systemPromptText = "";
 
-        if (_deepResearchEnabled && !currentSession.messages.any((m) => m.text.contains('<research_state>'))) {
+        if (_deepResearchEnabled &&
+            !currentSession.messages.any(
+              (m) => m.text.contains('<research_state>'),
+            )) {
           systemPromptText = DeepResearchPrompts.plannerSystemPrompt;
         } else {
           systemPromptText =
@@ -1751,126 +1894,126 @@ jobs:
                 "  - Interactive Diagrams (Toggle Switches, State Machines, Interactive Components): Include embedded `onclick=\"this.classList.toggle('active')\"`, CSS hover effects, or state transitions if interactivity enhances understanding.\n\n";
           }
 
-        systemPromptText +=
-            "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, cartesian, mindmap): ```chart\n"
-            "  Simple line-based format. LLM passes only values. Examples:\n\n"
-            "  BAR/GROUPED BAR:\n"
-            "  type: bar\n"
-            "  title: Revenue by Quarter\n"
-            "  range: 0-100\n"
-            "  labels: Q1, Q2, Q3, Q4\n"
-            "  series: Revenue = 45, 67, 89, 52\n"
-            "  series: Costs = 30, 45, 60, 40\n\n"
-            "  STACKED BAR:\n"
-            "  type: stacked\n"
-            "  title: Stack Example\n"
-            "  labels: Q1, Q2, Q3\n"
-            "  series: A = 30, 40, 50\n"
-            "  series: B = 20, 30, 10\n\n"
-            "  LINE/CURVE (single or multi-series):\n"
-            "  type: line\n"
-            "  title: Growth Trend\n"
-            "  labels: Jan, Feb, Mar, Apr\n"
-            "  series: Users = 100, 250, 400, 800\n\n"
-            "  AREA CHART:\n"
-            "  type: area\n"
-            "  title: Traffic\n"
-            "  labels: Mon, Tue, Wed\n"
-            "  series: Visits = 500, 800, 650\n\n"
-            "  PIE/DONUT (shorthand — just label: value):\n"
-            "  type: pie\n"
-            "  title: Market Share\n"
-            "  Android: 45\n"
-            "  iOS: 30\n"
-            "  Web: 25\n\n"
-            "  SCATTER:\n"
-            "  type: scatter\n"
-            "  title: Distribution\n"
-            "  labels: A, B, C, D, E\n"
-            "  series: Points = 10, 25, 15, 40, 30\n\n"
-            "  RADAR/SPIDER:\n"
-            "  type: radar\n"
-            "  title: Skills\n"
-            "  labels: Speed, Power, Defense, Agility, Stamina\n"
-            "  series: Player A = 80, 65, 90, 70, 85\n"
-            "  series: Player B = 60, 80, 70, 90, 75\n\n"
-            "  HISTOGRAM:\n"
-            "  type: histogram\n"
-            "  title: Score Distribution\n"
-            "  labels: 0-20, 21-40, 41-60, 61-80, 81-100\n"
-            "  series: Frequency = 5, 12, 25, 18, 8\n\n"
-            "  HEATMAP:\n"
-            "  type: heatmap\n"
-            "  title: Activity\n"
-            "  xlabels: Mon, Tue, Wed\n"
-            "  ylabels: Morning, Afternoon, Evening\n"
-            "  row: 3, 7, 5\n"
-            "  row: 8, 4, 9\n"
-            "  row: 2, 6, 1\n\n"
-            "  BUBBLE:\n"
-            "  type: bubble\n"
-            "  title: Market Size\n"
-            "  labels: Tech, Health, Finance\n"
-            "  series: Size = 80, 45, 120\n\n"
-            "  GANTT/TIMELINE:\n"
-            "  type: gantt\n"
-            "  title: Project Plan\n"
-            "  task: Design = 0, 3\n"
-            "  task: Develop = 2, 7\n"
-            "  task: Test = 6, 9\n"
-            "  task: Deploy = 8, 10\n\n"
-            "  GAUGE/PROGRESS:\n"
-            "  type: gauge\n"
-            "  title: CPU Usage\n"
-            "  value: 73\n"
-            "  max: 100\n"
-            "  label: percent\n\n"
-            "  CARTESIAN/GEOMETRY (for drawing shapes, polygons, points on a coordinate plane):\n"
-            "  type: cartesian\n"
-            "  title: Triangle ABC\n"
-            "  range: -10-10\n"
-            "  series: Triangle = 2,3, 6,7, 4,1, 2,3\n"
-            "  series: Point A = 2,3\n\n"
-            "  MINDMAP/TREE:\n"
-            "  type: mindmap\n"
-            "  title: Project Plan\n"
-            "  node: 1 = Root\n"
-            "  node: 2 = Branch A\n"
-            "  node: 3 = Branch B\n"
-            "  edge: 1 -> 2\n"
-            "  edge: 1 -> 3\n\n"
-            "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n";
-
-        if (_artifactsEnabled) {
           systemPromptText +=
-              "- Artifacts for complete/long outputs: use fenced blocks so the app renders them as files.\n"
-              "  Use ```html for complete HTML pages, ```markdown for essays/guides/reports, ```docx for Word-style documents, and language fences like ```python/```dart/```js for complete scripts or files.\n"
-              "  If the answer is long, a complete file, an essay, a guide, a report, or a full runnable script, put it in one artifact block instead of inline chat text. Use inline code only for small snippets.\n"
-              "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
-              "- Microsoft Word Document: ```docx\n"
-              "  title: Document Title\n"
-              "  subtitle: Optional Subtitle\n"
-              "  # Content in clean markdown\n"
-              "  ## Section Heading\n"
-              "  This is a paragraph.\n"
-              "  - Bullet item\n"
-              "  > Callout block\n"
-              "  | Table Header | Col |\n"
-              "  |---|---|\n"
-              "  | Cell | Cell |\n"
-              "  ```\n\n";
-        }
+              "- CHARTS (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, cartesian, mindmap): ```chart\n"
+              "  Simple line-based format. LLM passes only values. Examples:\n\n"
+              "  BAR/GROUPED BAR:\n"
+              "  type: bar\n"
+              "  title: Revenue by Quarter\n"
+              "  range: 0-100\n"
+              "  labels: Q1, Q2, Q3, Q4\n"
+              "  series: Revenue = 45, 67, 89, 52\n"
+              "  series: Costs = 30, 45, 60, 40\n\n"
+              "  STACKED BAR:\n"
+              "  type: stacked\n"
+              "  title: Stack Example\n"
+              "  labels: Q1, Q2, Q3\n"
+              "  series: A = 30, 40, 50\n"
+              "  series: B = 20, 30, 10\n\n"
+              "  LINE/CURVE (single or multi-series):\n"
+              "  type: line\n"
+              "  title: Growth Trend\n"
+              "  labels: Jan, Feb, Mar, Apr\n"
+              "  series: Users = 100, 250, 400, 800\n\n"
+              "  AREA CHART:\n"
+              "  type: area\n"
+              "  title: Traffic\n"
+              "  labels: Mon, Tue, Wed\n"
+              "  series: Visits = 500, 800, 650\n\n"
+              "  PIE/DONUT (shorthand — just label: value):\n"
+              "  type: pie\n"
+              "  title: Market Share\n"
+              "  Android: 45\n"
+              "  iOS: 30\n"
+              "  Web: 25\n\n"
+              "  SCATTER:\n"
+              "  type: scatter\n"
+              "  title: Distribution\n"
+              "  labels: A, B, C, D, E\n"
+              "  series: Points = 10, 25, 15, 40, 30\n\n"
+              "  RADAR/SPIDER:\n"
+              "  type: radar\n"
+              "  title: Skills\n"
+              "  labels: Speed, Power, Defense, Agility, Stamina\n"
+              "  series: Player A = 80, 65, 90, 70, 85\n"
+              "  series: Player B = 60, 80, 70, 90, 75\n\n"
+              "  HISTOGRAM:\n"
+              "  type: histogram\n"
+              "  title: Score Distribution\n"
+              "  labels: 0-20, 21-40, 41-60, 61-80, 81-100\n"
+              "  series: Frequency = 5, 12, 25, 18, 8\n\n"
+              "  HEATMAP:\n"
+              "  type: heatmap\n"
+              "  title: Activity\n"
+              "  xlabels: Mon, Tue, Wed\n"
+              "  ylabels: Morning, Afternoon, Evening\n"
+              "  row: 3, 7, 5\n"
+              "  row: 8, 4, 9\n"
+              "  row: 2, 6, 1\n\n"
+              "  BUBBLE:\n"
+              "  type: bubble\n"
+              "  title: Market Size\n"
+              "  labels: Tech, Health, Finance\n"
+              "  series: Size = 80, 45, 120\n\n"
+              "  GANTT/TIMELINE:\n"
+              "  type: gantt\n"
+              "  title: Project Plan\n"
+              "  task: Design = 0, 3\n"
+              "  task: Develop = 2, 7\n"
+              "  task: Test = 6, 9\n"
+              "  task: Deploy = 8, 10\n\n"
+              "  GAUGE/PROGRESS:\n"
+              "  type: gauge\n"
+              "  title: CPU Usage\n"
+              "  value: 73\n"
+              "  max: 100\n"
+              "  label: percent\n\n"
+              "  CARTESIAN/GEOMETRY (for drawing shapes, polygons, points on a coordinate plane):\n"
+              "  type: cartesian\n"
+              "  title: Triangle ABC\n"
+              "  range: -10-10\n"
+              "  series: Triangle = 2,3, 6,7, 4,1, 2,3\n"
+              "  series: Point A = 2,3\n\n"
+              "  MINDMAP/TREE:\n"
+              "  type: mindmap\n"
+              "  title: Project Plan\n"
+              "  node: 1 = Root\n"
+              "  node: 2 = Branch A\n"
+              "  node: 3 = Branch B\n"
+              "  edge: 1 -> 2\n"
+              "  edge: 1 -> 3\n\n"
+              "  RULES: Use ```chart for ALL graphs/charts. Use simple format above. range: min-max is optional. Keep it simple. Never write full code for charts.\n";
 
-        if (_svgVisualsEnabled) {
-          systemPromptText +=
-              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, architecture, state-machines, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
-        } else {
-          systemPromptText +=
-              "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Do NOT generate SVG visuals.\n";
-        }
+          if (_artifactsEnabled) {
+            systemPromptText +=
+                "- Artifacts for complete/long outputs: use fenced blocks so the app renders them as files.\n"
+                "  Use ```html for complete HTML pages, ```markdown for essays/guides/reports, ```docx for Word-style documents, and language fences like ```python/```dart/```js for complete scripts or files.\n"
+                "  If the answer is long, a complete file, an essay, a guide, a report, or a full runnable script, put it in one artifact block instead of inline chat text. Use inline code only for small snippets.\n"
+                "- Interactive: ```html / ```javascript / ```react / ```artifact\n"
+                "- Microsoft Word Document: ```docx\n"
+                "  title: Document Title\n"
+                "  subtitle: Optional Subtitle\n"
+                "  # Content in clean markdown\n"
+                "  ## Section Heading\n"
+                "  This is a paragraph.\n"
+                "  - Bullet item\n"
+                "  > Callout block\n"
+                "  | Table Header | Col |\n"
+                "  |---|---|\n"
+                "  | Cell | Cell |\n"
+                "  ```\n\n";
+          }
 
-        if (_agenticEnabled) {
-          systemPromptText += r"""
+          if (_svgVisualsEnabled) {
+            systemPromptText +=
+                "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Use ```svg ONLY for non-graph diagrams (flowcharts, architecture, state-machines, illustrations). NEVER use SVG for charts. ALWAYS include the closing </svg> tag for SVGs.\n";
+          } else {
+            systemPromptText +=
+                "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Do NOT generate SVG visuals.\n";
+          }
+
+          if (_agenticEnabled) {
+            systemPromptText += r"""
 AGENTIC IDE — You are the AI engine of a real, production-grade mobile IDE powered by Termux on Android.
 You have full shell access AND a suite of structured file tools via a Python bridge.
 
@@ -1996,30 +2139,31 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 • NEVER dump full file contents into chat if you already edited them via tools.
 • For every project, maintain a README.md at the project root.
 """;
-        }
+          }
 
-        if (_customMcpUrl.isNotEmpty) {
+          if (_customMcpUrl.isNotEmpty) {
+            systemPromptText +=
+                "Remote MCP at $_customMcpUrl — add \"server\":\"remote\" to params to use it.\n";
+          }
+
+          if (_searchSettings.enabled) {
+            systemPromptText +=
+                "\n━━ WEB SEARCH PROTOCOL (STRICT ENFORCEMENT) ━━\n"
+                "NEVER guess, hallucinate, or provide outdated information for time-sensitive queries, recent events, current software/library versions, or facts outside your knowledge cutoff. If you are not 100% certain, you MUST use the web.\n\n"
+                "STRICT WORKFLOW (Respect the ONE tool call per turn rule):\n"
+                "1. SEARCH: Output <search_request>precise query here</search_request> to get search results, then STOP. Wait for the result.\n"
+                "2. READ: After viewing the search results, output <read_url>URL</read_url> to fetch the full content of the most relevant page, then STOP. Wait for the result.\n"
+                "3. ANSWER: Synthesize the fetched page content to provide an accurate, up-to-date response with citations.\n\n"
+                "CRITICAL: Never skip Step 1 or Step 2. Do not answer from memory if the topic requires live data. If search results are insufficient, perform another <search_request> with a different query.\n";
+          }
+
           systemPromptText +=
-              "Remote MCP at $_customMcpUrl — add \"server\":\"remote\" to params to use it.\n";
-        }
-
-        if (_searchSettings.enabled) {
-          systemPromptText +=
-              "\n━━ WEB SEARCH PROTOCOL (STRICT ENFORCEMENT) ━━\n"
-              "NEVER guess, hallucinate, or provide outdated information for time-sensitive queries, recent events, current software/library versions, or facts outside your knowledge cutoff. If you are not 100% certain, you MUST use the web.\n\n"
-              "STRICT WORKFLOW (Respect the ONE tool call per turn rule):\n"
-              "1. SEARCH: Output <search_request>precise query here</search_request> to get search results, then STOP. Wait for the result.\n"
-              "2. READ: After viewing the search results, output <read_url>URL</read_url> to fetch the full content of the most relevant page, then STOP. Wait for the result.\n"
-              "3. ANSWER: Synthesize the fetched page content to provide an accurate, up-to-date response with citations.\n\n"
-              "CRITICAL: Never skip Step 1 or Step 2. Do not answer from memory if the topic requires live data. If search results are insufficient, perform another <search_request> with a different query.\n";
-        }
-
-        systemPromptText +=
-            "\nMemory Tool: Use <memory action=\"read\"></memory>, <memory action=\"append\">text</memory>, or <memory action=\"replace\">text</memory> to save/read personal details across sessions. Limit 10KB. Use only when essential.\n";
+              "\nMemory Tool: Use <memory action=\"read\"></memory>, <memory action=\"append\">text</memory>, or <memory action=\"replace\">text</memory> to save/read personal details across sessions. Limit 10KB. Use only when essential.\n";
         }
 
         if (_liveVoiceEngine.state != LiveVoiceState.idle) {
-          systemPromptText += "\n\n━━ LIVE VOICE MODE (TTS ACTIVE) ━━\n"
+          systemPromptText +=
+              "\n\n━━ LIVE VOICE MODE (TTS ACTIVE) ━━\n"
               "Your text output is being read aloud via Text-to-Speech. Apply these output rules strictly on top of all other capabilities (Agentic, Web Search):\n\n"
               "1. PERSONA: Always address the user as 'Boss' (e.g., 'Yes Boss...', 'Right away, Boss.').\n"
               "2. EXTREME CONCISENESS: Keep spoken text brief and conversational (1-3 sentences max). Get straight to the point.\n"
@@ -2100,7 +2244,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 reasoningText += textChunk;
               } else {
                 fullText += textChunk;
-                if (_liveVoiceEngine.state == LiveVoiceState.thinking || _liveVoiceEngine.state == LiveVoiceState.speaking) {
+                if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
+                    _liveVoiceEngine.state == LiveVoiceState.speaking) {
                   _liveVoiceEngine.feedStreamToken(textChunk);
                 }
               }
@@ -2130,13 +2275,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             }
           },
           onError: (Object err) {
-            if (_liveVoiceEngine.state == LiveVoiceState.thinking || _liveVoiceEngine.state == LiveVoiceState.speaking) {
+            if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
+                _liveVoiceEngine.state == LiveVoiceState.speaking) {
               _liveVoiceEngine.interrupt();
             }
             if (!completer.isCompleted) completer.completeError(err);
           },
           onDone: () {
-            if (_liveVoiceEngine.state == LiveVoiceState.thinking || _liveVoiceEngine.state == LiveVoiceState.speaking) {
+            if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
+                _liveVoiceEngine.state == LiveVoiceState.speaking) {
               _liveVoiceEngine.endStreamResponse();
             }
             if (!completer.isCompleted) completer.complete();
@@ -2263,8 +2410,14 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           }
         }
 
-        if (toolCallCount >= 10) {
+        if (toolCallCount >= 30) {
           shouldContinue = false;
+          final cpMsg = await _slashCheckpoint(
+            'tool_loop_limit_${DateTime.now().millisecondsSinceEpoch}',
+          );
+          await _appendSystemMessage(
+            '$cpMsg\nTool loop reached 30 calls. Stop here and resume with /restore <checkpoint-id> if needed.',
+          );
           continue;
         }
 
@@ -2332,14 +2485,22 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   HttpHeaders.acceptHeader,
                   'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 );
-                request.headers.set(HttpHeaders.acceptLanguageHeader, 'en-US,en;q=0.9');
+                request.headers.set(
+                  HttpHeaders.acceptLanguageHeader,
+                  'en-US,en;q=0.9',
+                );
 
                 response = await request.close().timeout(
                   const Duration(seconds: 45),
                 );
 
-                if ((response.isRedirect || (response.statusCode >= 300 && response.statusCode < 400)) && redirectCount < 8) {
-                  final location = response.headers.value(HttpHeaders.locationHeader);
+                if ((response.isRedirect ||
+                        (response.statusCode >= 300 &&
+                            response.statusCode < 400)) &&
+                    redirectCount < 8) {
+                  final location = response.headers.value(
+                    HttpHeaders.locationHeader,
+                  );
                   if (location != null && location.isNotEmpty) {
                     await response.drain<void>();
                     redirectCount++;
@@ -2356,14 +2517,17 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 throw HttpException('HTTP ${response.statusCode}');
               }
 
-              final isPdf = targetUrl.toLowerCase().endsWith('.pdf') ||
+              final isPdf =
+                  targetUrl.toLowerCase().endsWith('.pdf') ||
                   (response.headers.contentType?.mimeType == 'application/pdf');
 
               String text = '';
               if (isPdf) {
                 try {
                   final bytesBuilder = BytesBuilder();
-                  await for (final chunk in response.timeout(const Duration(seconds: 60))) {
+                  await for (final chunk in response.timeout(
+                    const Duration(seconds: 60),
+                  )) {
                     bytesBuilder.add(chunk);
                   }
                   final bytes = bytesBuilder.takeBytes();
@@ -2374,7 +2538,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   text = PdfTextExtractor(document).extractText();
                   document.dispose();
                   if (text.trim().isEmpty) {
-                    throw const FormatException('No extractable text in PDF (possibly scanned/image-only)');
+                    throw const FormatException(
+                      'No extractable text in PDF (possibly scanned/image-only)',
+                    );
                   }
                 } catch (e) {
                   throw FormatException('PDF extraction failed: $e');
@@ -2442,9 +2608,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               urlResult = 'Error fetching URL: $e';
             }
             if (mounted) setState(() => _toolStatus = '');
-            toolOutputs.add(
-              "Content of URL '$url':\n\n$urlResult",
-            );
+            toolOutputs.add("Content of URL '$url':\n\n$urlResult");
           }
         }
         if (memoryMatch != null) {
@@ -2476,8 +2640,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             String mcpEndpoint = 'http://127.0.0.1:8390/mcp';
             String toolMethod = 'tool';
             Map<String, dynamic> toolParams = {};
-           try {
-             final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
+            String? paramResolveError;
+            try {
+              final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
               toolMethod = parsed['method']?.toString() ?? 'tool';
               toolParams = parsed['params'] as Map<String, dynamic>? ?? {};
 
@@ -2496,7 +2661,29 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               _resolveToolPaths(toolParams, _agenticWorkspace);
               parsed['params'] = toolParams;
               jsonString = jsonEncode(parsed);
-            } catch (_) {}
+            } catch (e) {
+              paramResolveError = e.toString();
+            }
+            if (paramResolveError != null) {
+              toolOutputs.add(
+                'Tool Result [${toolMethod}]:\n\n{"error":"outside workspace jail","details":"$paramResolveError"}',
+              );
+              continue;
+            }
+
+            if (toolMethod == 'patch_file' ||
+                toolMethod == 'write_file_rich' ||
+                toolMethod == 'delete_path') {
+              try {
+                await _slashCheckpoint(
+                  'auto_before_${toolMethod}_${DateTime.now().millisecondsSinceEpoch}',
+                );
+              } catch (e) {
+                toolOutputs.add(
+                  'Tool Result [${toolMethod}]:\n\n{"warning":"checkpoint creation failed","details":"$e"}',
+                );
+              }
+            }
 
             // Permission check before running shell commands
             if (toolMethod == 'run_command' ||
@@ -2538,11 +2725,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             int attempt = 0;
             while (attempt < maxRetries) {
               attempt++;
-              HttpClient? client;
               try {
-                client = HttpClient()
-                  ..connectionTimeout = const Duration(seconds: 120);
-                final request = await client.postUrl(Uri.parse(mcpEndpoint))
+                final request = await _mcpHttpClient
+                    .postUrl(Uri.parse(mcpEndpoint))
                     .timeout(const Duration(seconds: 120));
                 request.headers.contentType = ContentType.json;
 
@@ -2550,11 +2735,14 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 request.headers.contentLength = bytes.length;
                 request.add(bytes);
 
-                final response = await request.close()
+                final response = await request.close().timeout(
+                  const Duration(seconds: 120),
+                );
+                final body = await response
+                    .transform(utf8.decoder)
+                    .join()
                     .timeout(const Duration(seconds: 120));
-                final body = await response.transform(utf8.decoder).join()
-                    .timeout(const Duration(seconds: 120));
-                
+
                 String cleanResult = body;
                 try {
                   final parsed = jsonDecode(body) as Map<String, dynamic>;
@@ -2582,24 +2770,33 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 } catch (_) {
                   // Fallback to raw body if not JSON
                 }
-                
+
                 mcpResult = cleanResult;
                 if (mcpResult.length > 32000) {
-                  mcpResult =
-                      mcpResult.substring(0, 16000) +
-                      '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
-                      mcpResult.substring(mcpResult.length - 6000);
+                  const fileReadMethods = {
+                    'read_file_rich',
+                    'file_outline',
+                    'search_rich',
+                    'tree',
+                  };
+                  if (fileReadMethods.contains(toolMethod)) {
+                    mcpResult = mcpResult.substring(0, 20000);
+                  } else {
+                    mcpResult =
+                        mcpResult.substring(0, 16000) +
+                        '\n\n...[middle truncated — ${mcpResult.length - 22000} chars removed]...\n\n' +
+                        mcpResult.substring(mcpResult.length - 6000);
+                  }
                 }
                 break; // Success, break out of retry loop.
               } catch (e) {
                 if (attempt >= maxRetries) {
-                  mcpResult = '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
+                  mcpResult =
+                      '{"error": "MCP bridge connection failed after $maxRetries attempts: $e"}';
                 } else {
                   // Wait a short time before retrying
                   await Future.delayed(Duration(milliseconds: 500 * attempt));
                 }
-              } finally {
-                client?.close(force: true);
               }
             }
             if (mounted) setState(() => _toolStatus = '');
@@ -2665,7 +2862,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
             String errorMsg = error.toString();
             if (attachmentInfo.isNotEmpty) {
-              errorMsg = 'This model does not support $attachmentInfo attachments. ($error)';
+              errorMsg =
+                  'This model does not support $attachmentInfo attachments. ($error)';
             }
 
             currentMessages[lastIdx] = ChatMessage(
@@ -2693,14 +2891,19 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     }
   }
 
-  List<ChatMessage> _compactHistoryForApi(List<ChatMessage> messages, int assistantMessageIndex) {
-    final List<ChatMessage> rawHistory = messages.take(assistantMessageIndex).toList();
+  List<ChatMessage> _compactHistoryForApi(
+    List<ChatMessage> messages,
+    int assistantMessageIndex,
+  ) {
+    final List<ChatMessage> rawHistory = messages
+        .take(assistantMessageIndex)
+        .toList();
     if (rawHistory.length <= 4) {
       return rawHistory;
     }
 
     final List<ChatMessage> compacted = [];
-    
+
     // Always keep the first message (initial instruction/goal)
     compacted.add(rawHistory.first);
 
@@ -2709,7 +2912,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
     for (int i = 1; i < rawHistory.length; i++) {
       final msg = rawHistory[i];
-      
+
       if (i > intermediateEndIndex) {
         compacted.add(msg);
         continue;
@@ -2718,78 +2921,107 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       // Compact intermediate messages to reduce token footprint
       if (msg.role == MessageRole.system) {
         String newText = msg.text;
-        
+
         if (newText.length > 8000) {
-          final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]').firstMatch(newText);
+          final toolResultMatch = RegExp(
+            r'Tool Result \[(\w+)\]',
+          ).firstMatch(newText);
           final mcpMatch = newText.contains('MCP Result:\n');
-          
-          if (toolResultMatch != null) {
-            final method = toolResultMatch.group(1);
-            newText = 'Tool Result [$method]:\n\n'
+          final method = toolResultMatch?.group(1)?.trim();
+          const keepRichToolMethods = {
+            'read_file_rich',
+            'file_outline',
+            'search_rich',
+            'tree',
+          };
+
+          if (toolResultMatch != null &&
+              method != null &&
+              keepRichToolMethods.contains(method)) {
+            newText = newText.substring(0, 4000);
+          } else if (toolResultMatch != null) {
+            newText =
+                'Tool Result [$method]:\n\n'
                 '[System: Detailed tool output (${newText.length} characters) omitted for context space. Operation completed successfully.]';
           } else if (mcpMatch) {
-            newText = 'MCP Result:\n\n'
+            newText =
+                'MCP Result:\n\n'
                 '[System: Detailed MCP tool output (${newText.length} characters) omitted for context space. Operation completed successfully.]';
-          } else if (newText.startsWith('Search results:\n') || newText.startsWith('Web Search results')) {
-            newText = '🔍 Web Search Results:\n\n'
+          } else if (newText.startsWith('Search results:\n') ||
+              newText.startsWith('Web Search results')) {
+            newText =
+                '🔍 Web Search Results:\n\n'
                 '[System: Search results omitted for context space.]';
-          } else if (newText.startsWith('URL Content:\n') || newText.startsWith('Content of URL')) {
-            newText = '🌐 URL Content:\n\n'
+          } else if (newText.startsWith('URL Content:\n') ||
+              newText.startsWith('Content of URL')) {
+            newText =
+                '🌐 URL Content:\n\n'
                 '[System: Webpage content omitted for context space.]';
           } else {
             // General truncation for very long intermediate system messages
-            newText = newText.substring(0, 500) +
+            newText =
+                newText.substring(0, 500) +
                 '\n\n... [${newText.length - 1000} characters omitted for context space] ...\n\n' +
                 newText.substring(newText.length - 500);
           }
         }
-        
-        compacted.add(ChatMessage(
-          role: msg.role,
-          text: newText,
-          isError: msg.isError,
-          reasoning: msg.reasoning,
-          images: msg.images,
-          videos: msg.videos,
-          files: const [], // Strip files from intermediate system messages
-        ));
+
+        compacted.add(
+          ChatMessage(
+            role: msg.role,
+            text: newText,
+            isError: msg.isError,
+            reasoning: msg.reasoning,
+            images: msg.images,
+            videos: msg.videos,
+            files: const [], // Strip files from intermediate system messages
+          ),
+        );
       } else if (msg.role == MessageRole.assistant) {
         String newText = msg.text;
-        
+
         if (newText.length > 2500) {
           newText = newText.replaceAllMapped(
             RegExp(r'<content>([\s\S]{1000,})</content>'),
-            (match) => '<content>... [Code content of length ${match.group(1)!.length} characters omitted for context space] ...</content>',
+            (match) =>
+                '<content>... [Code content of length ${match.group(1)!.length} characters omitted for context space] ...</content>',
           );
           newText = newText.replaceAllMapped(
             RegExp(r'<new_content>([\s\S]{1000,})</new_content>'),
-            (match) => '<new_content>... [New code content of length ${match.group(1)!.length} characters omitted for context space] ...</new_content>',
+            (match) =>
+                '<new_content>... [New code content of length ${match.group(1)!.length} characters omitted for context space] ...</new_content>',
           );
           newText = newText.replaceAllMapped(
             RegExp(r'<patches>([\s\S]{1000,})</patches>'),
-            (match) => '<patches>... [Patches data of length ${match.group(1)!.length} characters omitted] ...</patches>',
+            (match) =>
+                '<patches>... [Patches data of length ${match.group(1)!.length} characters omitted] ...</patches>',
           );
         }
-        
-        compacted.add(ChatMessage(
-          role: msg.role,
-          text: newText,
-          isError: msg.isError,
-          reasoning: msg.reasoning,
-          images: msg.images,
-          videos: msg.videos,
-          files: const [],
-        ));
+
+        compacted.add(
+          ChatMessage(
+            role: msg.role,
+            text: newText,
+            isError: msg.isError,
+            reasoning: msg.reasoning,
+            images: msg.images,
+            videos: msg.videos,
+            files: const [],
+          ),
+        );
       } else if (msg.role == MessageRole.user) {
-        compacted.add(ChatMessage(
-          role: msg.role,
-          text: msg.text,
-          isError: msg.isError,
-          reasoning: msg.reasoning,
-          images: msg.images,
-          videos: msg.videos,
-          files: const [], // Strip attached files from intermediate user messages to avoid re-sending large base64 contents
-        ));
+        compacted.add(
+          ChatMessage(
+            role: msg.role,
+            text: msg.text,
+            isError: msg.isError,
+            reasoning: msg.reasoning,
+            images: msg.images,
+            videos: msg.videos,
+            files:
+                const [], // Strip attached files from intermediate user messages to avoid re-sending large base64 contents
+          ),
+        );
       }
     }
 
@@ -2811,10 +3043,13 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     final short = command.length > 80
         ? command.substring(0, 77) + '…'
         : command;
+    if (!mounted) return false;
+    final navigator = Navigator.of(context, rootNavigator: true);
     final result = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
+          context: context,
+          useRootNavigator: true,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFFFFFBF2),
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
@@ -2964,8 +3199,11 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             ],
           ),
         ],
-      ),
-    );
+          ),
+        ).timeout(
+          const Duration(seconds: 30),
+          onTimeout: () => 'no',
+        );
 
     if (result == null || result == 'no') return false;
     if (result == 'always') {
@@ -2977,6 +3215,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       setState(() => _shellSessionAllow = true);
       return true;
     }
+    if (!mounted) return false;
+    if (!navigator.mounted) return false;
     return true; // 'yes'
   }
 
@@ -3168,12 +3408,20 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
   Match? _findMcpMatch(String fullText) {
     // 0. Try direct command format: <command>...</command> (case-insensitive with spacing support & unclosed fallback)
-    final cmdStartMatch = RegExp(r'<command\s*>', caseSensitive: false).firstMatch(fullText);
+    final cmdStartMatch = RegExp(
+      r'<command\s*>',
+      caseSensitive: false,
+    ).firstMatch(fullText);
     if (cmdStartMatch != null) {
-      final cmdEndMatch = RegExp(r'</command\s*>', caseSensitive: false).firstMatch(fullText);
+      final cmdEndMatch = RegExp(
+        r'</command\s*>',
+        caseSensitive: false,
+      ).firstMatch(fullText);
       final String commandVal;
       if (cmdEndMatch != null) {
-        commandVal = fullText.substring(cmdStartMatch.end, cmdEndMatch.start).trim();
+        commandVal = fullText
+            .substring(cmdStartMatch.end, cmdEndMatch.start)
+            .trim();
       } else {
         commandVal = fullText.substring(cmdStartMatch.end).trim();
       }
@@ -3187,93 +3435,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
     }
 
-    // 1. Try XML format: <tool_request>...<method>x</method>...<param>val</param>...</tool_request> (case-insensitive & unclosed fallback)
-    final xmlStartMatch = RegExp(r'<tool_request\s*>', caseSensitive: false).firstMatch(fullText);
-    String? xmlContent;
-    if (xmlStartMatch != null) {
-      final xmlEndMatch = RegExp(r'</tool_request\s*>', caseSensitive: false).firstMatch(fullText);
-      if (xmlEndMatch != null) {
-        xmlContent = fullText.substring(xmlStartMatch.end, xmlEndMatch.start);
-      } else {
-        xmlContent = fullText.substring(xmlStartMatch.end);
-      }
-    } else {
-      // Robustness: If <tool_request> is missing but <method> is present, parse the whole text as XML content
-      final hasMethod = RegExp(r'<method\s*>', caseSensitive: false).hasMatch(fullText);
-      if (hasMethod) {
-        xmlContent = fullText;
-      }
-    }
-
-    if (xmlContent != null) {
-      final Map<String, dynamic> result = {};
-
-      const preserveWhitespaceKeys = {
-        'content',
-        'new_content',
-        'patches',
-        'reads',
-      };
-
-      String cleanToolValue(String key, String value) {
-        if (preserveWhitespaceKeys.contains(key)) {
-          var result = value;
-          if (result.startsWith('\n')) result = result.substring(1);
-          if (result.endsWith('\n'))
-            result = result.substring(0, result.length - 1);
-          return result;
-        }
-        return value.trim();
-      }
-
-      // Primary: <tagname attr="...">value</tagname> case-insensitively with tag spacing
-      final regex = RegExp(
-        r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
-        caseSensitive: false,
-      );
-      for (final match in regex.allMatches(xmlContent)) {
-        final key = match.group(1)!.toLowerCase();
-        result[key] = cleanToolValue(key, match.group(2)!);
-      }
-
-      // Fallback: <PARAM name="key">value</PARAM>
-      final paramRegex = RegExp(
-        r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
-      );
-      for (final m in paramRegex.allMatches(xmlContent)) {
-        final key = m.group(1)!.toLowerCase();
-        result[key] = cleanToolValue(key, m.group(2)!);
-      }
-
-      // Also try <parameter name="key">value</parameter>
-      final paramRegex2 = RegExp(
-        r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
-        caseSensitive: false,
-      );
-      for (final m in paramRegex2.allMatches(xmlContent)) {
-        final key = m.group(1)!.toLowerCase();
-        result[key] = cleanToolValue(key, m.group(2)!);
-      }
-
-      if (result.containsKey('method')) {
-        for (final key in [
-          'method',
-          'path',
-          'query',
-          'start_line',
-          'end_line',
-          'pattern',
-          'command',
-        ]) {
-          if (result.containsKey(key) && result[key] is String) {
-            result[key] = (result[key] as String).trim();
-          }
-        }
-        final method = result['method'];
-        result.remove('method');
-        final jsonStr = jsonEncode({'method': method, 'params': result});
-        return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
-      }
+    final toolRequestJson = _findToolRequestMatch(fullText);
+    if (toolRequestJson != null) {
+      return RegExp(r'([\s\S]*)').firstMatch(toolRequestJson);
     }
 
     // 2. Fallback to old JSON format
@@ -3292,6 +3456,77 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
       caseSensitive: false,
     ).firstMatch('<mcp_request>$jsonStr</mcp_request>');
+  }
+
+  String? _findToolRequestMatch(String fullText) {
+    final xmlStartMatch = RegExp(
+      r'<tool_request\s*>',
+      caseSensitive: false,
+    ).firstMatch(fullText);
+    String? xmlContent;
+    if (xmlStartMatch != null) {
+      final xmlEndMatch = RegExp(
+        r'</tool_request\s*>',
+        caseSensitive: false,
+      ).firstMatch(fullText);
+      if (xmlEndMatch != null) {
+        xmlContent = fullText.substring(xmlStartMatch.end, xmlEndMatch.start);
+      } else {
+        xmlContent = fullText.substring(xmlStartMatch.end);
+      }
+    } else if (RegExp(r'<method\s*>', caseSensitive: false).hasMatch(fullText)) {
+      xmlContent = fullText;
+    }
+    if (xmlContent == null) return null;
+
+    final Map<String, dynamic> result = {};
+    const preserveWhitespaceKeys = {'content', 'new_content', 'patches', 'reads'};
+
+    String cleanToolValue(String key, String value) {
+      if (preserveWhitespaceKeys.contains(key)) {
+        var output = value;
+        if (output.startsWith('\n')) output = output.substring(1);
+        if (output.endsWith('\n')) output = output.substring(0, output.length - 1);
+        return output;
+      }
+      return value.trim();
+    }
+
+    final regex = RegExp(
+      r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
+      caseSensitive: false,
+    );
+    for (final match in regex.allMatches(xmlContent)) {
+      final key = match.group(1)!.toLowerCase();
+      result[key] = cleanToolValue(key, match.group(2)!);
+    }
+
+    final paramRegex = RegExp(
+      r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
+    );
+    for (final m in paramRegex.allMatches(xmlContent)) {
+      final key = m.group(1)!.toLowerCase();
+      result[key] = cleanToolValue(key, m.group(2)!);
+    }
+
+    final paramRegex2 = RegExp(
+      r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
+      caseSensitive: false,
+    );
+    for (final m in paramRegex2.allMatches(xmlContent)) {
+      final key = m.group(1)!.toLowerCase();
+      result[key] = cleanToolValue(key, m.group(2)!);
+    }
+
+    if (!result.containsKey('method')) return null;
+    for (final key in ['method', 'path', 'query', 'start_line', 'end_line', 'pattern', 'command']) {
+      if (result.containsKey(key) && result[key] is String) {
+        result[key] = (result[key] as String).trim();
+      }
+    }
+    final method = result['method'];
+    result.remove('method');
+    return jsonEncode({'method': method, 'params': result});
   }
 
   int _findMatchingBracket(String text, int startIndex) {
@@ -3354,7 +3589,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           '',
         )
         .replaceAll(
-          RegExp(r'!\[[^\]]*\]\([^)]*\.svg(?:\?[^)]*)?\)', caseSensitive: false),
+          RegExp(
+            r'!\[[^\]]*\]\([^)]*\.svg(?:\?[^)]*)?\)',
+            caseSensitive: false,
+          ),
           '',
         );
   }
@@ -3366,8 +3604,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     return file.path;
   }
 
-  String _updateResearchStateInText(String oldText, Map<String, dynamic> stateMap) {
-    final newStateStr = '<research_state>${jsonEncode(stateMap)}</research_state>';
+  String _updateResearchStateInText(
+    String oldText,
+    Map<String, dynamic> stateMap,
+  ) {
+    final newStateStr =
+        '<research_state>${jsonEncode(stateMap)}</research_state>';
     final startIdx = oldText.indexOf('<research_state>');
     if (startIdx == -1) {
       return oldText.isEmpty ? newStateStr : '$oldText\n\n$newStateStr';
@@ -3376,10 +3618,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     if (endIdx == -1) {
       return oldText.substring(0, startIdx) + newStateStr;
     }
-    return oldText.substring(0, startIdx) + newStateStr + oldText.substring(endIdx + 17);
+    return oldText.substring(0, startIdx) +
+        newStateStr +
+        oldText.substring(endIdx + 17);
   }
 
-  String _preprocessUnrecognizedToolCalls(String text, List<Map<String, dynamic>> unrecognizedErrors) {
+  String _preprocessUnrecognizedToolCalls(
+    String text,
+    List<Map<String, dynamic>> unrecognizedErrors,
+  ) {
     final pattern = RegExp(r'\b([a-zA-Z_][a-zA-Z0-9_\.:]*)\s*\{');
     var offset = 0;
     var result = text;
@@ -3412,13 +3659,20 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       final nameLower = name.toLowerCase();
       bool isKnownTool = false;
       String? mappedTool;
-      if (nameLower.contains('read_url') || nameLower.contains('readurl') || nameLower.contains('fetch')) {
+      if (nameLower.contains('read_url') ||
+          nameLower.contains('readurl') ||
+          nameLower.contains('fetch')) {
         isKnownTool = true;
         mappedTool = 'read_url';
-      } else if (nameLower.contains('web_search') || nameLower.contains('search_web') || nameLower.contains('search_request') || (nameLower.contains('search') && !nameLower.contains('research'))) {
+      } else if (nameLower.contains('web_search') ||
+          nameLower.contains('search_web') ||
+          nameLower.contains('search_request') ||
+          (nameLower.contains('search') && !nameLower.contains('research'))) {
         isKnownTool = true;
         mappedTool = 'search_request';
-      } else if (nameLower.contains('mcp_request') || nameLower.contains('mcp_call') || (nameLower.contains('mcp') && !nameLower.contains('mcp_server'))) {
+      } else if (nameLower.contains('mcp_request') ||
+          nameLower.contains('mcp_call') ||
+          (nameLower.contains('mcp') && !nameLower.contains('mcp_server'))) {
         isKnownTool = true;
         mappedTool = 'mcp_request';
       }
@@ -3434,8 +3688,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             reinterpreted = true;
           }
         } else if (mappedTool == 'search_request') {
-          final queryRegex1 = RegExp('(?:query|q)[:\\s="\']+\\s*["\']([^"\']+)["\']');
-          final queryRegex2 = RegExp('(?:query|q)[:\\s="\']+\\s*([^\\s"\'\\}]+)');
+          final queryRegex1 = RegExp(
+            '(?:query|q)[:\\s="\']+\\s*["\']([^"\']+)["\']',
+          );
+          final queryRegex2 = RegExp(
+            '(?:query|q)[:\\s="\']+\\s*([^\\s"\'\\}]+)',
+          );
           final quotedRegex = RegExp('["\']([^"\']+)["\']');
           String? query;
           final mq1 = queryRegex1.firstMatch(paramsText);
@@ -3473,21 +3731,30 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           }
         }
         if (reinterpreted) {
-          result = result.substring(0, matchStart) + replacement + result.substring(braceEnd + 1);
+          result =
+              result.substring(0, matchStart) +
+              replacement +
+              result.substring(braceEnd + 1);
           offset = matchStart + replacement.length;
         } else {
           unrecognizedErrors.add({
             'tool': name,
-            'error': 'Unrecognized tool call syntax with unparseable parameters: $fullMatchText',
+            'error':
+                'Unrecognized tool call syntax with unparseable parameters: $fullMatchText',
           });
           offset = braceEnd + 1;
         }
       } else {
-        final isGenericCallShape = name.contains(':') || nameLower.startsWith('call') || nameLower.startsWith('tool') || nameLower.startsWith('request');
+        final isGenericCallShape =
+            name.contains(':') ||
+            nameLower.startsWith('call') ||
+            nameLower.startsWith('tool') ||
+            nameLower.startsWith('request');
         if (isGenericCallShape) {
           unrecognizedErrors.add({
             'tool': name,
-            'error': 'Generic tool call attempt in unrecognized format: $fullMatchText',
+            'error':
+                'Generic tool call attempt in unrecognized format: $fullMatchText',
           });
         }
         offset = braceEnd + 1;
@@ -3495,8 +3762,6 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     }
     return result;
   }
-
-
 
   /// Returns a human-readable status label for a tool call, e.g.:
   ///   "📖 Reading main.dart lines 10–50"
@@ -3648,8 +3913,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         )
         .trim();
     try {
-      final stateMap = editedStateMap ??
-          (jsonDecode(stateStr) as Map<String, dynamic>);
+      final stateMap =
+          editedStateMap ?? (jsonDecode(stateStr) as Map<String, dynamic>);
       stateMap['status'] = 'running';
 
       setState(() {
@@ -3769,7 +4034,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         );
       }
     } else if (kind == 'fetch') {
-      final content = data?['content'] ??
+      final content =
+          data?['content'] ??
           data?['text'] ??
           data?['body'] ??
           data?['markdown'] ??
@@ -3804,77 +4070,112 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       final prompt = activeSession.messages[messageIndex - 1].text;
 
       // ── STAGE 1: PLANNING ──
-      stateMap['status'] = 'planning';
-      stateMap['plan_start_ms'] = DateTime.now().millisecondsSinceEpoch;
-      _publishResearchState(sessionIndex, messageIndex, stateMap);
+      // Reuse an existing usable plan (UI-edited / resume) instead of re-calling the planner.
+      final List<Map<String, dynamic>> steps;
+      if (DeepResearchHelpers.hasUsablePlan(stateMap)) {
+        steps = DeepResearchHelpers.normalizeSteps(stateMap['steps'] as List?);
+        stateMap['steps'] = steps;
+        stateMap['status'] = 'running';
+        stateMap.remove('regenerate_plan');
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
+      } else {
+        stateMap['status'] = 'planning';
+        stateMap['plan_start_ms'] = DateTime.now().millisecondsSinceEpoch;
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
 
-      final List<ChatMessage> plannerMessages = [
-        const ChatMessage(
-          role: MessageRole.system,
-          text: DeepResearchPrompts.plannerSystemPrompt,
-        ),
-        ChatMessage(
-          role: MessageRole.user,
-          text: "Analyze the user's research request and output a detailed research plan. "
-              "Research Request: \"$prompt\"\n\n"
-              "Current date and time: ${_deepResearchNow()}. Plan for information that is current as of this timestamp. "
-              "For time-sensitive topics, require each phase to find and verify the latest available primary or authoritative sources.",
-        ),
-      ];
+        final List<ChatMessage> plannerMessages = [
+          const ChatMessage(
+            role: MessageRole.system,
+            text: DeepResearchPrompts.plannerSystemPrompt,
+          ),
+          ChatMessage(
+            role: MessageRole.user,
+            text:
+                "Analyze the user's research request and output a detailed research plan. "
+                "Research Request: \"$prompt\"\n\n"
+                "Current date and time: ${_deepResearchNow()}. Plan for information that is current as of this timestamp. "
+                "For time-sensitive topics, require each phase to find and verify the latest available primary or authoritative sources.",
+          ),
+        ];
 
-      String planText = '';
-      String plannerReasoning = '';
-      final plannerStream = _chatClient.sendChatStream(
-        provider: provider,
-        settings: settings,
-        model: model,
-        messages: _compactHistoryForApi(plannerMessages, plannerMessages.length),
-      );
+        String planText = '';
+        String plannerReasoning = '';
+        final plannerStream = _chatClient.sendChatStream(
+          provider: provider,
+          settings: settings,
+          model: model,
+          messages: _compactHistoryForApi(
+            plannerMessages,
+            plannerMessages.length,
+          ),
+        );
 
-      await for (final chunk in plannerStream) {
-        if (chunk.startsWith('[REASONING]')) {
-          plannerReasoning += chunk.substring(11);
-        } else {
-          var textChunk = chunk;
-          if (textChunk.contains('<think>') || textChunk.contains('<reasoning>') || textChunk.contains('<thought>')) {
-            textChunk = textChunk.replaceAll(RegExp(r'<think>|<reasoning>|<thought>|</think>|</reasoning>|</thought>'), '');
+        await for (final chunk in plannerStream) {
+          if (chunk.startsWith('[REASONING]')) {
+            plannerReasoning += chunk.substring(11);
+          } else {
+            var textChunk = chunk;
+            if (textChunk.contains('<think>') ||
+                textChunk.contains('<reasoning>') ||
+                textChunk.contains('<thought>')) {
+              textChunk = textChunk.replaceAll(
+                RegExp(
+                  r'<think>|<reasoning>|<thought>|</think>|</reasoning>|</thought>',
+                ),
+                '',
+              );
+            }
+            planText += textChunk;
           }
-          planText += textChunk;
         }
-      }
 
-      final List<Map<String, dynamic>> steps = [];
-      final stepMatches = RegExp(r"<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>", caseSensitive: false, dotAll: true).allMatches(planText);
-      
-      int stepIdx = 1;
-      for (final match in stepMatches) {
-        final title = "Phase $stepIdx";
-        final queryText = match.group(2)?.trim() ?? '';
-        steps.add({
-          'id': 'step_$stepIdx',
-          'title': title,
-          'query_text': queryText,
-          'status': 'pending',
-          'content': '',
-          'events': <Map<String, dynamic>>[],
-        });
-        stepIdx++;
-      }
+        final plannedSteps = <Map<String, dynamic>>[];
+        final stepMatches = RegExp(
+          r"<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>",
+          caseSensitive: false,
+          dotAll: true,
+        ).allMatches(planText);
 
-      if (steps.isEmpty) {
-        steps.add({
-          'id': 'step_1',
-          'title': 'General Research',
-          'query_text': prompt,
-          'status': 'pending',
-          'content': '',
-          'events': <Map<String, dynamic>>[],
-        });
-      }
+        int stepIdx = 1;
+        for (final match in stepMatches) {
+          // Keep full queryText; derive a short UI title from the planner's
+          // "Title - instructions" / "Title | …" / "… success:" conventions.
+          final queryText = match.group(2)?.trim() ?? '';
+          final derivedTitle = queryText
+              .split(RegExp(r' - | \| | success:', caseSensitive: false))
+              .first
+              .trim();
+          final title = derivedTitle.isNotEmpty
+              ? derivedTitle
+              : 'Phase $stepIdx';
+          plannedSteps.add({
+            'id': 'step_$stepIdx',
+            'title': title,
+            'query_text': queryText,
+            'status': 'pending',
+            'content': '',
+            'events': <Map<String, dynamic>>[],
+          });
+          stepIdx++;
+        }
 
-      stateMap['steps'] = steps;
-      stateMap['status'] = 'running';
-      _publishResearchState(sessionIndex, messageIndex, stateMap);
+        if (plannedSteps.isEmpty) {
+          plannedSteps.add({
+            'id': 'step_1',
+            'title': 'General Research',
+            'query_text': prompt,
+            'status': 'pending',
+            'content': '',
+            'events': <Map<String, dynamic>>[],
+          });
+        }
+
+        steps = plannedSteps;
+        stateMap['steps'] = steps;
+        stateMap['status'] = 'running';
+        stateMap.remove('regenerate_plan');
+        _publishResearchState(sessionIndex, messageIndex, stateMap);
+      }
 
       // ── STAGE 2: MULTI-AGENT EXECUTION ──
       final int maxConcurrentFetchCalls = 6;
@@ -3901,9 +4202,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         phaseSkippedPdfs.clear();
         phaseFailedFetches.clear();
 
+        // Skip already-completed phases when resuming a usable plan.
+        if (steps[i]['status'] == 'completed') {
+          continue;
+        }
+
         if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
           steps[i]['status'] = 'failed';
-          steps[i]['error'] = 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+          steps[i]['error'] =
+              'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
           _publishResearchState(sessionIndex, messageIndex, stateMap);
           continue;
         }
@@ -3916,34 +4223,39 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           required String tool,
           String? query,
           String? url,
-        }) beginResearchEvent = ({
-          required String kind,
-          required String tool,
-          String? query,
-          String? url,
-        }) {
-          final eventId = 'evt_${DateTime.now().millisecondsSinceEpoch}_${StackTrace.current.hashCode}';
-          final newEvent = {
-            'id': eventId,
-            'kind': kind,
-            'tool': tool,
-            'status': 'running',
-            if (query != null) 'query': query,
-            if (url != null) 'url': url,
-            'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
-          };
-          
-          setState(() {
-            final idx = (stateMap['steps'] as List).indexWhere((s) => s['id'] == stageId);
-            if (idx != -1) {
-              final evts = List<Map<String, dynamic>>.from(stateMap['steps'][idx]['events'] ?? []);
-              evts.add(newEvent);
-              stateMap['steps'][idx]['events'] = evts;
-            }
-          });
-          _publishResearchState(sessionIndex, messageIndex, stateMap);
-          return eventId;
-        };
+        })
+        beginResearchEvent =
+            ({
+              required String kind,
+              required String tool,
+              String? query,
+              String? url,
+            }) {
+              final eventId = const Uuid().v4();
+              final newEvent = {
+                'id': eventId,
+                'kind': kind,
+                'tool': tool,
+                'status': 'running',
+                if (query != null) 'query': query,
+                if (url != null) 'url': url,
+                'timestamp_ms': DateTime.now().millisecondsSinceEpoch,
+              };
+
+              // Mutate stateMap outside setState; single publish triggers one rebuild.
+              final idx = (stateMap['steps'] as List).indexWhere(
+                (s) => s['id'] == stageId,
+              );
+              if (idx != -1) {
+                final evts = List<Map<String, dynamic>>.from(
+                  stateMap['steps'][idx]['events'] ?? [],
+                );
+                evts.add(newEvent);
+                stateMap['steps'][idx]['events'] = evts;
+              }
+              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              return eventId;
+            };
 
         final void Function(
           String eventId, {
@@ -3951,64 +4263,70 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           required Stopwatch stopwatch,
           Map<String, dynamic>? details,
           String? error,
-        }) finishResearchEvent = (
-          String eventId, {
-          required String status,
-          required Stopwatch stopwatch,
-          Map<String, dynamic>? details,
-          String? error,
-        }) {
-          stopwatch.stop();
-          setState(() {
-            final idx = (stateMap['steps'] as List).indexWhere((s) => s['id'] == stageId);
-            if (idx != -1) {
-              final evts = List<Map<String, dynamic>>.from(stateMap['steps'][idx]['events'] ?? []);
-              final eIdx = evts.indexWhere((e) => e['id'] == eventId);
-              if (eIdx != -1) {
-                final updated = Map<String, dynamic>.from(evts[eIdx]);
-                updated['status'] = status;
-                updated['latency_ms'] = stopwatch.elapsedMilliseconds;
-                if (details != null) {
-                  updated.addAll(details);
+        })
+        finishResearchEvent =
+            (
+              String eventId, {
+              required String status,
+              required Stopwatch stopwatch,
+              Map<String, dynamic>? details,
+              String? error,
+            }) {
+              stopwatch.stop();
+              // Mutate stateMap outside setState; single publish triggers one rebuild.
+              final idx = (stateMap['steps'] as List).indexWhere(
+                (s) => s['id'] == stageId,
+              );
+              if (idx != -1) {
+                final evts = List<Map<String, dynamic>>.from(
+                  stateMap['steps'][idx]['events'] ?? [],
+                );
+                final eIdx = evts.indexWhere((e) => e['id'] == eventId);
+                if (eIdx != -1) {
+                  final updated = Map<String, dynamic>.from(evts[eIdx]);
+                  updated['status'] = status;
+                  updated['latency_ms'] = stopwatch.elapsedMilliseconds;
+                  if (details != null) {
+                    updated.addAll(details);
+                  }
+                  if (error != null) {
+                    updated['error'] = error;
+                  }
+                  evts[eIdx] = updated;
+                  stateMap['steps'][idx]['events'] = evts;
                 }
-                if (error != null) {
-                  updated['error'] = error;
-                }
-                evts[eIdx] = updated;
-                stateMap['steps'][idx]['events'] = evts;
               }
-            }
-          });
-          _publishResearchState(sessionIndex, messageIndex, stateMap);
-        };
+              _publishResearchState(sessionIndex, messageIndex, stateMap);
+            };
 
         final void Function(
           String eventId,
           String status, {
           Map<String, dynamic>? details,
-        }) updateResearchEventStatus = (
-          String eventId,
-          String status, {
-          Map<String, dynamic>? details,
-        }) {
-          setState(() {
-            final idx = (stateMap['steps'] as List).indexWhere((s) => s['id'] == stageId);
-            if (idx != -1) {
-              final evts = List<Map<String, dynamic>>.from(stateMap['steps'][idx]['events'] ?? []);
-              final eIdx = evts.indexWhere((e) => e['id'] == eventId);
-              if (eIdx != -1) {
-                final updated = Map<String, dynamic>.from(evts[eIdx]);
-                updated['status'] = status;
-                if (details != null) {
-                  updated.addAll(details);
+        })
+        updateResearchEventStatus =
+            (String eventId, String status, {Map<String, dynamic>? details}) {
+              // Mutate stateMap outside setState; single publish triggers one rebuild.
+              final idx = (stateMap['steps'] as List).indexWhere(
+                (s) => s['id'] == stageId,
+              );
+              if (idx != -1) {
+                final evts = List<Map<String, dynamic>>.from(
+                  stateMap['steps'][idx]['events'] ?? [],
+                );
+                final eIdx = evts.indexWhere((e) => e['id'] == eventId);
+                if (eIdx != -1) {
+                  final updated = Map<String, dynamic>.from(evts[eIdx]);
+                  updated['status'] = status;
+                  if (details != null) {
+                    updated.addAll(details);
+                  }
+                  evts[eIdx] = updated;
+                  stateMap['steps'][idx]['events'] = evts;
                 }
-                evts[eIdx] = updated;
-                stateMap['steps'][idx]['events'] = evts;
               }
-            }
-          });
-          _publishResearchState(sessionIndex, messageIndex, stateMap);
-        };
+              _publishResearchState(sessionIndex, messageIndex, stateMap);
+            };
 
         final List<ChatMessage> stepMessages = [
           const ChatMessage(
@@ -4017,7 +4335,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           ),
           ChatMessage(
             role: MessageRole.user,
-            text: "Your current research stage is: \"$phaseTitle\"\n"
+            text:
+                "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
                 "Current date and time: $phaseCurrentTime. You MUST use the latest information available as of this timestamp. "
                 "For time-sensitive claims, search with a suitable recency filter, verify dates on the fetched source, and never rely on model memory.\n\n"
@@ -4041,7 +4360,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
             stepDone = true;
             stepFailed = true;
-            stepFailure = 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+            stepFailure =
+                'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
             break;
           }
           if (!mounted) return;
@@ -4057,7 +4377,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               provider: provider,
               settings: settings,
               model: model,
-              messages: _compactHistoryForApi(stepMessages, stepMessages.length),
+              messages: _compactHistoryForApi(
+                stepMessages,
+                stepMessages.length,
+              ),
             );
 
             await for (final chunk in stream) {
@@ -4077,7 +4400,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   final parts = textChunk.split(tag);
                   responseText += parts[0];
                   isThinking = true;
-                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                  textChunk = parts.length > 1
+                      ? parts.sublist(1).join(tag)
+                      : '';
                 }
 
                 if (isThinking &&
@@ -4092,7 +4417,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   final parts = textChunk.split(tag);
                   reasoningText += parts[0];
                   isThinking = false;
-                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                  textChunk = parts.length > 1
+                      ? parts.sublist(1).join(tag)
+                      : '';
                   responseText += textChunk;
                 } else if (isThinking) {
                   reasoningText += textChunk;
@@ -4112,7 +4439,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             turnWatch.stop();
 
             final unrecognizedErrors = <Map<String, dynamic>>[];
-            final preprocessedText = _preprocessUnrecognizedToolCalls(responseText, unrecognizedErrors);
+            final preprocessedText = _preprocessUnrecognizedToolCalls(
+              responseText,
+              unrecognizedErrors,
+            );
 
             Map<String, String> parseSearchAttributes(String attrStr) {
               final Map<String, String> attrs = {};
@@ -4136,21 +4466,31 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             ).allMatches(preprocessedText).toList();
 
             bool isMalformed = unrecognizedErrors.isNotEmpty;
-            final hasRawSearchTag = preprocessedText.contains('<search_request') || preprocessedText.contains('</search_request');
-            final hasRawReadTag = preprocessedText.contains('<read_url') || preprocessedText.contains('</read_url');
+            final hasRawSearchTag =
+                preprocessedText.contains('<search_request') ||
+                preprocessedText.contains('</search_request');
+            final hasRawReadTag =
+                preprocessedText.contains('<read_url') ||
+                preprocessedText.contains('</read_url');
 
-            if ((hasRawSearchTag && searchMatches.isEmpty) || (hasRawReadTag && readUrlMatches.isEmpty)) {
+            if ((hasRawSearchTag && searchMatches.isEmpty) ||
+                (hasRawReadTag && readUrlMatches.isEmpty)) {
               isMalformed = true;
             }
 
             if (isMalformed) {
               consecutiveMalformedTags++;
               final eventWatch = Stopwatch()..start();
-              final eventId = beginResearchEvent(kind: 'error', tool: 'malformed_tag');
+              final eventId = beginResearchEvent(
+                kind: 'error',
+                tool: 'malformed_tag',
+              );
               final String errMessage = unrecognizedErrors.isNotEmpty
-                  ? unrecognizedErrors.map((e) => e['error']?.toString() ?? '').join('; ')
+                  ? unrecognizedErrors
+                        .map((e) => e['error']?.toString() ?? '')
+                        .join('; ')
                   : 'Malformed tool call tag syntax detected in assistant response.';
-              
+
               finishResearchEvent(
                 eventId,
                 status: 'error',
@@ -4161,13 +4501,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               if (consecutiveMalformedTags >= 3) {
                 stepDone = true;
                 stepFailed = true;
-                stepFailure = 'Step failed after $consecutiveMalformedTags consecutive malformed tool calls.';
+                stepFailure =
+                    'Step failed after $consecutiveMalformedTags consecutive malformed tool calls.';
                 break;
               }
               stepMessages.add(
                 const ChatMessage(
                   role: MessageRole.user,
-                  text: 'Error: Malformed or unclosed tool call tags detected. Please check tag syntax.',
+                  text:
+                      'Error: Malformed or unclosed tool call tags detected. Please check tag syntax.',
                 ),
               );
               continue;
@@ -4175,11 +4517,21 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               consecutiveMalformedTags = 0;
             }
 
-            final completeMatch = RegExp(r'<step_complete/?>', caseSensitive: false).firstMatch(responseText);
+            final completeMatch = RegExp(
+              r'<step_complete/?>',
+              caseSensitive: false,
+            ).firstMatch(responseText);
 
             if (completeMatch != null) {
-              final contentClean = responseText.replaceAll(RegExp(r'<step_complete/?>', caseSensitive: false), '').trim();
-              stepContent = stepContent.isEmpty ? contentClean : '$stepContent\n\n$contentClean';
+              final contentClean = responseText
+                  .replaceAll(
+                    RegExp(r'<step_complete/?>', caseSensitive: false),
+                    '',
+                  )
+                  .trim();
+              stepContent = stepContent.isEmpty
+                  ? contentClean
+                  : '$stepContent\n\n$contentClean';
               stepDone = true;
             } else if (searchMatches.isNotEmpty) {
               final List<Future<String>> searchFutures = [];
@@ -4223,29 +4575,49 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 // priority of this project. If this limit is exceeded, we return a clear feedback message.
                 if (webSearchCount >= 20) {
                   searchCapHit = true;
-                  final limitMsg = 'Search limit reached for this phase (20/20 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                  final limitMsg =
+                      'Search limit reached for this phase (20/20 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
                   searchFutures.add(Future.value('Error: $limitMsg'));
-                  finishResearchEvent(eventIds[k], status: 'error', stopwatch: stopwatches[k], error: 'Web search limit exceeded.');
+                  finishResearchEvent(
+                    eventIds[k],
+                    status: 'error',
+                    stopwatch: stopwatches[k],
+                    error: 'Web search limit exceeded.',
+                  );
                   continue;
                 }
 
                 webSearchCount++;
                 if (stepSearchCache.containsKey(normQuery)) {
-                  searchFutures.add(Future.value('Web search already attempted in this phase.\n\n${stepSearchCache[normQuery]}'));
+                  searchFutures.add(
+                    Future.value(
+                      'Web search already attempted in this phase.\n\n${stepSearchCache[normQuery]}',
+                    ),
+                  );
                 } else {
                   searchFutures.add(() async {
                     try {
-                      final res = await _chatClient.searchWeb(
-                        query,
-                        _searchSettings.provider,
-                        [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
-                        googleCx: _searchSettings.googleCx,
-                        topic: attrs['topic'],
-                        timeRange: attrs['time_range'] ?? attrs['time-range'],
-                        startDate: attrs['start_date'] ?? attrs['start-date'],
-                        endDate: attrs['end_date'] ?? attrs['end-date'],
-                        searchDepth: attrs['search_depth'] ?? attrs['search-depth'] ?? 'basic',
-                      ).timeout(const Duration(seconds: 60));
+                      final res = await _chatClient
+                          .searchWeb(
+                            query,
+                            _searchSettings.provider,
+                            [
+                              _searchSettings.apiKey,
+                              ..._searchSettings.fallbackApiKeys,
+                            ],
+                            googleCx: _searchSettings.googleCx,
+                            topic: attrs['topic'],
+                            timeRange:
+                                attrs['time_range'] ?? attrs['time-range'],
+                            startDate:
+                                attrs['start_date'] ?? attrs['start-date'],
+                            endDate: attrs['end_date'] ?? attrs['end-date'],
+                            searchDepth:
+                                attrs['search_depth'] ??
+                                attrs['search-depth'] ??
+                                'basic',
+                          )
+                          .timeout(const Duration(seconds: 60));
                       stepSearchCache[normQuery] = res;
                       return res;
                     } catch (e) {
@@ -4264,15 +4636,27 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 final eventId = eventIds[k];
                 final eventWatch = stopwatches[k];
                 final searchResultRaw = searchResults[k];
-                final bool isCapError = searchResultRaw.startsWith('Error: Web search cap');
-                final bool isDup = searchResultRaw.startsWith('Web search already attempted');
+                final bool isCapError = searchResultRaw.startsWith(
+                  'Error: Web search cap',
+                );
+                final bool isDup = searchResultRaw.startsWith(
+                  'Web search already attempted',
+                );
 
                 String searchResult = searchResultRaw;
                 if (searchResult.length > 4000) {
-                  searchResult = searchResult.substring(0, 4000) + '\n\n...[truncated]';
+                  searchResult =
+                      searchResult.substring(0, 4000) + '\n\n...[truncated]';
                 }
-                final searchError = (searchResult.startsWith('Web search failed:') || isCapError) ? searchResult : null;
-                final resultMatches = RegExp(r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)', multiLine: true).allMatches(searchResult);
+                final searchError =
+                    (searchResult.startsWith('Web search failed:') ||
+                        isCapError)
+                    ? searchResult
+                    : null;
+                final resultMatches = RegExp(
+                  r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)',
+                  multiLine: true,
+                ).allMatches(searchResult);
 
                 if (!isCapError) {
                   finishResearchEvent(
@@ -4283,11 +4667,13 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                       'result_count': resultMatches.length,
                       if (isDup) 'already_attempted': true,
                       'result_payload': _compactSearchPayload(
-                        resultMatches.map((match) => {
-                          'title': match.group(1) ?? '',
-                          'url': match.group(2) ?? '',
-                          'snippet': match.group(3) ?? '',
-                        }),
+                        resultMatches.map(
+                          (match) => {
+                            'title': match.group(1) ?? '',
+                            'url': match.group(2) ?? '',
+                            'snippet': match.group(3) ?? '',
+                          },
+                        ),
                       ),
                     },
                     error: searchError,
@@ -4299,12 +4685,17 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                     .where((url) => url.isNotEmpty)
                     .toList();
                 allUrls.addAll(urls);
-                combinedResults.writeln("Search results for '$query':\n$searchResult\n");
+                combinedResults.writeln(
+                  "Search results for '$query':\n$searchResult\n",
+                );
 
-if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
-  // Search snippets are discovery leads only. They are never promoted to
-  // facts/findings; evidence is created exclusively after a successful read_url.
-}
+                if (searchError == null &&
+                    !isDup &&
+                    !isCapError &&
+                    searchResult.isNotEmpty) {
+                  // Search snippets are discovery leads only. They are never promoted to
+                  // facts/findings; evidence is created exclusively after a successful read_url.
+                }
               }
 
               stepMessages.add(
@@ -4316,11 +4707,23 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
             } else if (readUrlMatches.isNotEmpty) {
               final availableRam = await _getSystemAvailableRamBytes();
               final bool lowMemory = availableRam < 300 * 1024 * 1024;
-              final int activeFetchConcurrency = lowMemory ? 1 : maxConcurrentFetchCalls;
+              final int activeFetchConcurrency = lowMemory
+                  ? 1
+                  : maxConcurrentFetchCalls;
 
               final List<String> eventIds = [];
               final List<Stopwatch> stopwatches = [];
               final List<String> urls = [];
+              // Pre-classify each URL and reserve read_url slots synchronously so
+              // N parallel tags cannot race past the 5/phase cap. PDF heuristics
+              // and cache hits do not consume the fetch budget.
+              final List<bool> overLimit = [];
+              const int readUrlLimit = 5;
+
+              bool looksLikePdfUrl(String u) {
+                final lower = u.toLowerCase();
+                return lower.contains('.pdf') || lower.contains('/pdf/');
+              }
 
               for (final match in readUrlMatches) {
                 final url = match.group(1)?.trim() ?? '';
@@ -4336,291 +4739,512 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                 stepContent = stepContent.isEmpty
                     ? '<read_url>$url</read_url>'
                     : '$stepContent\n\n<read_url>$url</read_url>';
+
+                var targetPreview = url.trim();
+                if (!targetPreview.startsWith('http')) {
+                  targetPreview = 'https://$targetPreview';
+                }
+                final normPreview = _normalizeQueryOrUrl(url);
+                final isPdfPreview = looksLikePdfUrl(targetPreview);
+                final isCacheHit = runFetchedUrls.contains(normPreview);
+
+                if (isPdfPreview || isCacheHit) {
+                  // No budget slot consumed for skips / re-reads.
+                  overLimit.add(false);
+                } else if (readUrlCount >= readUrlLimit) {
+                  overLimit.add(true);
+                } else {
+                  // Reserve the slot synchronously before Future.wait.
+                  readUrlCount++;
+                  overLimit.add(false);
+                }
               }
               steps[i]['content'] = stepContent;
               _publishResearchState(sessionIndex, messageIndex, stateMap);
 
               final List<String> urlResults = List.filled(urls.length, '');
               final fetchSemaphore = SimpleSemaphore(activeFetchConcurrency);
+              var fetchTimeBudgetExceeded = false;
 
-              await Future.wait(Iterable<int>.generate(urls.length).map((idx) async {
-                final url = urls[idx];
-                final eventId = eventIds[idx];
-                final eventWatch = stopwatches[idx];
-                var targetUrl = url.trim();
-                if (!targetUrl.startsWith('http')) {
-                  targetUrl = 'https://$targetUrl';
-                }
-                final normUrl = _normalizeQueryOrUrl(url);
+              // Dedup helper for cache-hit merges (metric|subject|value).
+              String factDedupKey(Map item) =>
+                  '${item['metric']}|${item['subject']}|${item['value']}';
 
-                if (targetUrl.toLowerCase().endsWith('.pdf')) {
-                   final skipMsg = 'Skipped PDF URL: $targetUrl (PDFs are excluded from Deep Research)';
-                   phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by extension)'});
-                   runFetchedUrls.add(normUrl);
-                   runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': true, 'skipped': true};
-
-                  await _updateDeepResearchPhase(
-                    stageId: stageId,
-                    phaseTitle: phaseTitle,
-                    facts: phaseFacts,
-                    findings: phaseFindings,
-                    skippedPdfs: phaseSkippedPdfs,
-                    failedFetches: phaseFailedFetches,
-                  );
-
-                  finishResearchEvent(
-                    eventId,
-                    status: 'done',
-                    stopwatch: eventWatch,
-                    details: {
-                      'url': targetUrl,
-                      'parse_format': 'skipped_pdf',
-                      'result_payload': { 'summary': 'Skipped PDF URL' }
-                    }
-                  );
-                  urlResults[idx] = skipMsg;
-                  return;
-                }
-
-                // TOOL LIMITS PER PHASE:
-                // Capped at 5 read_url calls per phase because read_url downloads and processes complete
-                // page content, which is expensive in tokens/concurrency. It should only be used to read
-                // the most high-value resources discovered via web_search. If exceeded, return a clear feedback.
-                if (readUrlCount >= 5) {
-                  final capMsg = 'Read URL limit reached for this phase (5/5 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
-                  finishResearchEvent(eventId, status: 'error', stopwatch: eventWatch, error: 'read_url limit exceeded.');
-                  urlResults[idx] = 'Error: $capMsg';
-                  return;
-                }
-
-                if (runFetchedUrls.contains(normUrl)) {
-                  final cached = runUrlSummaries[normUrl]!;
-                  if (cached['skipped'] == true) {
-                    phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (cache hit)'});
-                  } else {
-                    final cachedFacts = List<Map<String, dynamic>>.from(cached['facts'] ?? []);
-                    final cachedFindings = List<Map<String, dynamic>>.from(cached['findings'] ?? []);
-                    phaseFacts.addAll(cachedFacts);
-                    phaseFindings.addAll(cachedFindings);
+              await Future.wait(
+                Iterable<int>.generate(urls.length).map((idx) async {
+                  final url = urls[idx];
+                  final eventId = eventIds[idx];
+                  final eventWatch = stopwatches[idx];
+                  var targetUrl = url.trim();
+                  if (!targetUrl.startsWith('http')) {
+                    targetUrl = 'https://$targetUrl';
                   }
+                  final normUrl = _normalizeQueryOrUrl(url);
 
-                  await _updateDeepResearchPhase(
-                    stageId: stageId,
-                    phaseTitle: phaseTitle,
-                    facts: phaseFacts,
-                    findings: phaseFindings,
-                    skippedPdfs: phaseSkippedPdfs,
-                    failedFetches: phaseFailedFetches,
-                  );
-
-                  finishResearchEvent(
-                    eventId,
-                    status: 'done',
-                    stopwatch: eventWatch,
-                    details: {
-                      'url': targetUrl,
-                      'parse_format': cached['isPdf'] == true ? 'skipped_pdf' : 'html',
-                      'already_attempted': true,
-                      'facts_count': cached['facts']?.length ?? 0,
-                      'findings_count': cached['findings']?.length ?? 0,
-                      'result_payload': { 'summary': 'Already read & summarized (cache hit)' }
-                    }
-                  );
-                  urlResults[idx] = 'Already read & summarized (cache hit).';
-                  return;
-                }
-
-                readUrlCount++;
-                String text = '';
-                bool isPdfResponse = false;
-                bool fetchFailed = false;
-
-                // The bridge owns network retrieval, URL policy, and cleaning.
-                // Keeping this result on the server side avoids a second, divergent
-                // fetch implementation in Flutter.
-                try {
-                  final fetched = await fetchSemaphore.run(
-                    () => _deepResearchBridge.readUrl(targetUrl, allowPdf: false),
-                  );
-                  if (fetched['status'] == 'skipped_pdf') {
-                    final reason = fetched['reason']?.toString() ?? 'PDF files are excluded from Deep Research';
-                    phaseSkippedPdfs.add({'url': targetUrl, 'reason': reason});
-                    runFetchedUrls.add(normUrl);
-                    runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': true, 'skipped': true};
-                    await _updateDeepResearchPhase(
-                      stageId: stageId, phaseTitle: phaseTitle, facts: phaseFacts,
-                      findings: phaseFindings, skippedPdfs: phaseSkippedPdfs,
-                      failedFetches: phaseFailedFetches,
+                  // Global time budget: cancel remaining fetches if exceeded.
+                  if (fetchTimeBudgetExceeded ||
+                      startTime
+                          .add(globalTimeBudget)
+                          .isBefore(DateTime.now())) {
+                    fetchTimeBudgetExceeded = true;
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      error:
+                          'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.',
                     );
-                    finishResearchEvent(eventId, status: 'done', stopwatch: eventWatch,
-                      details: {'url': targetUrl, 'parse_format': 'skipped_pdf', 'result_payload': {'summary': reason}});
-                    urlResults[idx] = 'Skipped PDF URL: $targetUrl';
+                    urlResults[idx] =
+                        'Error: Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
                     return;
                   }
-                  if (fetched['error'] != null) {
-                    throw HttpException(fetched['error'].toString());
+
+                  if (overLimit[idx]) {
+                    const capMsg =
+                        'Read URL limit reached for this phase (5/5 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      error: 'read_url limit reached',
+                    );
+                    urlResults[idx] = 'Error: $capMsg';
+                    return;
                   }
-                  text = fetched['content']?.toString() ?? '';
-                  if (text.isEmpty) throw const HttpException('Fetch returned no readable content');
-                } catch (e) {
-                  fetchFailed = true;
-                  final errStr = 'Fetch failed: $e';
-                  phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
-                  finishResearchEvent(eventId, status: 'error', stopwatch: eventWatch,
-                    details: {'url': targetUrl}, error: errStr);
-                  urlResults[idx] = errStr;
-                }
 
-                // Legacy fallback is intentionally disabled: all research reads
-                // must pass through the bridge above.
-                if (false) {
-                  await fetchSemaphore.run(() async {
-                    try {
-                      final client = HttpClient()
-                        ..findProxy = ((uri) => "DIRECT")
-                        ..connectionTimeout = const Duration(seconds: 15);
-                      final request = await client.getUrl(Uri.parse(targetUrl)).timeout(const Duration(seconds: 60));
-                      request.headers.set(
-                        HttpHeaders.userAgentHeader,
-                        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+                  // Client-side PDF heuristic; bridge status skipped_pdf is still source of truth.
+                  if (looksLikePdfUrl(targetUrl)) {
+                    final skipMsg =
+                        'Skipped PDF URL: $targetUrl (PDFs are excluded from Deep Research)';
+                    phaseSkippedPdfs.add({
+                      'url': targetUrl,
+                      'reason': 'PDF files are excluded (by extension)',
+                    });
+                    runFetchedUrls.add(normUrl);
+                    runUrlSummaries[normUrl] = {
+                      'facts': [],
+                      'findings': [],
+                      'isPdf': true,
+                      'skipped': true,
+                    };
+
+                    await _updateDeepResearchPhase(
+                      stageId: stageId,
+                      phaseTitle: phaseTitle,
+                      facts: phaseFacts,
+                      findings: phaseFindings,
+                      skippedPdfs: phaseSkippedPdfs,
+                      failedFetches: phaseFailedFetches,
+                    );
+
+                    finishResearchEvent(
+                      eventId,
+                      status: 'done',
+                      stopwatch: eventWatch,
+                      details: {
+                        'url': targetUrl,
+                        'parse_format': 'skipped_pdf',
+                        'result_payload': {'summary': 'Skipped PDF URL'},
+                      },
+                    );
+                    urlResults[idx] = skipMsg;
+                    return;
+                  }
+
+                  if (runFetchedUrls.contains(normUrl)) {
+                    final cached = runUrlSummaries[normUrl]!;
+                    if (cached['skipped'] == true) {
+                      phaseSkippedPdfs.add({
+                        'url': targetUrl,
+                        'reason': 'PDF files are excluded (cache hit)',
+                      });
+                    } else {
+                      final cachedFacts = List<Map<String, dynamic>>.from(
+                        cached['facts'] ?? [],
                       );
-                      request.headers.set(
-                        HttpHeaders.acceptHeader,
-                        'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                      final cachedFindings = List<Map<String, dynamic>>.from(
+                        cached['findings'] ?? [],
                       );
-                      final response = await request.close().timeout(const Duration(seconds: 60));
-
-                      if (response.statusCode < 200 || response.statusCode >= 300) {
-                        throw HttpException('HTTP ${response.statusCode}');
+                      final existingKeys = phaseFacts.map(factDedupKey).toSet();
+                      for (final fact in cachedFacts) {
+                        if (existingKeys.add(factDedupKey(fact))) {
+                          phaseFacts.add(fact);
+                        }
                       }
-
-                      isPdfResponse = response.headers.contentType?.mimeType == 'application/pdf';
-                      if (isPdfResponse) {
-                        final skipMsg = 'Skipped PDF URL (Content-Type): $targetUrl';
-                        phaseSkippedPdfs.add({'url': targetUrl, 'reason': 'PDF files are excluded (by Content-Type)'});
-                        runFetchedUrls.add(normUrl);
-                        runUrlSummaries[normUrl] = {'facts': [], 'findings': [], 'isPdf': true, 'skipped': true};
-
-                        await _updateDeepResearchPhase(
-                          stageId: stageId,
-                          phaseTitle: phaseTitle,
-                          facts: phaseFacts,
-                          findings: phaseFindings,
-                          skippedPdfs: phaseSkippedPdfs,
-                          failedFetches: phaseFailedFetches,
-                        );
-
-                        finishResearchEvent(
-                          eventId,
-                          status: 'done',
-                          stopwatch: eventWatch,
-                          details: {
-                            'url': targetUrl,
-                            'parse_format': 'skipped_pdf',
-                            'result_payload': { 'summary': 'Skipped PDF URL (Content-Type)' }
-                          }
-                        );
-                        urlResults[idx] = skipMsg;
-                        fetchFailed = true;
-                        return;
+                      // Findings: avoid exact text+source dupes on re-fetch.
+                      final existingFindingKeys = phaseFindings
+                          .map((f) => '${f['text']}|${f['source']}')
+                          .toSet();
+                      for (final finding in cachedFindings) {
+                        final key = '${finding['text']}|${finding['source']}';
+                        if (existingFindingKeys.add(key)) {
+                          phaseFindings.add(finding);
+                        }
                       }
+                    }
 
-                      final body = await response
-                          .transform(const Utf8Decoder(allowMalformed: true))
-                          .join()
-                          .timeout(const Duration(seconds: 60));
-                      var htmlBody = body;
-                      final bodyMatch = RegExp(r'<body[^>]*>(.*?)</body>', caseSensitive: false, dotAll: true).firstMatch(body);
-                      if (bodyMatch != null) {
-                        htmlBody = bodyMatch.group(1) ?? htmlBody;
-                      }
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>', caseSensitive: false, dotAll: true), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>', caseSensitive: false, dotAll: true), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<img[^>]*>', caseSensitive: false), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>', caseSensitive: false, dotAll: true), '');
-                      htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
-                      text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
-                      text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-                    } catch (e) {
-                      fetchFailed = true;
-                      final errStr = 'Fetch failed: $e';
-                      phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
+                    await _updateDeepResearchPhase(
+                      stageId: stageId,
+                      phaseTitle: phaseTitle,
+                      facts: phaseFacts,
+                      findings: phaseFindings,
+                      skippedPdfs: phaseSkippedPdfs,
+                      failedFetches: phaseFailedFetches,
+                    );
+
+                    finishResearchEvent(
+                      eventId,
+                      status: 'done',
+                      stopwatch: eventWatch,
+                      details: {
+                        'url': targetUrl,
+                        'parse_format': cached['isPdf'] == true
+                            ? 'skipped_pdf'
+                            : 'html',
+                        'already_attempted': true,
+                        'facts_count': cached['facts']?.length ?? 0,
+                        'findings_count': cached['findings']?.length ?? 0,
+                        'result_payload': {
+                          'summary': 'Already read & summarized (cache hit)',
+                        },
+                      },
+                    );
+                    urlResults[idx] = 'Already read & summarized (cache hit).';
+                    return;
+                  }
+
+                  String text = '';
+                  bool isPdfResponse = false;
+                  bool fetchFailed = false;
+
+                  // The bridge owns network retrieval, URL policy, and cleaning.
+                  // Keeping this result on the server side avoids a second, divergent
+                  // fetch implementation in Flutter.
+                  try {
+                    // Re-check budget immediately before the network call.
+                    if (startTime
+                        .add(globalTimeBudget)
+                        .isBefore(DateTime.now())) {
+                      fetchTimeBudgetExceeded = true;
                       finishResearchEvent(
                         eventId,
                         status: 'error',
                         stopwatch: eventWatch,
-                        details: {'url': targetUrl, 'parse_format': 'html'},
-                        error: errStr,
+                        error:
+                            'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.',
                       );
-                      urlResults[idx] = errStr;
+                      urlResults[idx] =
+                          'Error: Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+                      return;
                     }
-                  });
-                }
+                    final fetched = await fetchSemaphore.run(() async {
+                      if (fetchTimeBudgetExceeded ||
+                          startTime
+                              .add(globalTimeBudget)
+                              .isBefore(DateTime.now())) {
+                        fetchTimeBudgetExceeded = true;
+                        throw TimeoutException(
+                          'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.',
+                        );
+                      }
+                      return _deepResearchBridge.readUrl(
+                        targetUrl,
+                        allowPdf: false,
+                      );
+                    });
+                    // Bridge skipped_pdf is the source of truth for PDF exclusion.
+                    if (fetched['status'] == 'skipped_pdf') {
+                      final reason =
+                          fetched['reason']?.toString() ??
+                          'PDF files are excluded from Deep Research';
+                      phaseSkippedPdfs.add({
+                        'url': targetUrl,
+                        'reason': reason,
+                      });
+                      runFetchedUrls.add(normUrl);
+                      runUrlSummaries[normUrl] = {
+                        'facts': [],
+                        'findings': [],
+                        'isPdf': true,
+                        'skipped': true,
+                      };
+                      await _updateDeepResearchPhase(
+                        stageId: stageId,
+                        phaseTitle: phaseTitle,
+                        facts: phaseFacts,
+                        findings: phaseFindings,
+                        skippedPdfs: phaseSkippedPdfs,
+                        failedFetches: phaseFailedFetches,
+                      );
+                      finishResearchEvent(
+                        eventId,
+                        status: 'done',
+                        stopwatch: eventWatch,
+                        details: {
+                          'url': targetUrl,
+                          'parse_format': 'skipped_pdf',
+                          'result_payload': {'summary': reason},
+                        },
+                      );
+                      urlResults[idx] = 'Skipped PDF URL: $targetUrl';
+                      return;
+                    }
+                    if (fetched['error'] != null) {
+                      throw HttpException(fetched['error'].toString());
+                    }
+                    text = fetched['content']?.toString() ?? '';
+                    if (text.isEmpty) {
+                      throw const HttpException(
+                        'Fetch returned no readable content',
+                      );
+                    }
+                  } catch (e) {
+                    fetchFailed = true;
+                    final errStr = 'Fetch failed: $e';
+                    phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      details: {'url': targetUrl},
+                      error: errStr,
+                    );
+                    urlResults[idx] = errStr;
+                  }
 
-                if (fetchFailed) return;
+                  // Legacy fallback is intentionally disabled: all research reads
+                  // must pass through the bridge above.
+                  if (false) {
+                    await fetchSemaphore.run(() async {
+                      try {
+                        final client = HttpClient()
+                          ..findProxy = ((uri) => "DIRECT")
+                          ..connectionTimeout = const Duration(seconds: 15);
+                        final request = await client
+                            .getUrl(Uri.parse(targetUrl))
+                            .timeout(const Duration(seconds: 60));
+                        request.headers.set(
+                          HttpHeaders.userAgentHeader,
+                          'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+                        );
+                        request.headers.set(
+                          HttpHeaders.acceptHeader,
+                          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        );
+                        final response = await request.close().timeout(
+                          const Duration(seconds: 60),
+                        );
 
-                updateResearchEventStatus(
-                  eventId,
-                  'ingesting',
-                  details: {'url': targetUrl, 'parse_format': 'html'},
-                );
+                        if (response.statusCode < 200 ||
+                            response.statusCode >= 300) {
+                          throw HttpException('HTTP ${response.statusCode}');
+                        }
 
-                try {
-                  final summaries = await _summarizeSourceInline(
-                    sourceUrl: targetUrl,
-                    content: text,
-                    provider: provider,
-                    settings: settings,
-                    model: model,
-                  );
-                  final List<dynamic> facts = summaries['facts'] ?? [];
-                  final List<dynamic> findings = summaries['findings'] ?? [];
+                        isPdfResponse =
+                            response.headers.contentType?.mimeType ==
+                            'application/pdf';
+                        if (isPdfResponse) {
+                          final skipMsg =
+                              'Skipped PDF URL (Content-Type): $targetUrl';
+                          phaseSkippedPdfs.add({
+                            'url': targetUrl,
+                            'reason':
+                                'PDF files are excluded (by Content-Type)',
+                          });
+                          runFetchedUrls.add(normUrl);
+                          runUrlSummaries[normUrl] = {
+                            'facts': [],
+                            'findings': [],
+                            'isPdf': true,
+                            'skipped': true,
+                          };
 
-                  phaseFacts.addAll(List<Map<String, dynamic>>.from(facts));
-                  phaseFindings.addAll(List<Map<String, dynamic>>.from(findings));
+                          await _updateDeepResearchPhase(
+                            stageId: stageId,
+                            phaseTitle: phaseTitle,
+                            facts: phaseFacts,
+                            findings: phaseFindings,
+                            skippedPdfs: phaseSkippedPdfs,
+                            failedFetches: phaseFailedFetches,
+                          );
 
-                  runFetchedUrls.add(normUrl);
-                  runUrlSummaries[normUrl] = {'facts': facts, 'findings': findings, 'isPdf': false, 'skipped': false};
+                          finishResearchEvent(
+                            eventId,
+                            status: 'done',
+                            stopwatch: eventWatch,
+                            details: {
+                              'url': targetUrl,
+                              'parse_format': 'skipped_pdf',
+                              'result_payload': {
+                                'summary': 'Skipped PDF URL (Content-Type)',
+                              },
+                            },
+                          );
+                          urlResults[idx] = skipMsg;
+                          fetchFailed = true;
+                          return;
+                        }
 
-                  await _updateDeepResearchPhase(
-                    stageId: stageId,
-                    phaseTitle: phaseTitle,
-                    facts: phaseFacts,
-                    findings: phaseFindings,
-                    skippedPdfs: phaseSkippedPdfs,
-                    failedFetches: phaseFailedFetches,
-                  );
+                        final body = await response
+                            .transform(const Utf8Decoder(allowMalformed: true))
+                            .join()
+                            .timeout(const Duration(seconds: 60));
+                        var htmlBody = body;
+                        final bodyMatch = RegExp(
+                          r'<body[^>]*>(.*?)</body>',
+                          caseSensitive: false,
+                          dotAll: true,
+                        ).firstMatch(body);
+                        if (bodyMatch != null) {
+                          htmlBody = bodyMatch.group(1) ?? htmlBody;
+                        }
+                        htmlBody = htmlBody.replaceAll(
+                          RegExp(
+                            r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
+                            caseSensitive: false,
+                            dotAll: true,
+                          ),
+                          '',
+                        );
+                        htmlBody = htmlBody.replaceAll(
+                          RegExp(
+                            r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
+                            caseSensitive: false,
+                            dotAll: true,
+                          ),
+                          '',
+                        );
+                        htmlBody = htmlBody.replaceAll(
+                          RegExp(r'<img[^>]*>', caseSensitive: false),
+                          '',
+                        );
+                        htmlBody = htmlBody.replaceAll(
+                          RegExp(
+                            r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
+                            caseSensitive: false,
+                            dotAll: true,
+                          ),
+                          '',
+                        );
+                        htmlBody = htmlBody.replaceAll(
+                          RegExp(r'<!--.*?-->', dotAll: true),
+                          '',
+                        );
+                        text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
+                        text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+                      } catch (e) {
+                        fetchFailed = true;
+                        final errStr = 'Fetch failed: $e';
+                        phaseFailedFetches.add({
+                          'url': targetUrl,
+                          'error': errStr,
+                        });
+                        finishResearchEvent(
+                          eventId,
+                          status: 'error',
+                          stopwatch: eventWatch,
+                          details: {'url': targetUrl, 'parse_format': 'html'},
+                          error: errStr,
+                        );
+                        urlResults[idx] = errStr;
+                      }
+                    });
+                  }
 
-                  finishResearchEvent(
+                  if (fetchFailed) return;
+                  if (fetchTimeBudgetExceeded ||
+                      startTime
+                          .add(globalTimeBudget)
+                          .isBefore(DateTime.now())) {
+                    fetchTimeBudgetExceeded = true;
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      error:
+                          'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.',
+                    );
+                    urlResults[idx] =
+                        'Error: Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+                    return;
+                  }
+
+                  updateResearchEventStatus(
                     eventId,
-                    status: 'done',
-                    stopwatch: eventWatch,
-                    details: {
-                      'url': targetUrl,
-                      'parse_format': 'html',
-                      'facts_count': facts.length,
-                      'findings_count': findings.length,
-                      'result_payload': { 'summary': '${facts.length} facts, ${findings.length} findings extracted' }
-                    },
-                  );
-                  urlResults[idx] = 'Successfully summarized: ${facts.length} facts, ${findings.length} findings.';
-                } catch (e) {
-                  final errStr = 'Summarization failed: $e';
-                  finishResearchEvent(
-                    eventId,
-                    status: 'error',
-                    stopwatch: eventWatch,
+                    'ingesting',
                     details: {'url': targetUrl, 'parse_format': 'html'},
-                    error: errStr,
                   );
-                  urlResults[idx] = errStr;
-                }
-              }));
+
+                  try {
+                    final summaries = await _summarizeSourceInline(
+                      sourceUrl: targetUrl,
+                      content: text,
+                      provider: provider,
+                      settings: settings,
+                      model: model,
+                    );
+                    final List<dynamic> facts = summaries['facts'] ?? [];
+                    final List<dynamic> findings = summaries['findings'] ?? [];
+
+                    phaseFacts.addAll(List<Map<String, dynamic>>.from(facts));
+                    phaseFindings.addAll(
+                      List<Map<String, dynamic>>.from(findings),
+                    );
+
+                    runFetchedUrls.add(normUrl);
+                    runUrlSummaries[normUrl] = {
+                      'facts': facts,
+                      'findings': findings,
+                      'isPdf': false,
+                      'skipped': false,
+                    };
+
+                    await _updateDeepResearchPhase(
+                      stageId: stageId,
+                      phaseTitle: phaseTitle,
+                      facts: phaseFacts,
+                      findings: phaseFindings,
+                      skippedPdfs: phaseSkippedPdfs,
+                      failedFetches: phaseFailedFetches,
+                    );
+
+                    finishResearchEvent(
+                      eventId,
+                      status: 'done',
+                      stopwatch: eventWatch,
+                      details: {
+                        'url': targetUrl,
+                        'parse_format': 'html',
+                        'facts_count': facts.length,
+                        'findings_count': findings.length,
+                        'result_payload': {
+                          'summary':
+                              '${facts.length} facts, ${findings.length} findings extracted',
+                        },
+                      },
+                    );
+                    urlResults[idx] =
+                        'Successfully summarized: ${facts.length} facts, ${findings.length} findings.';
+                  } catch (e) {
+                    final errStr = 'Summarization failed: $e';
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      details: {'url': targetUrl, 'parse_format': 'html'},
+                      error: errStr,
+                    );
+                    urlResults[idx] = errStr;
+                  }
+                }),
+              );
 
               final StringBuffer combinedResults = StringBuffer();
               for (var k = 0; k < urls.length; k++) {
                 combinedResults.writeln("URL: ${urls[k]}");
-                combinedResults.writeln("Summarization Result:\n${urlResults[k]}");
+                combinedResults.writeln(
+                  "Summarization Result:\n${urlResults[k]}",
+                );
                 combinedResults.writeln();
               }
 
@@ -4631,19 +5255,24 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                 ),
               );
             } else {
-              stepContent = stepContent.isEmpty ? responseText : '$stepContent\n\n$responseText';
+              stepContent = stepContent.isEmpty
+                  ? responseText
+                  : '$stepContent\n\n$responseText';
               stepDone = true;
             }
 
-            if (!stepDone && (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
+            if (!stepDone &&
+                (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
               final stepReflectMessages = [
                 const ChatMessage(
                   role: MessageRole.system,
-                  text: "You are a reflection assistant. Read the current facts and findings of the research run and decide if the researcher should do further search or read other URLs, or if the current step is complete. Answer in structured JSON format with keys 'should_continue' (bool) and 'reason' (string).",
+                  text:
+                      "You are a reflection assistant. Read the current facts and findings of the research run and decide if the researcher should do further search or read other URLs, or if the current step is complete. Answer in structured JSON format with keys 'should_continue' (bool) and 'reason' (string).",
                 ),
                 ChatMessage(
                   role: MessageRole.user,
-                  text: "Current facts extracted: ${jsonEncode(phaseFacts)}\n"
+                  text:
+                      "Current facts extracted: ${jsonEncode(phaseFacts)}\n"
                       "Current findings extracted: ${jsonEncode(phaseFindings)}\n"
                       "Does this sufficiently answer the query \"$queryText\"? If yes, answer should_continue: false.",
                 ),
@@ -4653,10 +5282,16 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
                   provider: provider,
                   settings: settings,
                   model: model,
-                  messages: _compactHistoryForApi(stepReflectMessages, stepReflectMessages.length),
+                  messages: _compactHistoryForApi(
+                    stepReflectMessages,
+                    stepReflectMessages.length,
+                  ),
                 );
-                final cleanReflectResp = reflectResp.replaceAll(RegExp(r"```json\s*|\s*```"), "").trim();
-                final reflectJson = jsonDecode(cleanReflectResp) as Map<String, dynamic>;
+                final cleanReflectResp = reflectResp
+                    .replaceAll(RegExp(r"```json\s*|\s*```"), "")
+                    .trim();
+                final reflectJson =
+                    jsonDecode(cleanReflectResp) as Map<String, dynamic>;
                 if (reflectJson['should_continue'] == false) {
                   stepDone = true;
                 }
@@ -4710,13 +5345,25 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
         final eventErrors = (step['events'] as List? ?? [])
             .whereType<Map>()
             .where((event) => event['status'] == 'error')
-            .map((event) => _truncateEventText(event['error']?.toString() ?? 'Tool call failed.', 300))
+            .map(
+              (event) => _truncateEventText(
+                event['error']?.toString() ?? 'Tool call failed.',
+                300,
+              ),
+            )
             .toList();
         if (step['status'] == 'failed' || eventErrors.isNotEmpty) {
           executionIssues.add({
             'step': step['title']?.toString() ?? 'Research step',
-            'status': step['status']?.toString() ?? 'completed_with_tool_errors',
-            'error': _truncateEventText(step['error']?.toString() ?? (eventErrors.isNotEmpty ? eventErrors.join('; ') : 'Step completed with issues.'), 500),
+            'status':
+                step['status']?.toString() ?? 'completed_with_tool_errors',
+            'error': _truncateEventText(
+              step['error']?.toString() ??
+                  (eventErrors.isNotEmpty
+                      ? eventErrors.join('; ')
+                      : 'Step completed with issues.'),
+              500,
+            ),
           });
         }
       }
@@ -4725,18 +5372,24 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
       _publishResearchState(sessionIndex, messageIndex, stateMap);
 
       String tempJsonContent = '[]';
+      // Raw temp.json is the source of truth for verified URLs (budget export
+      // may trim records and drop sources).
+      String rawTempJson = '[]';
       String? writerInputFailure;
       try {
         final int userBudget = _writerContextBudget;
         final int reserve = (userBudget * 0.18).round();
         final int maxEvidenceTokens = userBudget - reserve;
-        final writerExport = await _exportDeepResearchForWriter(maxEvidenceTokens);
+        final writerExport = await _exportDeepResearchForWriter(
+          maxEvidenceTokens,
+        );
         tempJsonContent = writerExport['content']?.toString() ?? '[]';
-        final rawTempJson = await _deepResearchBridge.exportTemp();
+        rawTempJson = await _deepResearchBridge.exportTemp();
         final rawPhases = jsonDecode(rawTempJson);
         final exportedPhases = jsonDecode(tempJsonContent);
         final rawHasPhases = rawPhases is List && rawPhases.isNotEmpty;
-        final exportedHasPhases = exportedPhases is List && exportedPhases.isNotEmpty;
+        final exportedHasPhases =
+            exportedPhases is List && exportedPhases.isNotEmpty;
         if (!exportedHasPhases && rawHasPhases) {
           // Never discard successfully persisted phase summaries just because
           // a budget export was unexpectedly empty.
@@ -4744,32 +5397,40 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
           executionIssues.add({
             'step': 'Writer input export',
             'status': 'warning',
-            'error': 'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
+            'error':
+                'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
           });
         } else if (!rawHasPhases) {
-          writerInputFailure = 'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
+          writerInputFailure =
+              'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
         }
-        final truncatedFacts = (writerExport['truncated_facts'] as num?)?.toInt() ?? 0;
-        final truncatedFindings = (writerExport['truncated_findings'] as num?)?.toInt() ?? 0;
-        final truncatedPhases = (writerExport['truncated_phases'] as num?)?.toInt() ?? 0;
+        final truncatedFacts =
+            (writerExport['truncated_facts'] as num?)?.toInt() ?? 0;
+        final truncatedFindings =
+            (writerExport['truncated_findings'] as num?)?.toInt() ?? 0;
+        final truncatedPhases =
+            (writerExport['truncated_phases'] as num?)?.toInt() ?? 0;
         if (truncatedFacts + truncatedFindings + truncatedPhases > 0) {
           executionIssues.add({
             'step': 'Evidence budget',
             'status': 'warning',
-            'error': 'Evidence was trimmed to fit $userBudget tokens: $truncatedFacts facts, $truncatedFindings findings, and $truncatedPhases empty phases omitted.',
+            'error':
+                'Evidence was trimmed to fit $userBudget tokens: $truncatedFacts facts, $truncatedFindings findings, and $truncatedPhases empty phases omitted.',
           });
         }
       } catch (e) {
         debugPrint("Error exporting/processing deep-research temp.json: $e");
-        writerInputFailure = 'The writer could not load the bridge-owned retrieval data.';
+        writerInputFailure =
+            'The writer could not load the bridge-owned retrieval data.';
         executionIssues.add({
           'step': 'Writer input export',
           'status': 'failed',
-          'error': 'The writer could not load the bridge-owned retrieval data: ${_truncateEventText(e.toString(), 300)}',
+          'error':
+              'The writer could not load the bridge-owned retrieval data: ${_truncateEventText(e.toString(), 300)}',
         });
       }
 
-      final verifiedSourceUrls = _evidenceSourceUrls(tempJsonContent);
+      final verifiedSourceUrls = _evidenceSourceUrls(rawTempJson);
       if (writerInputFailure == null && verifiedSourceUrls.isEmpty) {
         writerInputFailure =
             'No verified source URLs were persisted to temp.json, so a research artifact cannot be generated safely.';
@@ -4782,7 +5443,8 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
         ),
         ChatMessage(
           role: MessageRole.user,
-          text: "Here is the retrieved facts and findings (temp.json):\n$tempJsonContent\n\n"
+          text:
+              "Here is the retrieved facts and findings (temp.json):\n$tempJsonContent\n\n"
               "Execution issues that must be disclosed in the report:\n"
               "${jsonEncode(executionIssues)}\n\n"
               "Please write the final, comprehensive research report in Markdown format. "
@@ -4813,7 +5475,10 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
             provider: provider,
             settings: settings,
             model: model,
-            messages: _compactHistoryForApi(writerMessages, writerMessages.length),
+            messages: _compactHistoryForApi(
+              writerMessages,
+              writerMessages.length,
+            ),
           );
 
           await for (final chunk in stream) {
@@ -4878,8 +5543,11 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
           writerFailure = 'Writer returned an empty report.';
         } else {
           if (verifiedSourceUrls.isNotEmpty) {
-            final sources = verifiedSourceUrls.map((url) => '- <$url>').join('\n');
-            finalReportText = '$finalReportText\n\n## Verified retrieved sources\n$sources';
+            final sources = verifiedSourceUrls
+                .map((url) => '- <$url>')
+                .join('\n');
+            finalReportText =
+                '$finalReportText\n\n## Verified retrieved sources\n$sources';
           }
           stateMap['final_report'] = finalReportText;
           try {
@@ -4888,7 +5556,8 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
               finalReportText,
             );
           } catch (e) {
-            stateMap['report_save_error'] = 'Could not save the Markdown report: $e';
+            stateMap['report_save_error'] =
+                'Could not save the Markdown report: $e';
           }
         }
       }
@@ -4902,8 +5571,11 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
         setState(() {
           final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
           _sendingSessionIds.remove(_sessions[sessionIndex].id);
-          
-          String text = _updateResearchStateInText(msgs[messageIndex].text, stateMap);
+
+          String text = _updateResearchStateInText(
+            msgs[messageIndex].text,
+            stateMap,
+          );
           if (writerFailure == null) {
             text += "\n\n```markdown\n$finalReportText\n```";
           } else {
@@ -4913,13 +5585,16 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
             text: text,
-            reasoning: finalReasoningText.isNotEmpty ? finalReasoningText : msgs[messageIndex].reasoning,
+            reasoning: finalReasoningText.isNotEmpty
+                ? finalReasoningText
+                : msgs[messageIndex].reasoning,
           );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
         });
         await _saveSessions();
       }
-
     } catch (globalError) {
       debugPrint("Global Deep Research Loop error: $globalError");
       stateMap['status'] = 'failed';
@@ -4931,11 +5606,14 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
           _sendingSessionIds.remove(_sessions[sessionIndex].id);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
-            text: _updateResearchStateInText(msgs[messageIndex].text, stateMap) +
+            text:
+                _updateResearchStateInText(msgs[messageIndex].text, stateMap) +
                 '\n\n⚠️ Deep Research stopped before completion. Reason: $globalError',
             reasoning: msgs[messageIndex].reasoning,
           );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            messages: msgs,
+          );
         });
         await _saveSessions();
       }
@@ -4960,10 +5638,287 @@ if (searchError == null && !isDup && !isCapError && searchResult.isNotEmpty) {
       _sessions.insert(0, newSession);
       _activeSessionId = newId;
       _editingMessageIndex = null;
-      _agenticEnabled = false;        // Default off for new chat
-      _deepResearchEnabled = false;   // Default off for new chat
+      _agenticEnabled = false; // Default off for new chat
+      _deepResearchEnabled = false; // Default off for new chat
     });
     _saveSessions();
+  }
+
+  String _safeFileStem(String input) {
+    final sanitized = input
+        .trim()
+        .replaceAll(RegExp(r'[^a-zA-Z0-9._-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return sanitized.isEmpty ? 'session' : sanitized;
+  }
+
+  Future<File> _slashSessionFile({String? name, String? path}) async {
+    if (path != null && path.trim().isNotEmpty) {
+      final explicit = await _expandHomePath(path.trim());
+      return File(explicit);
+    }
+    final root = await _chooseWritableNexonRoot();
+    final stem = _safeFileStem(
+      (name == null || name.trim().isEmpty)
+          ? 'session_${DateTime.now().millisecondsSinceEpoch}'
+          : name,
+    );
+    return File('${root.path}/sessions/$stem.json');
+  }
+
+  Future<void> _appendSystemMessage(String text) async {
+    final sessionId = _activeSessionId;
+    if (sessionId == null) return;
+    final idx = _sessions.indexWhere((s) => s.id == sessionId);
+    if (idx == -1) return;
+    if (!mounted) return;
+    setState(() {
+      final msgs = List<ChatMessage>.from(_sessions[idx].messages);
+      msgs.add(ChatMessage(role: MessageRole.system, text: text));
+      _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
+    });
+    await _saveSessions();
+    _scrollToBottom(force: true);
+  }
+
+  Future<String> _slashNew(String? title) async {
+    final newId = DateTime.now().millisecondsSinceEpoch.toString();
+    final resolvedTitle = (title == null || title.trim().isEmpty)
+        ? 'New Chat'
+        : title.trim();
+    final newSession = ChatSession(
+      id: newId,
+      title: resolvedTitle,
+      messages: const [
+        ChatMessage(
+          role: MessageRole.assistant,
+          text: 'New chat ready. Choose any configured provider and model.',
+        ),
+      ],
+      providerId: _selectedProviderId,
+      model: _activeModel,
+    );
+    if (mounted) {
+      setState(() {
+        _sessions.insert(0, newSession);
+        _activeSessionId = newId;
+        _editingMessageIndex = null;
+        _agenticEnabled = false;
+        _deepResearchEnabled = false;
+      });
+    }
+    await _saveSessions();
+    return 'Created new chat: ${newSession.title} (${newSession.id})';
+  }
+
+  Future<String> _slashList() async {
+    if (_sessions.isEmpty) return 'No sessions.';
+    final lines = <String>[];
+    for (var i = 0; i < _sessions.length; i++) {
+      final s = _sessions[i];
+      final marker = s.id == _activeSessionId ? ' *active*' : '';
+      lines.add(
+        '${i + 1}. `${s.id}` — ${s.title} (${s.updatedAt.toIso8601String()})$marker',
+      );
+    }
+    return lines.join('\n');
+  }
+
+  Future<String> _slashSwitch(String target) async {
+    final byIndex = int.tryParse(target);
+    if (byIndex != null && byIndex > 0 && byIndex <= _sessions.length) {
+      _switchSession(_sessions[byIndex - 1].id);
+      return 'Switched to session #$byIndex.';
+    }
+    final byId = _sessions.where((s) => s.id == target).toList();
+    if (byId.isNotEmpty) {
+      _switchSession(target);
+      return 'Switched to `${target}`.';
+    }
+    return 'Session not found: $target';
+  }
+
+  Future<String> _slashSave({String? name, String? path}) async {
+    final activeId = _activeSessionId;
+    if (activeId == null) return 'No active session.';
+    final idx = _sessions.indexWhere((s) => s.id == activeId);
+    if (idx == -1) return 'No active session.';
+    final session = _sessions[idx];
+
+    final file = await _slashSessionFile(name: name, path: path);
+    if (!await file.parent.exists()) {
+      await file.parent.create(recursive: true);
+    }
+    final payload = <String, dynamic>{
+      'saved_at': DateTime.now().toIso8601String(),
+      'session': session.toJson(),
+    };
+    final raw = jsonEncode(payload);
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(raw, flush: true);
+    await tmp.rename(file.path);
+    await _saveSessions();
+    DriveSyncService.syncToDrive(_sessions);
+    return 'Saved session `${session.id}` to `${file.path}`.';
+  }
+
+  Future<String> _slashResume(String target) async {
+    String sourcePath = target;
+    if (!target.contains('/')) {
+      final root = await _chooseWritableNexonRoot();
+      final candidate = File('${root.path}/sessions/${_safeFileStem(target)}.json');
+      if (await candidate.exists()) {
+        sourcePath = candidate.path;
+      } else {
+        final byId = _sessions.where((s) => s.id == target).toList();
+        if (byId.isNotEmpty) {
+          _switchSession(target);
+          return 'Switched to existing session `${target}`.';
+        }
+      }
+    }
+    final resolved = await _expandHomePath(sourcePath);
+    final file = File(resolved);
+    if (!await file.exists()) {
+      return 'Session file not found: $resolved';
+    }
+    final decoded = jsonDecode(await file.readAsString());
+    Map<String, dynamic>? sessionMap;
+    if (decoded is Map && decoded['session'] is Map) {
+      sessionMap = Map<String, dynamic>.from(decoded['session'] as Map);
+    } else if (decoded is Map<String, dynamic>) {
+      sessionMap = decoded;
+    }
+    if (sessionMap == null) {
+      return 'Invalid session JSON: $resolved';
+    }
+    var loaded = ChatSession.fromJson(sessionMap);
+    final duplicateId = _sessions.any((s) => s.id == loaded.id);
+    if (duplicateId) {
+      loaded = loaded.copyWith(id: DateTime.now().millisecondsSinceEpoch.toString());
+    }
+    if (mounted) {
+      setState(() {
+        _sessions.insert(0, loaded);
+        _activeSessionId = loaded.id;
+        _editingMessageIndex = null;
+      });
+    }
+    await _saveSessions();
+    DriveSyncService.syncToDrive(_sessions);
+    return 'Loaded session `${loaded.title}` (${loaded.id}) from `${file.path}`.';
+  }
+
+  Future<String> _slashSummarize(int keepLast) async {
+    final activeId = _activeSessionId;
+    if (activeId == null) return 'No active session.';
+    final idx = _sessions.indexWhere((s) => s.id == activeId);
+    if (idx == -1) return 'No active session.';
+    final session = _sessions[idx];
+    if (session.messages.length <= keepLast + 2) {
+      return 'Not enough messages to summarize.';
+    }
+    final safeKeepLast = keepLast < 1 ? 1 : keepLast;
+    final head = session.messages.take(1).toList();
+    final tail = session.messages.skip(session.messages.length - safeKeepLast).toList();
+    final middle = session.messages
+        .skip(1)
+        .take(session.messages.length - safeKeepLast - 1)
+        .map((m) => '${m.role.apiName}: ${m.text}')
+        .toList();
+    final compressed = await ContextCompressionService().compress(
+      middle,
+      config: const CompressionConfig(
+        maxTokens: 1500,
+        preferredMethods: [CompressionMethod.extractive, CompressionMethod.pruning],
+      ),
+    );
+    final summaryMsg = ChatMessage(
+      role: MessageRole.system,
+      text:
+          'Conversation summary (${(compressed.compressionRatio * 100).toStringAsFixed(1)}% of original):\n${compressed.compressedContent}',
+    );
+    final nextMessages = <ChatMessage>[...head, summaryMsg, ...tail];
+    if (mounted) {
+      setState(() {
+        _sessions[idx] = session.copyWith(messages: nextMessages);
+      });
+    }
+    await _saveSessions();
+    final before = compressed.originalContent.length;
+    final after = compressed.compressedContent.length;
+    return 'Summarized history. chars: $before → $after (ratio ${(after / before).toStringAsFixed(2)}).';
+  }
+
+  Future<CheckpointService> _checkpointSvc() async {
+    await _ensureLocalSupportDirs();
+    return _checkpointService!;
+  }
+
+  Future<String> _slashCheckpoint(String? name) async {
+    final svc = await _checkpointSvc();
+    final cp = await svc.create(
+      name: (name == null || name.trim().isEmpty)
+          ? 'manual_${DateTime.now().millisecondsSinceEpoch}'
+          : name.trim(),
+      projectId: _agenticWorkspace,
+      autoCreated: true,
+      memorySnapshot: {
+        'active_session_id': _activeSessionId,
+        'sessions': _sessions.map((s) => s.toJson()).toList(),
+      },
+    );
+    return 'Checkpoint created: ${cp.id} (${cp.name})';
+  }
+
+  Future<String> _slashRestoreCheckpoint(String id) async {
+    final svc = await _checkpointSvc();
+    final checkpoints = await svc.list(projectId: _agenticWorkspace);
+    final cp = checkpoints.where((c) => c.id == id).toList();
+    if (cp.isEmpty) return 'Checkpoint not found: $id';
+    final memory = cp.first.memorySnapshot;
+    final activeId = memory['active_session_id']?.toString();
+    final rawSessions = memory['sessions'];
+    if (rawSessions is! List) return 'Checkpoint has no session snapshot.';
+    final restored = rawSessions
+        .whereType<Map>()
+        .map((e) => ChatSession.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    if (restored.isEmpty) return 'Checkpoint session snapshot is empty.';
+    if (mounted) {
+      setState(() {
+        _sessions = restored;
+        _activeSessionId = activeId ?? restored.first.id;
+        _editingMessageIndex = null;
+      });
+    }
+    await _saveSessions();
+    return 'Restored checkpoint ${cp.first.id}.';
+  }
+
+  Future<String> _slashListCheckpoints() async {
+    final svc = await _checkpointSvc();
+    final list = await svc.list(projectId: _agenticWorkspace);
+    if (list.isEmpty) return 'No checkpoints.';
+    return list
+        .take(50)
+        .map((c) => '- `${c.id}` ${c.name} (${c.createdAt.toIso8601String()})')
+        .join('\n');
+  }
+
+  Future<String> _slashClear() async {
+    final activeId = _activeSessionId;
+    if (activeId == null) return 'No active session.';
+    final idx = _sessions.indexWhere((s) => s.id == activeId);
+    if (idx == -1) return 'No active session.';
+    if (mounted) {
+      setState(() {
+        _sessions[idx] = _sessions[idx].copyWith(messages: const []);
+      });
+    }
+    await _saveSessions();
+    return 'Cleared current session messages.';
   }
 
   Future<void> _openPlusBottomSheet() async {
@@ -5389,9 +6344,11 @@ class ChatHistoryPanel extends StatelessWidget {
     String getBucket(DateTime date) {
       if (date.isAfter(todayStart) || date.isAtSameMomentAs(todayStart)) {
         return 'Today';
-      } else if (date.isAfter(yesterdayStart) || date.isAtSameMomentAs(yesterdayStart)) {
+      } else if (date.isAfter(yesterdayStart) ||
+          date.isAtSameMomentAs(yesterdayStart)) {
         return 'Yesterday';
-      } else if (date.isAfter(sevenDaysStart) || date.isAtSameMomentAs(sevenDaysStart)) {
+      } else if (date.isAfter(sevenDaysStart) ||
+          date.isAtSameMomentAs(sevenDaysStart)) {
         return 'Previous 7 Days';
       } else {
         return 'Older';
@@ -5454,7 +6411,11 @@ class ChatHistoryPanel extends StatelessWidget {
                           color: Color(0xFF7B4E2E),
                         ),
                       ),
-                    const Icon(Icons.chat_bubble_outline, size: 18, color: Color(0xFF5C3D26)),
+                    const Icon(
+                      Icons.chat_bubble_outline,
+                      size: 18,
+                      color: Color(0xFF5C3D26),
+                    ),
                   ],
                 ),
                 title: Text(
@@ -5511,11 +6472,7 @@ class ChatHistoryPanel extends StatelessWidget {
                     color: Color(0xFF7B4E2E),
                   ),
                 )
-              : const Icon(
-                  Icons.history,
-                  size: 18,
-                  color: Color(0xFF7B4E2E),
-                ),
+              : const Icon(Icons.history, size: 18, color: Color(0xFF7B4E2E)),
           label: Text(
             isLoadingMore
                 ? 'Loading previous chats…'
@@ -5724,7 +6681,7 @@ class ChatSurface extends StatelessWidget {
   final String agenticWorkspace;
   final bool deepResearchEnabled;
   final void Function(int, [Map<String, dynamic>? editedStateMap])
-      onStartResearch;
+  onStartResearch;
   final VoidCallback? onStop;
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
@@ -5829,9 +6786,14 @@ class ChatSurface extends StatelessWidget {
             Center(
               child: LiquidGlassSurface(
                 margin: const EdgeInsets.symmetric(horizontal: 24),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 24,
+                ),
                 borderRadius: BorderRadius.circular(20),
-                backgroundColor: const Color(0xFFFFF9F2).withValues(alpha: 0.85),
+                backgroundColor: const Color(
+                  0xFFFFF9F2,
+                ).withValues(alpha: 0.85),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -5876,7 +6838,9 @@ class ChatSurface extends StatelessWidget {
             right: 0,
             child: ClipRect(
               child: LiquidGlassSurface(
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(20),
+                ),
                 margin: EdgeInsets.zero,
                 padding: const EdgeInsets.only(bottom: 2),
                 child: SafeArea(
@@ -5905,9 +6869,14 @@ class ChatSurface extends StatelessWidget {
                   curve: Curves.easeInOut,
                   child: toolStatus.isNotEmpty
                       ? LiquidGlassSurface(
-                          margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
                           borderRadius: BorderRadius.circular(16),
-                          backgroundColor: const Color(0xFFEEF4FF).withValues(alpha: 0.85),
+                          backgroundColor: const Color(
+                            0xFFEEF4FF,
+                          ).withValues(alpha: 0.85),
                           highlightColor: const Color(0xFF93C5FD),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
@@ -6024,7 +6993,10 @@ class _ChatHeaderState extends State<ChatHeader> {
             onTap: widget.onOpenProvider,
             child: Tooltip(
               message: '${widget.provider.name} settings',
-              child: ProviderAvatar(label: widget.provider.shortName, small: true),
+              child: ProviderAvatar(
+                label: widget.provider.shortName,
+                small: true,
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -6621,7 +7593,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
       if (methodMatch != null) {
         method = methodMatch.group(1)?.trim() ?? method;
       }
-      
+
       // Parse XML params for description (direct tags)
       final regex = RegExp(
         r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
@@ -6793,16 +7765,162 @@ class _PermissionInfoRow extends StatelessWidget {
 
 TextSpan _highlightCode(String code, String language) {
   final lang = language.toLowerCase();
-  
+
   final List<String> keywords;
   if (lang == 'python' || lang == 'py') {
-    keywords = ['def', 'class', 'import', 'from', 'as', 'return', 'if', 'elif', 'else', 'for', 'while', 'in', 'is', 'not', 'and', 'or', 'try', 'except', 'finally', 'pass', 'lambda', 'with', 'assert', 'global', 'nonlocal', 'del', 'yield', 'None', 'True', 'False'];
-  } else if (lang == 'dart' || lang == 'java' || lang == 'kotlin' || lang == 'go' || lang == 'rust' || lang == 'rs') {
-    keywords = ['class', 'import', 'package', 'void', 'return', 'if', 'else', 'for', 'while', 'in', 'try', 'catch', 'finally', 'final', 'const', 'var', 'let', 'static', 'extends', 'implements', 'interface', 'mixin', 'with', 'as', 'is', 'new', 'this', 'super', 'switch', 'case', 'default', 'break', 'continue', 'async', 'await', 'yield', 'fn', 'pub', 'use', 'impl', 'struct', 'enum', 'mut', 'let'];
-  } else if (lang == 'javascript' || lang == 'js' || lang == 'typescript' || lang == 'ts') {
-    keywords = ['class', 'import', 'export', 'from', 'function', 'return', 'if', 'else', 'for', 'while', 'in', 'of', 'try', 'catch', 'finally', 'const', 'let', 'var', 'new', 'this', 'super', 'switch', 'case', 'default', 'break', 'continue', 'async', 'await', 'yield', 'type', 'interface', 'namespace', 'typeof', 'instanceof', 'true', 'false', 'null', 'undefined'];
+    keywords = [
+      'def',
+      'class',
+      'import',
+      'from',
+      'as',
+      'return',
+      'if',
+      'elif',
+      'else',
+      'for',
+      'while',
+      'in',
+      'is',
+      'not',
+      'and',
+      'or',
+      'try',
+      'except',
+      'finally',
+      'pass',
+      'lambda',
+      'with',
+      'assert',
+      'global',
+      'nonlocal',
+      'del',
+      'yield',
+      'None',
+      'True',
+      'False',
+    ];
+  } else if (lang == 'dart' ||
+      lang == 'java' ||
+      lang == 'kotlin' ||
+      lang == 'go' ||
+      lang == 'rust' ||
+      lang == 'rs') {
+    keywords = [
+      'class',
+      'import',
+      'package',
+      'void',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'in',
+      'try',
+      'catch',
+      'finally',
+      'final',
+      'const',
+      'var',
+      'let',
+      'static',
+      'extends',
+      'implements',
+      'interface',
+      'mixin',
+      'with',
+      'as',
+      'is',
+      'new',
+      'this',
+      'super',
+      'switch',
+      'case',
+      'default',
+      'break',
+      'continue',
+      'async',
+      'await',
+      'yield',
+      'fn',
+      'pub',
+      'use',
+      'impl',
+      'struct',
+      'enum',
+      'mut',
+      'let',
+    ];
+  } else if (lang == 'javascript' ||
+      lang == 'js' ||
+      lang == 'typescript' ||
+      lang == 'ts') {
+    keywords = [
+      'class',
+      'import',
+      'export',
+      'from',
+      'function',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'in',
+      'of',
+      'try',
+      'catch',
+      'finally',
+      'const',
+      'let',
+      'var',
+      'new',
+      'this',
+      'super',
+      'switch',
+      'case',
+      'default',
+      'break',
+      'continue',
+      'async',
+      'await',
+      'yield',
+      'type',
+      'interface',
+      'namespace',
+      'typeof',
+      'instanceof',
+      'true',
+      'false',
+      'null',
+      'undefined',
+    ];
   } else {
-    keywords = ['class', 'import', 'export', 'void', 'function', 'return', 'if', 'else', 'for', 'while', 'try', 'catch', 'finally', 'const', 'let', 'var', 'final', 'def', 'fn', 'true', 'false', 'null'];
+    keywords = [
+      'class',
+      'import',
+      'export',
+      'void',
+      'function',
+      'return',
+      'if',
+      'else',
+      'for',
+      'while',
+      'try',
+      'catch',
+      'finally',
+      'const',
+      'let',
+      'var',
+      'final',
+      'def',
+      'fn',
+      'true',
+      'false',
+      'null',
+    ];
   }
 
   final keywordSet = keywords.toSet();
@@ -6824,28 +7942,76 @@ TextSpan _highlightCode(String code, String language) {
     final text = m.group(0)!;
     if (m.group(1) != null || m.group(2) != null) {
       // Comments
-      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFF7A828F))));
+      spans.add(
+        TextSpan(
+          text: text,
+          style: const TextStyle(color: Color(0xFF7A828F)),
+        ),
+      );
     } else if (m.group(3) != null) {
       // Strings
-      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFF98C379))));
+      spans.add(
+        TextSpan(
+          text: text,
+          style: const TextStyle(color: Color(0xFF98C379)),
+        ),
+      );
     } else if (m.group(4) != null) {
       // Numbers
-      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFD19A66))));
+      spans.add(
+        TextSpan(
+          text: text,
+          style: const TextStyle(color: Color(0xFFD19A66)),
+        ),
+      );
     } else if (m.group(5) != null) {
       // Words
       if (keywordSet.contains(text)) {
-        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFC678DD), fontWeight: FontWeight.bold)));
+        spans.add(
+          TextSpan(
+            text: text,
+            style: const TextStyle(
+              color: Color(0xFFC678DD),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        );
       } else if (RegExp(r'^[A-Z]').hasMatch(text)) {
         // Classes/Types
-        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFE5C07B))));
-      } else if (text == 'void' || text == 'int' || text == 'double' || text == 'num' || text == 'bool' || text == 'dynamic') {
-        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFE5C07B))));
+        spans.add(
+          TextSpan(
+            text: text,
+            style: const TextStyle(color: Color(0xFFE5C07B)),
+          ),
+        );
+      } else if (text == 'void' ||
+          text == 'int' ||
+          text == 'double' ||
+          text == 'num' ||
+          text == 'bool' ||
+          text == 'dynamic') {
+        spans.add(
+          TextSpan(
+            text: text,
+            style: const TextStyle(color: Color(0xFFE5C07B)),
+          ),
+        );
       } else {
-        spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFABB2BF))));
+        spans.add(
+          TextSpan(
+            text: text,
+            style: const TextStyle(color: Color(0xFFABB2BF)),
+          ),
+        );
       }
     } else {
       // Operators, braces, spaces
-      spans.add(TextSpan(text: text, style: const TextStyle(color: Color(0xFFABB2BF))));
+      spans.add(
+        TextSpan(
+          text: text,
+          style: const TextStyle(color: Color(0xFFABB2BF)),
+        ),
+      );
     }
   }
 
@@ -6928,10 +8094,7 @@ class CodeBlockWidget extends StatelessWidget {
             padding: const EdgeInsets.all(14),
             child: SelectableText.rich(
               _highlightCode(code, language),
-              style: GoogleFonts.jetBrainsMono(
-                fontSize: 13,
-                height: 1.45,
-              ),
+              style: GoogleFonts.jetBrainsMono(fontSize: 13, height: 1.45),
             ),
           ),
         ],
@@ -7028,10 +8191,7 @@ class FileArtifactWidget extends StatelessWidget {
             child: SingleChildScrollView(
               child: SelectableText.rich(
                 _highlightCode(content, language),
-                style: GoogleFonts.jetBrainsMono(
-                  fontSize: 12,
-                  height: 1.4,
-                ),
+                style: GoogleFonts.jetBrainsMono(fontSize: 12, height: 1.4),
               ),
             ),
           ),
@@ -7158,7 +8318,7 @@ List<ContentBlock> parseContentBlocks(String text) {
     } else {
       final lines = part.split('\n');
       final firstLine = lines.first.trim();
-      
+
       bool isValidLanguageIdentifier(String lang) {
         if (lang.isEmpty) return true;
         // A valid language prefix shouldn't contain spaces, quotes, brackets, or math operators, and shouldn't be too long.
@@ -7172,9 +8332,7 @@ List<ContentBlock> parseContentBlocks(String text) {
           ContentBlock(isCode: true, content: codeContent, language: firstLine),
         );
       } else {
-        blocks.add(
-          ContentBlock(isCode: true, content: part, language: ''),
-        );
+        blocks.add(ContentBlock(isCode: true, content: part, language: ''));
       }
     }
   }
@@ -7364,7 +8522,11 @@ String convertLatexToUnicode(String text) {
 
 /// Animated shimmer placeholder — shown while media decodes or loads.
 class _ShimmerBox extends StatefulWidget {
-  const _ShimmerBox({required this.width, required this.height, this.radius = 12});
+  const _ShimmerBox({
+    required this.width,
+    required this.height,
+    this.radius = 12,
+  });
   final double width;
   final double height;
   final double radius;
@@ -7452,11 +8614,7 @@ class _ChatMediaGrid extends StatelessWidget {
       // Single item — show larger
       return ClipRRect(
         borderRadius: BorderRadius.circular(14),
-        child: SizedBox(
-          width: 260,
-          height: 180,
-          child: tiles.first,
-        ),
+        child: SizedBox(width: 260, height: 180, child: tiles.first),
       );
     }
 
@@ -7566,14 +8724,12 @@ class _ImageChatTileState extends State<_ImageChatTile> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Image.memory(
-                  _bytes!,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                ),
+                Image.memory(_bytes!, fit: BoxFit.cover, gaplessPlayback: true),
                 // Subtle gradient overlay at bottom
                 Positioned(
-                  bottom: 0, left: 0, right: 0,
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
                   child: Container(
                     height: 32,
                     decoration: BoxDecoration(
@@ -7590,7 +8746,8 @@ class _ImageChatTileState extends State<_ImageChatTile> {
                 ),
                 // Tap-to-expand hint icon
                 Positioned(
-                  bottom: 6, right: 6,
+                  bottom: 6,
+                  right: 6,
                   child: Container(
                     padding: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
@@ -7661,7 +8818,9 @@ class _VideoChatTileState extends State<_VideoChatTile> {
       final bytes = base64Decode(widget.base64Data);
       // Write to temp file so VideoPlayerController can load it
       final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/nexon_video_${widget.index}_${DateTime.now().millisecondsSinceEpoch}.mp4');
+      final file = File(
+        '${dir.path}/nexon_video_${widget.index}_${DateTime.now().millisecondsSinceEpoch}.mp4',
+      );
       await file.writeAsBytes(bytes);
       final ctrl = VideoPlayerController.file(file);
       await ctrl.initialize();
@@ -7741,11 +8900,16 @@ class _VideoChatTileState extends State<_VideoChatTile> {
         Container(color: Colors.black54),
         // Play icon
         const Center(
-          child: Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 44),
+          child: Icon(
+            Icons.play_circle_fill_rounded,
+            color: Colors.white,
+            size: 44,
+          ),
         ),
         // Duration badge
         Positioned(
-          bottom: 6, right: 8,
+          bottom: 6,
+          right: 8,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
@@ -7754,13 +8918,18 @@ class _VideoChatTileState extends State<_VideoChatTile> {
             ),
             child: Text(
               _fmtDuration(_ctrl!.value.duration),
-              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
         ),
         // Video badge
         Positioned(
-          top: 6, left: 8,
+          top: 6,
+          left: 8,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
@@ -7770,9 +8939,21 @@ class _VideoChatTileState extends State<_VideoChatTile> {
             child: const Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.videocam_rounded, color: Color(0xFF67E8A0), size: 12),
+                Icon(
+                  Icons.videocam_rounded,
+                  color: Color(0xFF67E8A0),
+                  size: 12,
+                ),
                 SizedBox(width: 3),
-                Text('VIDEO', style: TextStyle(color: Color(0xFF67E8A0), fontSize: 9, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                Text(
+                  'VIDEO',
+                  style: TextStyle(
+                    color: Color(0xFF67E8A0),
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
               ],
             ),
           ),
@@ -7802,13 +8983,19 @@ class _VideoChatTileState extends State<_VideoChatTile> {
                 color: Colors.black54,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 32),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: Colors.white,
+                size: 32,
+              ),
             ),
           ),
         ),
         // Progress bar
         Positioned(
-          bottom: 0, left: 0, right: 0,
+          bottom: 0,
+          left: 0,
+          right: 0,
           child: ValueListenableBuilder<VideoPlayerValue>(
             valueListenable: _ctrl!,
             builder: (_, val, __) {
@@ -7821,22 +9008,33 @@ class _VideoChatTileState extends State<_VideoChatTile> {
                   LinearProgressIndicator(
                     value: progress,
                     backgroundColor: Colors.white24,
-                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF67E8A0)),
+                    valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFF67E8A0),
+                    ),
                     minHeight: 3,
                   ),
                   Container(
                     color: Colors.black54,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
                           _fmtDuration(val.position),
-                          style: const TextStyle(color: Colors.white70, fontSize: 10),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                          ),
                         ),
                         Text(
                           _fmtDuration(val.duration),
-                          style: const TextStyle(color: Colors.white70, fontSize: 10),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                          ),
                         ),
                       ],
                     ),
@@ -7852,10 +9050,13 @@ class _VideoChatTileState extends State<_VideoChatTile> {
           builder: (_, val, __) => val.isBuffering
               ? const Center(
                   child: SizedBox(
-                    width: 28, height: 28,
+                    width: 28,
+                    height: 28,
                     child: CircularProgressIndicator(
                       strokeWidth: 2.5,
-                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF67E8A0)),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(0xFF67E8A0),
+                      ),
                     ),
                   ),
                 )
@@ -7875,7 +9076,10 @@ class _VideoChatTileState extends State<_VideoChatTile> {
       children: [
         Icon(Icons.videocam_off_rounded, color: Color(0xFF67E8A0), size: 32),
         SizedBox(height: 6),
-        Text('Video unavailable', style: TextStyle(color: Colors.white60, fontSize: 11)),
+        Text(
+          'Video unavailable',
+          style: TextStyle(color: Colors.white60, fontSize: 11),
+        ),
       ],
     ),
   );
@@ -7948,7 +9152,11 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
 
                 if (bytes == null) {
                   return const Center(
-                    child: Icon(Icons.broken_image_outlined, color: Colors.white38, size: 60),
+                    child: Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white38,
+                      size: 60,
+                    ),
                   );
                 }
 
@@ -7976,7 +9184,8 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
             // Top bar — image counter + close
             Positioned(
               top: MediaQuery.of(context).padding.top + 8,
-              left: 0, right: 0,
+              left: 0,
+              right: 0,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
@@ -7984,14 +9193,21 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
                   children: [
                     if (widget.images.length > 1)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 5,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.black54,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
                           '${_current + 1} / ${widget.images.length}',
-                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       )
                     else
@@ -7999,12 +9215,17 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
                     GestureDetector(
                       onTap: () => Navigator.of(context).pop(),
                       child: Container(
-                        width: 36, height: 36,
+                        width: 36,
+                        height: 36,
                         decoration: BoxDecoration(
                           color: Colors.black54,
                           borderRadius: BorderRadius.circular(18),
                         ),
-                        child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                        child: const Icon(
+                          Icons.close_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
                       ),
                     ),
                   ],
@@ -8015,7 +9236,8 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
             // Hint: swipe down to dismiss
             Positioned(
               bottom: MediaQuery.of(context).padding.bottom + 80,
-              left: 0, right: 0,
+              left: 0,
+              right: 0,
               child: const Center(
                 child: Text(
                   'Swipe down to dismiss · Pinch to zoom',
@@ -8028,7 +9250,8 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
             if (widget.images.length > 1)
               Positioned(
                 bottom: MediaQuery.of(context).padding.bottom + 12,
-                left: 0, right: 0,
+                left: 0,
+                right: 0,
                 child: SizedBox(
                   height: 56,
                   child: ListView.builder(
@@ -8050,18 +9273,20 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 200),
                           margin: const EdgeInsets.only(right: 8),
-                          width: 52, height: 52,
+                          width: 52,
+                          height: 52,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: isSelected
-                                  ? Colors.white
-                                  : Colors.white30,
+                              color: isSelected ? Colors.white : Colors.white30,
                               width: isSelected ? 2.5 : 1.0,
                             ),
                           ),
                           child: bytes == null
-                              ? const Icon(Icons.broken_image_outlined, color: Colors.white38)
+                              ? const Icon(
+                                  Icons.broken_image_outlined,
+                                  color: Colors.white38,
+                                )
                               : ClipRRect(
                                   borderRadius: BorderRadius.circular(6),
                                   child: Image.memory(bytes, fit: BoxFit.cover),
@@ -8082,7 +9307,6 @@ class _ChatMediaViewerState extends State<_ChatMediaViewer> {
 // ══════════════════════════════════════════════════════════════════════════════
 
 class MessageBubble extends StatelessWidget {
-
   const MessageBubble({
     required this.message,
     required this.index,
@@ -8110,8 +9334,7 @@ class MessageBubble extends StatelessWidget {
   final String fileName;
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
-  final void Function([Map<String, dynamic>? editedStateMap])?
-      onStartResearch;
+  final void Function([Map<String, dynamic>? editedStateMap])? onStartResearch;
   final int versionsCount;
   final int currentVersionIndex;
   final ValueChanged<int>? onVersionChanged;
@@ -8276,7 +9499,9 @@ class MessageBubble extends StatelessWidget {
                                   ? Icons.stop_circle_rounded
                                   : Icons.volume_up_rounded,
                               size: 28,
-                              tooltip: speaking ? 'Stop audio' : 'Read aloud (TTS)',
+                              tooltip: speaking
+                                  ? 'Stop audio'
+                                  : 'Read aloud (TTS)',
                               iconColor: speaking
                                   ? const Color(0xFF9B4D39)
                                   : const Color(0xFF5C3D26),
@@ -8316,7 +9541,6 @@ class MessageBubble extends StatelessWidget {
             if (isToolOutput)
               Builder(
                 builder: (context) {
-
                   // Parse a smart header for tool results
                   final text = message.text;
                   String header;
@@ -8543,12 +9767,18 @@ class MessageBubble extends StatelessWidget {
       if (closeTagIndexInFull == -1) {
         // Unclosed tag (streaming fallback)
         final contentStr = text.substring(tagContentStartIndex).trim();
-        widgets.add(_buildSpecializedWidget(openTag, contentStr, matchedTag.isXml));
+        widgets.add(
+          _buildSpecializedWidget(openTag, contentStr, matchedTag.isXml),
+        );
         break;
       }
 
-      final contentStr = text.substring(tagContentStartIndex, closeTagIndexInFull).trim();
-      widgets.add(_buildSpecializedWidget(openTag, contentStr, matchedTag.isXml));
+      final contentStr = text
+          .substring(tagContentStartIndex, closeTagIndexInFull)
+          .trim();
+      widgets.add(
+        _buildSpecializedWidget(openTag, contentStr, matchedTag.isXml),
+      );
 
       currentIndex = closeTagIndexInFull + closeTag.length;
     }
@@ -8566,10 +9796,15 @@ class MessageBubble extends StatelessWidget {
             var cleanContent = content;
             if (cleanContent.contains('<research_plan>')) {
               final planIndex = cleanContent.indexOf('<research_plan>');
-              final planEndIndex = cleanContent.indexOf('</research_plan>', planIndex);
+              final planEndIndex = cleanContent.indexOf(
+                '</research_plan>',
+                planIndex,
+              );
               if (planEndIndex != -1) {
-                cleanContent = (cleanContent.substring(0, planIndex) +
-                    cleanContent.substring(planEndIndex + 16)).trim();
+                cleanContent =
+                    (cleanContent.substring(0, planIndex) +
+                            cleanContent.substring(planEndIndex + 16))
+                        .trim();
               } else {
                 cleanContent = cleanContent.substring(0, planIndex).trim();
               }
@@ -8636,7 +9871,8 @@ class MessageBubble extends StatelessWidget {
             ),
           );
         case '<command>':
-          final contentStr = '<method>run_command</method><command>$content</command>';
+          final contentStr =
+              '<method>run_command</method><command>$content</command>';
           return McpToolBlock(mcpJson: contentStr, isXml: true);
         default: // <mcp_request>, <tool_request>
           return McpToolBlock(mcpJson: content, isXml: isXml);
@@ -9173,6 +10409,49 @@ class Composer extends StatelessWidget {
                 ),
               ),
             ),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (context, value, _) {
+              final suggestions = SlashCommandService.filterCommands(value.text);
+              if (suggestions.isEmpty) return const SizedBox.shrink();
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                constraints: const BoxConstraints(maxHeight: 180),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFFBF2),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFE5DDD3)),
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: suggestions.length,
+                  itemBuilder: (context, index) {
+                    final command = suggestions[index];
+                    return ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      title: Text(
+                        command,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF4A3424),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      onTap: () {
+                        controller.value = TextEditingValue(
+                          text: command.split(' ').first + ' ',
+                          selection: TextSelection.collapsed(
+                            offset: command.split(' ').first.length + 1,
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              );
+            },
+          ),
           // Target #5: Bottom message input -> full-width pill glass container
           LiquidGlassSurface(
             borderRadius: BorderRadius.circular(30),
@@ -9216,7 +10495,10 @@ class Composer extends StatelessWidget {
                         ),
                         border: InputBorder.none,
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                        contentPadding: EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 4,
+                        ),
                       ),
                     ),
                   ),
@@ -9495,7 +10777,6 @@ class _ModelCounts {
 }
 
 class MediaAndModelSheet extends StatefulWidget {
-
   const MediaAndModelSheet({
     super.key,
     required this.sessions,
@@ -9712,8 +10993,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       final bytes = utf8.encode(jsonEncode({'method': 'ping', 'params': {}}));
       request.headers.contentLength = bytes.length;
       request.add(bytes);
-      final response = await request.close().timeout(const Duration(seconds: 3));
-      final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 3));
+      final response = await request.close().timeout(
+        const Duration(seconds: 3),
+      );
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 3));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final decoded = jsonDecode(body);
         if (decoded is Map<String, dynamic> && decoded['result'] is Map) {
@@ -9738,14 +11024,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           builder: (ctx, setDialogState) {
             bool rechecking = false;
             return AlertDialog(
-              title: Text(isUnreachable ? 'Bridge Not Running' : 'Deep Research Setup Required'),
+              title: Text(
+                isUnreachable
+                    ? 'Bridge Not Running'
+                    : 'Deep Research Setup Required',
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(isUnreachable
-                      ? "The Python bridge process isn't currently running. Please start it in Termux:"
-                      : 'Deep Research requires the Python bridge. Please run this setup command in Termux:'),
+                  Text(
+                    isUnreachable
+                        ? "The Python bridge process isn't currently running. Please start it in Termux:"
+                        : 'Deep Research requires the Python bridge. Please run this setup command in Termux:',
+                  ),
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(8),
@@ -9757,19 +11049,31 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             isUnreachable
                                 ? 'cd ~/nexon_bridge && python3 mcp_server.py'
                                 : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
-                            style: const TextStyle(color: Colors.green, fontFamily: 'monospace', fontSize: 12),
+                            style: const TextStyle(
+                              color: Colors.green,
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                            ),
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.copy, color: Colors.white, size: 20),
+                          icon: const Icon(
+                            Icons.copy,
+                            color: Colors.white,
+                            size: 20,
+                          ),
                           onPressed: () {
-                            Clipboard.setData(ClipboardData(
-                              text: isUnreachable
-                                  ? 'cd ~/nexon_bridge && python3 mcp_server.py'
-                                  : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
-                            ));
+                            Clipboard.setData(
+                              ClipboardData(
+                                text: isUnreachable
+                                    ? 'cd ~/nexon_bridge && python3 mcp_server.py'
+                                    : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
+                              ),
+                            );
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Copied to clipboard')),
+                              const SnackBar(
+                                content: Text('Copied to clipboard'),
+                              ),
                             );
                           },
                         ),
@@ -9797,17 +11101,29 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                 setState(() => _deepResearchEnabled = true);
                                 widget.onDeepResearchEnabledChanged(true);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Bridge is running! Deep Research enabled.')),
+                                  const SnackBar(
+                                    content: Text(
+                                      'Bridge is running! Deep Research enabled.',
+                                    ),
+                                  ),
                                 );
                               } else {
                                 setRecheckState(() => rechecking = false);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Bridge still not reachable. Please check it is running.')),
+                                  const SnackBar(
+                                    content: Text(
+                                      'Bridge still not reachable. Please check it is running.',
+                                    ),
+                                  ),
                                 );
                               }
                             },
                       child: rechecking
-                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
                           : const Text('Recheck'),
                     );
                   },
@@ -10198,60 +11514,60 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-          // Drag handle at top
-          Center(
-            child: Container(
-              width: 42,
-              height: 5,
-              decoration: BoxDecoration(
-                color: const Color(0xFFDCCBB8),
-                borderRadius: BorderRadius.circular(3),
+            // Drag handle at top
+            Center(
+              child: Container(
+                width: 42,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDCCBB8),
+                  borderRadius: BorderRadius.circular(3),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 20),
+            const SizedBox(height: 20),
 
-          // Header Row
-          const Text(
-            'Input & Settings',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
-              color: Color(0xFF2D241C),
-              letterSpacing: -0.5,
+            // Header Row
+            const Text(
+              'Input & Settings',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF2D241C),
+                letterSpacing: -0.5,
+              ),
             ),
-          ),
 
-          // Custom Tab Bar Selector
-          Container(
-            margin: const EdgeInsets.symmetric(vertical: 14),
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3EBE0),
-              borderRadius: BorderRadius.circular(14),
+            // Custom Tab Bar Selector
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 14),
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3EBE0),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
+                  _buildTabButton(1, Icons.explore_outlined, 'Capabilities'),
+                  _buildTabButton(2, Icons.account_circle_outlined, 'Account'),
+                  _buildTabButton(3, Icons.attachment_outlined, 'Attach'),
+                ],
+              ),
             ),
-            child: Row(
-              children: [
-                _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
-                _buildTabButton(1, Icons.explore_outlined, 'Capabilities'),
-                _buildTabButton(2, Icons.account_circle_outlined, 'Account'),
-                _buildTabButton(3, Icons.attachment_outlined, 'Attach'),
-              ],
-            ),
-          ),
-          const Divider(color: Color(0xFFE7D8C4), height: 1),
-          const SizedBox(height: 14),
+            const Divider(color: Color(0xFFE7D8C4), height: 1),
+            const SizedBox(height: 14),
 
-          // Scrollable Content Pane
-          Expanded(
-            child: SingleChildScrollView(
-              child: _buildActiveTabContent(models, visionEnabled),
+            // Scrollable Content Pane
+            Expanded(
+              child: SingleChildScrollView(
+                child: _buildActiveTabContent(models, visionEnabled),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
   }
 
   Widget _buildActiveTabContent(List<String> models, bool visionEnabled) {
@@ -10852,10 +12168,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   SizedBox(height: 2),
                   Text(
                     'Let models create structured markdown artifacts',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6C5946),
-                    ),
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
               ),
@@ -10893,10 +12206,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   SizedBox(height: 2),
                   Text(
                     'Let models render dynamic SVG diagrams',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6C5946),
-                    ),
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
               ),
@@ -10934,10 +12244,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   SizedBox(height: 2),
                   Text(
                     'Let models perform iterative multi-step research plans',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6C5946),
-                    ),
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
               ),
@@ -10949,7 +12256,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     final result = await _checkBridgeAlive();
                     if (!mounted) return;
                     if (result['ok'] != true) {
-                      final reason = result['reason']?.toString() ?? 'bridge_unreachable';
+                      final reason =
+                          result['reason']?.toString() ?? 'bridge_unreachable';
                       _showDeepResearchSetupDialog(reason: reason);
                       setState(() => _deepResearchEnabled = false);
                       widget.onDeepResearchEnabledChanged(false);
@@ -10986,18 +12294,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   SizedBox(height: 2),
                   Text(
                     'Text-to-Speech audio button on model outputs',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6C5946),
-                    ),
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
               ),
-              Icon(
-                Icons.volume_up_rounded,
-                color: Color(0xFF7B4E2E),
-                size: 24,
-              ),
+              Icon(Icons.volume_up_rounded, color: Color(0xFF7B4E2E), size: 24),
             ],
           ),
         ),
@@ -11031,7 +12332,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   if (voices.isEmpty) {
                     return const Text(
                       'Default System Voice',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF7B4E2E)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF7B4E2E),
+                      ),
                     );
                   }
                   return DropdownButtonFormField<String>(
@@ -11039,16 +12344,26 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     dropdownColor: const Color(0xFFFFFBF2),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                     ),
                     items: voices.map((v) {
-                      final name = v is Map ? (v['name']?.toString() ?? 'Voice') : v.toString();
-                      final lang = v is Map ? (v['locale']?.toString() ?? '') : '';
+                      final name = v is Map
+                          ? (v['name']?.toString() ?? 'Voice')
+                          : v.toString();
+                      final lang = v is Map
+                          ? (v['locale']?.toString() ?? '')
+                          : '';
                       return DropdownMenuItem<String>(
                         value: name,
                         child: Text(
                           '$name ${lang.isNotEmpty ? "($lang)" : ""}',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       );
                     }).toList(),
@@ -11089,10 +12404,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               const Text(
                 'Set this near your selected model\'s context limit, leaving room for instructions and output. '
                 'The writer reserves ~18% for prompts; the rest is available for evidence.',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Color(0xFF6C5946),
-                ),
+                style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
               ),
               const SizedBox(height: 12),
               Row(
@@ -11169,7 +12481,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFFFF8E1),
                       border: Border.all(color: const Color(0xFFFFCC02)),
@@ -11180,7 +12495,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       children: [
                         const Padding(
                           padding: EdgeInsets.only(top: 1, right: 8),
-                          child: Icon(Icons.info_outline, size: 16, color: Color(0xFFF9A825)),
+                          child: Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: Color(0xFFF9A825),
+                          ),
                         ),
                         Expanded(
                           child: Text(
@@ -11302,18 +12621,25 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                           await DriveSyncService.restoreFromDriveDetailed(
                                             onProgress: (status) {
                                               if (mounted) {
-                                                setState(() => _syncProgressStatus = status);
+                                                setState(
+                                                  () => _syncProgressStatus =
+                                                      status,
+                                                );
                                               }
                                             },
                                           );
                                       if (mounted) {
-                                        setState(() => _syncProgressStatus = '');
+                                        setState(
+                                          () => _syncProgressStatus = '',
+                                        );
                                         if (result.success) {
                                           await widget.onRestoreCompleted();
                                         }
                                         _showSyncResultDialog(
                                           context,
-                                          title: result.success ? 'Restore Complete' : 'Restore Failed',
+                                          title: result.success
+                                              ? 'Restore Complete'
+                                              : 'Restore Failed',
                                           message: result.message,
                                           details: result.details,
                                           success: result.success,
@@ -11322,7 +12648,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                       }
                                     } catch (e) {
                                       if (mounted) {
-                                        setState(() => _syncProgressStatus = '');
+                                        setState(
+                                          () => _syncProgressStatus = '',
+                                        );
                                         _showSyncResultDialog(
                                           context,
                                           title: 'Restore Error',
@@ -11377,15 +12705,22 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                             force: true,
                                             onProgress: (status) {
                                               if (mounted) {
-                                                setState(() => _syncProgressStatus = status);
+                                                setState(
+                                                  () => _syncProgressStatus =
+                                                      status,
+                                                );
                                               }
                                             },
                                           );
                                       if (mounted) {
-                                        setState(() => _syncProgressStatus = '');
+                                        setState(
+                                          () => _syncProgressStatus = '',
+                                        );
                                         _showSyncResultDialog(
                                           context,
-                                          title: result.success ? 'Backup Complete' : 'Backup Failed',
+                                          title: result.success
+                                              ? 'Backup Complete'
+                                              : 'Backup Failed',
                                           message: result.message,
                                           details: result.details,
                                           success: result.success,
@@ -11394,7 +12729,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                       }
                                     } catch (e) {
                                       if (mounted) {
-                                        setState(() => _syncProgressStatus = '');
+                                        setState(
+                                          () => _syncProgressStatus = '',
+                                        );
                                         _showSyncResultDialog(
                                           context,
                                           title: 'Backup Error',
@@ -11452,13 +12789,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    Supabase
-                            .instance
-                            .client
-                            .auth
-                            .currentSession
-                            ?.user
-                            .email ??
+                    Supabase.instance.client.auth.currentSession?.user.email ??
                         'Not logged in',
                     style: const TextStyle(
                       fontSize: 14,
@@ -11466,8 +12797,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       fontWeight: FontWeight.w500,
                     ),
                   ),
-                  if (Supabase.instance.client.auth.currentSession !=
-                      null) ...[
+                  if (Supabase.instance.client.auth.currentSession != null) ...[
                     const SizedBox(height: 6),
                     Text(
                       'Active Plan: ${_activePlanTier.isEmpty ? "FREE" : _activePlanTier.toUpperCase()}',
@@ -11551,13 +12881,21 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(10),
                                     ),
-                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
                                   ),
                                   onPressed: () async {
                                     Navigator.of(ctx).pop();
-                                    final prefs = await SharedPreferences.getInstance();
-                                    await prefs.setBool('has_completed_onboarding_v2', false);
-                                    await Supabase.instance.client.auth.signOut();
+                                    final prefs =
+                                        await SharedPreferences.getInstance();
+                                    await prefs.setBool(
+                                      'has_completed_onboarding_v2',
+                                      false,
+                                    );
+                                    await Supabase.instance.client.auth
+                                        .signOut();
                                     if (mounted) {
                                       Navigator.pushAndRemoveUntil(
                                         context,
@@ -11582,7 +12920,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             ),
                           );
                         },
-                        icon: const Icon(Icons.logout, size: 16, color: Colors.red),
+                        icon: const Icon(
+                          Icons.logout,
+                          size: 16,
+                          color: Colors.red,
+                        ),
                         label: const Text(
                           'Logout',
                           style: TextStyle(
@@ -11592,8 +12934,15 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         ),
                       ),
                       TextButton.icon(
-                        onPressed: () => UpdateService.checkForUpdates(context, userInitiated: true),
-                        icon: const Icon(Icons.system_update_rounded, size: 16, color: Color(0xFF2563EB)),
+                        onPressed: () => UpdateService.checkForUpdates(
+                          context,
+                          userInitiated: true,
+                        ),
+                        icon: const Icon(
+                          Icons.system_update_rounded,
+                          size: 16,
+                          color: Color(0xFF2563EB),
+                        ),
                         label: const Text(
                           'Check for Updates',
                           style: TextStyle(
@@ -12029,10 +13378,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 ),
                 child: const Text(
                   'Subscribe',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                 ),
               ),
             ],
@@ -12329,12 +13675,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     ),
                     child: const Row(
                       children: [
-                        Icon(Icons.warning_amber, color: Color(0xFFD4A017), size: 18),
+                        Icon(
+                          Icons.warning_amber,
+                          color: Color(0xFFD4A017),
+                          size: 18,
+                        ),
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             'Sign out and sign in again with Google to re-authorize Drive access.',
-                            style: TextStyle(fontSize: 12, color: Color(0xFF7B6B2E)),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF7B6B2E),
+                            ),
                           ),
                         ),
                       ],
@@ -12371,10 +13724,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                               color: line.startsWith('❌')
                                   ? const Color(0xFFB33A3A)
                                   : line.startsWith('✅')
-                                      ? const Color(0xFF3B7A3B)
-                                      : line.startsWith('⚠️')
-                                          ? const Color(0xFFD4A017)
-                                          : const Color(0xFF5A4A3A),
+                                  ? const Color(0xFF3B7A3B)
+                                  : line.startsWith('⚠️')
+                                  ? const Color(0xFFD4A017)
+                                  : const Color(0xFF5A4A3A),
                             ),
                           ),
                         );
@@ -12389,10 +13742,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              'OK',
-              style: TextStyle(color: Color(0xFF7B4E2E)),
-            ),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF7B4E2E))),
           ),
         ],
       ),
@@ -12775,12 +14125,16 @@ class _ModelPickerSheetState extends State<ModelPickerSheet> {
                           selected
                               ? Icons.radio_button_checked
                               : Icons.radio_button_unchecked,
-                          color: selected ? const Color(0xFF7B4E2E) : const Color(0xFF6C5946),
+                          color: selected
+                              ? const Color(0xFF7B4E2E)
+                              : const Color(0xFF6C5946),
                         ),
                         title: Text(
                           model,
                           style: TextStyle(
-                            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                            fontWeight: selected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
                           ),
                         ),
                         onTap: () => Navigator.of(context).pop(model),
@@ -13072,7 +14426,8 @@ class ChatClient {
           .maybeSingle();
       if (response != null) {
         liveDailyPool.value = response['current_daily_pool'] as int?;
-        liveSubscriptionCredits.value = response['subscription_credits'] as int?;
+        liveSubscriptionCredits.value =
+            response['subscription_credits'] as int?;
         liveTopupCredits.value = response['topup_credits'] as int?;
       }
     } catch (e) {
@@ -13120,17 +14475,21 @@ class ChatClient {
             if (modality.isNotEmpty) {
               final parts = modality.split('->');
               final inputPart = parts.first.trim();
-              final outputPart = parts.length > 1 ? parts.last.trim() : modality;
+              final outputPart = parts.length > 1
+                  ? parts.last.trim()
+                  : modality;
 
               // Detect text-to-image generation models
-              if (outputPart.contains('image') && !outputPart.contains('text')) {
+              if (outputPart.contains('image') &&
+                  !outputPart.contains('text')) {
                 ChatClient.modelsWithImageGeneration.add(id);
                 // Don't add to text list — these are pure image generators
                 continue;
               }
 
               // Detect text-to-video generation models
-              if (outputPart.contains('video') && !outputPart.contains('text')) {
+              if (outputPart.contains('video') &&
+                  !outputPart.contains('text')) {
                 ChatClient.modelsWithVideoGeneration.add(id);
                 // Don't add to text list — these are pure video generators
                 continue;
@@ -13208,7 +14567,9 @@ class ChatClient {
             if (caps is List) {
               for (final cap in caps) {
                 final capStr = cap.toString().toLowerCase();
-                if (capStr == 'vision' || capStr.contains('image') || capStr.contains('vision')) {
+                if (capStr == 'vision' ||
+                    capStr.contains('image') ||
+                    capStr.contains('vision')) {
                   ChatClient.modelsWithVision.add(name);
                 }
               }
@@ -13518,7 +14879,8 @@ class ChatClient {
                 if (decoded.containsKey('credits_status')) {
                   final status = decoded['credits_status'];
                   liveDailyPool.value = status['daily'] as int?;
-                  liveSubscriptionCredits.value = status['subscription'] as int?;
+                  liveSubscriptionCredits.value =
+                      status['subscription'] as int?;
                   liveTopupCredits.value = status['topup'] as int?;
                   continue;
                 }
@@ -13579,11 +14941,16 @@ class ChatClient {
             String? trVal = timeRange;
             if (trVal != null) {
               final tr = trVal.trim().toLowerCase();
-              if (tr == 'd') trVal = 'day';
-              else if (tr == 'w') trVal = 'week';
-              else if (tr == 'm') trVal = 'month';
-              else if (tr == 'y') trVal = 'year';
-              else trVal = tr;
+              if (tr == 'd')
+                trVal = 'day';
+              else if (tr == 'w')
+                trVal = 'week';
+              else if (tr == 'm')
+                trVal = 'month';
+              else if (tr == 'y')
+                trVal = 'year';
+              else
+                trVal = tr;
             }
 
             // Give current-events queries a current, thorough result set even
@@ -13594,7 +14961,8 @@ class ChatClient {
             ).hasMatch(query);
             final effectiveTopic = topic ?? (isFreshQuery ? 'news' : null);
             final effectiveTimeRange = trVal ?? (isFreshQuery ? 'month' : null);
-            final effectiveDepth = searchDepth == 'advanced' || searchDepth == 'basic'
+            final effectiveDepth =
+                searchDepth == 'advanced' || searchDepth == 'basic'
                 ? searchDepth!
                 : (isFreshQuery ? 'advanced' : 'basic');
 
@@ -13605,7 +14973,8 @@ class ChatClient {
               'search_depth': effectiveDepth,
             };
             if (effectiveTopic != null) payload['topic'] = effectiveTopic;
-            if (effectiveTimeRange != null) payload['time_range'] = effectiveTimeRange;
+            if (effectiveTimeRange != null)
+              payload['time_range'] = effectiveTimeRange;
             if (startDate != null) payload['start_date'] = startDate;
             if (endDate != null) payload['end_date'] = endDate;
 
@@ -13618,13 +14987,18 @@ class ChatClient {
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['results'] is List) {
               final results = decoded['results'] as List;
-              return results.map((r) {
-                final publishedDate = r is Map ? r['published_date']?.toString() : null;
-                final datePrefix = publishedDate == null || publishedDate.isEmpty
-                    ? ''
-                    : 'Published $publishedDate — ';
-                return '- [${r['title']}](${r['url']}): $datePrefix${r['content']}';
-              }).join('\n\n');
+              return results
+                  .map((r) {
+                    final publishedDate = r is Map
+                        ? r['published_date']?.toString()
+                        : null;
+                    final datePrefix =
+                        publishedDate == null || publishedDate.isEmpty
+                        ? ''
+                        : 'Published $publishedDate — ';
+                    return '- [${r['title']}](${r['url']}): $datePrefix${r['content']}';
+                  })
+                  .join('\n\n');
             }
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
@@ -13692,13 +15066,17 @@ class ChatClient {
           } else if (provider == 'duckduckgo') {
             final uri = Uri.parse('https://lite.duckduckgo.com/lite/');
             final request = await client.postUrl(uri);
-            request.headers.contentType =
-                ContentType('application', 'x-www-form-urlencoded');
+            request.headers.contentType = ContentType(
+              'application',
+              'x-www-form-urlencoded',
+            );
             request.headers.set(
               'User-Agent',
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             );
-            final bodyBytes = utf8.encode('q=${Uri.encodeQueryComponent(query)}');
+            final bodyBytes = utf8.encode(
+              'q=${Uri.encodeQueryComponent(query)}',
+            );
             request.headers.contentLength = bodyBytes.length;
             request.add(bodyBytes);
 
@@ -13720,8 +15098,14 @@ class ChatClient {
               var title = match.group(2) ?? '';
               var snippet = match.group(3) ?? '';
 
-              title = title.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&amp;', '&').trim();
-              snippet = snippet.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&amp;', '&').trim();
+              title = title
+                  .replaceAll(RegExp(r'<[^>]*>'), '')
+                  .replaceAll('&amp;', '&')
+                  .trim();
+              snippet = snippet
+                  .replaceAll(RegExp(r'<[^>]*>'), '')
+                  .replaceAll('&amp;', '&')
+                  .trim();
 
               var decodedUrl = rawUrl;
               if (rawUrl.contains('uddg=')) {
@@ -14035,8 +15419,10 @@ class ChatMessage {
   final String text;
   final bool isError;
   final String reasoning;
+
   /// Base64-encoded image data attached to this message.
   final List<String> images;
+
   /// Base64-encoded video data attached to this message.
   final List<String> videos;
   final List<AttachedFile> files;
@@ -14141,7 +15527,8 @@ class ChatSession {
       isPinned: isPinned ?? this.isPinned,
       branches: updatedBranches,
       activeBranchIndex: updatedActiveIndex,
-      updatedAt: updatedAt ?? (messages != null ? DateTime.now() : this.updatedAt),
+      updatedAt:
+          updatedAt ?? (messages != null ? DateTime.now() : this.updatedAt),
     );
   }
 
@@ -14258,7 +15645,8 @@ class ChatSession {
 
     final rawDate = json['updatedAt']?.toString();
     final parsedDate = (rawDate != null && rawDate.isNotEmpty)
-        ? (DateTime.tryParse(rawDate) ?? _parseIdDate(json['id']?.toString() ?? ''))
+        ? (DateTime.tryParse(rawDate) ??
+              _parseIdDate(json['id']?.toString() ?? ''))
         : _parseIdDate(json['id']?.toString() ?? '');
 
     return ChatSession(
@@ -14628,8 +16016,7 @@ class ResearchPlanWidget extends StatefulWidget {
   final String workspaceDir;
   final String fileName;
   final bool isSending;
-  final void Function([Map<String, dynamic>? editedStateMap])?
-      onStartResearch;
+  final void Function([Map<String, dynamic>? editedStateMap])? onStartResearch;
 
   @override
   State<ResearchPlanWidget> createState() => _ResearchPlanWidgetState();
@@ -14645,7 +16032,10 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     final controllers = originalSteps.map((step) {
       final value = step as Map;
       return TextEditingController(
-        text: value['query_text']?.toString() ?? value['prompt']?.toString() ?? '',
+        text:
+            value['query_text']?.toString() ??
+            value['prompt']?.toString() ??
+            '',
       );
     }).toList();
     final titles = originalSteps
@@ -14771,7 +16161,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
         final elements = await MarkdownParser.parse(contentToSave);
         final doc = DocxBuiltDocument(elements: elements);
         bytesList = await DocxExporter().exportToBytes(doc);
-        
+
         String docxName = 'research_report.docx';
         if (widget.fileName.isNotEmpty) {
           final base = widget.fileName.split('.').first;
@@ -14876,14 +16266,19 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (status == 'pending' || (status == 'running' && !widget.isSending) || status == 'failed') ...[
+                if (status == 'pending' ||
+                    (status == 'running' && !widget.isSending) ||
+                    status == 'failed') ...[
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (status == 'pending')
                         IconButton(
                           constraints: const BoxConstraints(),
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 4,
+                          ),
                           tooltip: 'Edit research plan',
                           onPressed: _editPlan,
                           icon: const Icon(Icons.edit_outlined, size: 19),
@@ -14892,17 +16287,27 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                       if (status == 'pending') const SizedBox(width: 4),
                       if (widget.onStartResearch != null)
                         FilledButton.icon(
-                          onPressed: () => widget.onStartResearch!(widget.stateMap),
+                          onPressed: () =>
+                              widget.onStartResearch!(widget.stateMap),
                           icon: Icon(
-                            status == 'running' ? Icons.play_arrow : (status == 'failed' ? Icons.replay : Icons.play_arrow),
+                            status == 'running'
+                                ? Icons.play_arrow
+                                : (status == 'failed'
+                                      ? Icons.replay
+                                      : Icons.play_arrow),
                             size: 16,
                           ),
                           label: Text(
-                            status == 'running' ? 'Resume' : (status == 'failed' ? 'Retry' : 'Start'),
+                            status == 'running'
+                                ? 'Resume'
+                                : (status == 'failed' ? 'Retry' : 'Start'),
                           ),
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF2C5282),
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             minimumSize: const Size(0, 32),
                           ),
                         ),
@@ -14938,7 +16343,11 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                         value: 'docx',
                         child: Row(
                           children: [
-                            Icon(Icons.description, size: 18, color: Color(0xFF2C5282)),
+                            Icon(
+                              Icons.description,
+                              size: 18,
+                              color: Color(0xFF2C5282),
+                            ),
                             SizedBox(width: 8),
                             Text('Save as DOCX'),
                           ],
@@ -14948,7 +16357,11 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                         value: 'markdown',
                         child: Row(
                           children: [
-                            Icon(Icons.article, size: 18, color: Color(0xFF2C5282)),
+                            Icon(
+                              Icons.article,
+                              size: 18,
+                              color: Color(0xFF2C5282),
+                            ),
                             SizedBox(width: 8),
                             Text('Save as Markdown'),
                           ],
@@ -14963,7 +16376,15 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
               child: LinearProgressIndicator(
-                value: steps.where((step) => step['status'] == 'completed' || step['status'] == 'completed_with_issues').length / steps.length,
+                value:
+                    steps
+                        .where(
+                          (step) =>
+                              step['status'] == 'completed' ||
+                              step['status'] == 'completed_with_issues',
+                        )
+                        .length /
+                    steps.length,
                 backgroundColor: const Color(0xFFCFE0EE),
                 color: const Color(0xFF2C5282),
                 minHeight: 5,
@@ -15012,10 +16433,14 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                           child: Text(
                             (step['title'] as String?) ?? 'Step ${idx + 1}',
                             style: TextStyle(
-                              decoration: (stepStatus == 'completed' || stepStatus == 'completed_with_issues')
+                              decoration:
+                                  (stepStatus == 'completed' ||
+                                      stepStatus == 'completed_with_issues')
                                   ? TextDecoration.lineThrough
                                   : null,
-                              color: (stepStatus == 'completed' || stepStatus == 'completed_with_issues')
+                              color:
+                                  (stepStatus == 'completed' ||
+                                      stepStatus == 'completed_with_issues')
                                   ? Colors.grey
                                   : Colors.black87,
                               fontWeight: stepStatus == 'running'
@@ -15049,15 +16474,15 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             color: Colors.black54,
                           ),
                         ),
-                       if ((step['events'] as List? ?? []).isNotEmpty) ...[
-                         const SizedBox(height: 12),
+                        if ((step['events'] as List? ?? []).isNotEmpty) ...[
+                          const SizedBox(height: 12),
                           ListView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: (step['events'] as List).length,
                             itemBuilder: (context, eventIndex) {
-                              final event = (step['events'] as List)[eventIndex]
-                                  as Map;
+                              final event =
+                                  (step['events'] as List)[eventIndex] as Map;
                               return _ResearchEventRow(
                                 key: ValueKey(
                                   event['id']?.toString() ??
@@ -15067,7 +16492,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                               );
                             },
                           ),
-                       ],
+                        ],
                         if (step['content'] != null &&
                             step['content'].toString().isNotEmpty)
                           ...step['content']
@@ -15083,7 +16508,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                                       )
                                       .trim();
                                   return McpToolBlock(mcpJson: jsonStr);
-                               } else if (s.contains('<search_request>')) {
+                                } else if (s.contains('<search_request>')) {
                                   final query = s
                                       .substring(
                                         s.indexOf('<search_request>') + 16,
@@ -15121,8 +16546,8 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                                           ),
                                         ),
                                       ],
-                                   ),
-                                 );
+                                    ),
+                                  );
                                 } else if (s.contains('<read_url>')) {
                                   final url = s
                                       .substring(
@@ -15163,7 +16588,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                                       ],
                                     ),
                                   );
-                               }
+                                }
                                 return Padding(
                                   padding: const EdgeInsets.only(top: 8.0),
                                   child: Text(
@@ -15260,11 +16685,7 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
       ),
       child: Text(
         text,
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 11,
-          color: accent,
-        ),
+        style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: accent),
       ),
     );
   }
@@ -15350,9 +16771,7 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            payload['url']?.toString() ??
-                widget.event['url']?.toString() ??
-                '',
+            payload['url']?.toString() ?? widget.event['url']?.toString() ?? '',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 10.5, color: Color(0xFF64748B)),
@@ -15362,17 +16781,28 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
             children: [
               if (parseFormat != null) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
-                    color: (parseFormat == 'pdf' || parseFormat == 'skipped_pdf') ? const Color(0xFFFFF3E0) : const Color(0xFFE8F5E9),
+                    color:
+                        (parseFormat == 'pdf' || parseFormat == 'skipped_pdf')
+                        ? const Color(0xFFFFF3E0)
+                        : const Color(0xFFE8F5E9),
                     borderRadius: BorderRadius.circular(3),
                   ),
                   child: Text(
-                    parseFormat == 'skipped_pdf' ? 'SKIPPED (PDF)' : parseFormat.toUpperCase(),
+                    parseFormat == 'skipped_pdf'
+                        ? 'SKIPPED (PDF)'
+                        : parseFormat.toUpperCase(),
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
-                      color: (parseFormat == 'pdf' || parseFormat == 'skipped_pdf') ? const Color(0xFFE65100) : const Color(0xFF2E7D32),
+                      color:
+                          (parseFormat == 'pdf' || parseFormat == 'skipped_pdf')
+                          ? const Color(0xFFE65100)
+                          : const Color(0xFF2E7D32),
                     ),
                   ),
                 ),
@@ -15381,24 +16811,38 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
               if (stageVal != null) ...[
                 Text(
                   stageVal,
-                  style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF64748B),
+                  ),
                 ),
                 const SizedBox(width: 6),
               ],
               if (isDedup)
                 const Text(
                   'Already read (cache hit)',
-                  style: TextStyle(fontSize: 10, color: Color(0xFF5C6BC0), fontStyle: FontStyle.italic),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF5C6BC0),
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
-              if (widget.event.containsKey('facts_count') || widget.event.containsKey('findings_count'))
+              if (widget.event.containsKey('facts_count') ||
+                  widget.event.containsKey('findings_count'))
                 Text(
                   '${widget.event['facts_count'] ?? 0} facts · ${widget.event['findings_count'] ?? 0} findings extracted',
-                  style: const TextStyle(fontSize: 10, color: Color(0xFF327342)),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF327342),
+                  ),
                 )
               else if (addedVal is num && addedVal > 0)
                 Text(
                   '$addedVal new chunks added',
-                  style: const TextStyle(fontSize: 10, color: Color(0xFF327342)),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF327342),
+                  ),
                 ),
             ],
           ),
@@ -15437,7 +16881,9 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
     final latency = latencyMs is num
         ? ' · ' + (latencyMs / 1000).toStringAsFixed(1) + 's'
         : '';
-    final isDedup = (added is num && added == 0) || widget.event['already_attempted'] == true;
+    final isDedup =
+        (added is num && added == 0) ||
+        widget.event['already_attempted'] == true;
     final detail = isRunning
         ? 'Fetching…'
         : isIngesting
@@ -15448,14 +16894,14 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
         ? (resultCount ?? '0') + ' results'
         : isFetch
         ? isDedup
-            ? 'Already read'
-            : widget.event.containsKey('facts_count')
-                ? '${widget.event['facts_count']} facts · ${widget.event['findings_count']} findings'
-                : (addedStr ?? '0') +
-                      ' chunks' +
-                      (novelty is num
-                          ? ' · ' + (novelty * 100).toStringAsFixed(0) + '% novel'
-                          : '')
+              ? 'Already read'
+              : widget.event.containsKey('facts_count')
+              ? '${widget.event['facts_count']} facts · ${widget.event['findings_count']} findings'
+              : (addedStr ?? '0') +
+                    ' chunks' +
+                    (novelty is num
+                        ? ' · ' + (novelty * 100).toStringAsFixed(0) + '% novel'
+                        : '')
         : tool;
     final background = isError
         ? const Color(0xFFF9ECE8)
@@ -15836,11 +17282,7 @@ class SvgDiagramWidget extends StatefulWidget {
   final String svgString;
   final Function(String errorDetails)? onError;
 
-  const SvgDiagramWidget({
-    super.key,
-    required this.svgString,
-    this.onError,
-  });
+  const SvgDiagramWidget({super.key, required this.svgString, this.onError});
 
   @override
   State<SvgDiagramWidget> createState() => _SvgDiagramWidgetState();
@@ -15862,7 +17304,7 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
   void _processSvg() {
     _cachedSvg = _cleanSvg(widget.svgString);
     _isComplete = _cachedSvg.trim().endsWith('</svg>');
-    
+
     if (!_isComplete) {
       _startTimeoutTimer();
     } else {
@@ -15948,7 +17390,11 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 18),
+            const Icon(
+              Icons.error_outline_rounded,
+              color: Color(0xFFDC2626),
+              size: 18,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -15973,7 +17419,9 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
         decoration: BoxDecoration(
           color: const Color(0xFF0D1B2A),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF1E3A5F).withValues(alpha: 0.5)),
+          border: Border.all(
+            color: const Color(0xFF1E3A5F).withValues(alpha: 0.5),
+          ),
         ),
         child: const Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -16097,7 +17545,9 @@ class FullScreenSvgViewer extends StatelessWidget {
               right: 14,
               child: WarmGlassContainer(
                 borderRadius: BorderRadius.circular(16),
-                backgroundColor: const Color(0xFF0D1B2A).withValues(alpha: 0.72),
+                backgroundColor: const Color(
+                  0xFF0D1B2A,
+                ).withValues(alpha: 0.72),
                 border: Border.all(
                   color: const Color(0xFF1E3A5F).withValues(alpha: 0.6),
                 ),
@@ -16429,13 +17879,11 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                       ),
                     ],
                   ),
-                   child: MarkdownBody(
+                  child: MarkdownBody(
                     data: widget.docxContent,
                     selectable: true,
                     extensionSet: md.ExtensionSet.gitHubFlavored,
-                    builders: {
-                      'table': ScrollableTableBuilder(),
-                    },
+                    builders: {'table': ScrollableTableBuilder()},
                     styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                         .copyWith(
                           h1: const TextStyle(
@@ -16746,9 +18194,7 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                     data: widget.mdContent,
                     selectable: true,
                     extensionSet: md.ExtensionSet.gitHubFlavored,
-                    builders: {
-                      'table': ScrollableTableBuilder(),
-                    },
+                    builders: {'table': ScrollableTableBuilder()},
                   ),
                 ),
               ),
@@ -16776,9 +18222,45 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
 }
 
 String _resolvePath(String p, String workspace) {
-  if (p.startsWith('/') || p.startsWith('~') || p.startsWith('http')) return p;
-  final ws = workspace.endsWith('/') ? workspace : '$workspace/';
-  return '$ws$p';
+  if (p.startsWith('http://') || p.startsWith('https://')) return p;
+  String expandHome(String path) {
+    if (path == '~') {
+      return Platform.environment['HOME'] ?? '/data/data/com.termux/files/home';
+    }
+    if (path.startsWith('~/')) {
+      final home =
+          Platform.environment['HOME'] ?? '/data/data/com.termux/files/home';
+      return '$home/${path.substring(2)}';
+    }
+    return path;
+  }
+
+  String normalize(String path) {
+    final normalized = Uri.file(path).normalizePath().toFilePath();
+    if (normalized.length > 1 && normalized.endsWith('/')) {
+      return normalized.substring(0, normalized.length - 1);
+    }
+    return normalized;
+  }
+
+  final workspaceExpanded = expandHome(workspace);
+  final workspaceCanonical = normalize(
+    workspaceExpanded.startsWith('/')
+        ? workspaceExpanded
+        : Directory.current.uri.resolve(workspaceExpanded).toFilePath(),
+  );
+
+  final candidateBase = expandHome(p);
+  final candidateResolved = candidateBase.startsWith('/')
+      ? candidateBase
+      : '$workspaceCanonical/$candidateBase';
+  final candidateCanonical = normalize(candidateResolved);
+  final insideWorkspace = candidateCanonical == workspaceCanonical ||
+      candidateCanonical.startsWith('$workspaceCanonical/');
+  if (!insideWorkspace) {
+    throw StateError('outside workspace jail: $candidateCanonical');
+  }
+  return candidateCanonical;
 }
 
 dynamic _resolveToolPathValue(dynamic value, String workspace, [String? key]) {

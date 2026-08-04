@@ -946,7 +946,7 @@ class TermuxForgeBridge:
 
     async def _deep_research_reset(self, keep_checkpoint: bool = False) -> dict:
         """Clear temp.json and in-memory caches."""
-        return self.deep_research.reset_run(keep_checkpoint=bool(keep_checkpoint))
+        return await self.deep_research.reset_run(keep_checkpoint=bool(keep_checkpoint))
 
     async def _deep_research_update_phase(
         self,
@@ -960,7 +960,7 @@ class TermuxForgeBridge:
         status: str = "running",
     ) -> dict:
         """Update phase facts and findings in temp.json."""
-        return self.deep_research.update_phase(
+        return await self.deep_research.update_phase(
             stage_id=stage_id,
             phase_title=phase_title,
             summary=summary,
@@ -979,7 +979,7 @@ class TermuxForgeBridge:
         steps: list = None,
         stats: dict = None,
     ) -> dict:
-        return self.deep_research.save_checkpoint(
+        return await self.deep_research.save_checkpoint(
             run_id=run_id or "",
             status=status or "running",
             current_phase_index=int(current_phase_index or 0),
@@ -991,7 +991,7 @@ class TermuxForgeBridge:
         return self.deep_research.load_checkpoint()
 
     async def _deep_research_clear_checkpoint(self) -> dict:
-        return self.deep_research.clear_checkpoint()
+        return await self.deep_research.clear_checkpoint()
 
     async def _web_search(
         self,
