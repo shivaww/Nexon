@@ -53,8 +53,12 @@ import shlex
 import shutil
 import stat
 import subprocess
+import tempfile
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -96,6 +100,252 @@ SKIP_DIRS = frozenset({
     "node_modules", ".gradle", ".idea", ".vscode", "coverage",
     ".pub", "android/.gradle",
 })
+
+# ── Production-grade safety / IO infrastructure ──────────────────────────
+#
+# These give the hybrid file tools VSCode-quality guarantees:
+#   * a workspace "jail" (paths must stay inside the workspace),
+#   * atomic writes (temp file + fsync + os.replace),
+#   * pre-write validation (disk space, size cap, binary content, sha256),
+#   * short-lived per-file locks (no two concurrent writers),
+#   * soft-delete to a `.nexon/trash/` folder with restore support,
+#   * an append-only audit log of every successful mutation.
+
+# Default workspace used when a tool call does not pass an explicit
+# workspace_dir. Mirrors the app's default agentic workspace.
+_DEFAULT_WORKSPACE = os.path.realpath(
+    os.environ.get("TERMUX_WORKSPACE", "/data/data/com.termux/files/home")
+)
+
+# Module-level workspace override, configurable via set_workspace_dir().
+_WORKSPACE_DIR = _DEFAULT_WORKSPACE
+
+# Files larger than this (10 MB) cannot be written in a single call; the
+# caller is told to use a streaming strategy instead.
+MAX_SAFE_WRITE_BYTES = 10 * 1024 * 1024
+
+# Per-file lock bookkeeping: {realpath: [threading.Lock, expiry_timestamp]}.
+# Locks auto-expire after _LOCK_TTL seconds to avoid orphaned locks if a call
+# is killed mid-flight.
+_file_locks: dict[str, list] = {}
+_LOCK_TTL = 30.0
+_LOCKS_GUARD = threading.Lock()
+
+# `.nexon/` support directory lives inside the active workspace.
+_NEXON_DIR = os.path.join(_WORKSPACE_DIR, ".nexon")
+_TRASH_DIR = os.path.join(_NEXON_DIR, "trash")
+_AUDIT_LOG = os.path.join(_NEXON_DIR, "file_ops.log")
+
+# Extra directories always excluded from search/walk, regardless of cwd.
+EXTRA_SKIP_DIRS = frozenset({
+    ".nexon", "build", ".dart_tool", "__pycache__", "node_modules", ".git",
+    ".gradle", ".idea", ".vscode", "coverage",
+})
+
+
+def set_workspace_dir(path: str) -> None:
+    """Set the active workspace used by the jail and support directories."""
+    global _WORKSPACE_DIR, _NEXON_DIR, _TRASH_DIR, _AUDIT_LOG
+    _WORKSPACE_DIR = os.path.realpath(os.path.expanduser(path))
+    _NEXON_DIR = os.path.join(_WORKSPACE_DIR, ".nexon")
+    _TRASH_DIR = os.path.join(_NEXON_DIR, "trash")
+    _AUDIT_LOG = os.path.join(_NEXON_DIR, "file_ops.log")
+
+
+def _workspace() -> str:
+    """Return the currently configured workspace root (realpath)."""
+    try:
+        return os.path.realpath(_WORKSPACE_DIR)
+    except OSError:
+        return _WORKSPACE_DIR
+
+
+def _is_safe(path: str, workspace_dir: str = "") -> bool:
+    """
+    Return True iff [path] resolves inside [workspace_dir] (the jail).
+
+    Handles symlinks and `~` expansion, and treats the jail's own support
+    directory as safe for bookkeeping even when computed under the lock. The
+    `real` path of the target must be the workspace root itself or live under
+    it; symlink targets that escape the jail are rejected.
+    """
+    if not path:
+        return True
+    base = workspace_dir or _workspace()
+    try:
+        work = os.path.realpath(base)
+        real = os.path.realpath(os.path.expanduser(path))
+    except OSError:
+        return False
+    if real == work:
+        return True
+    return real.startswith(work + os.sep)
+
+
+def _unsafe_error(path: str) -> dict[str, Any]:
+    return {
+        "stdout": f"ERROR: Path outside workspace jail: {path}",
+        "error": "Path outside workspace jail",
+        "path": str(path),
+        "exitCode": 1,
+        "success": False,
+    }
+
+
+def _atomic_write(path: str, content: str, encoding: str = "utf-8") -> int:
+    """
+    Atomically write [content] to [path] via a temp file + fsync + replace.
+
+    A crash mid-write can only ever leave the temp file behind; the target
+    file is replaced in a single atomic syscall, so it is never half-written.
+    Returns the number of bytes written.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(target))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return target.stat().st_size
+
+
+def _pre_write_checks(path: str, content: str) -> dict[str, Any] | None:
+    """
+    Validate a proposed write. Returns an error dict, or None when safe.
+
+    Enforced:
+      * content > 10 MB  -> "File >10MB use streaming"
+      * free disk < 2x content + 10 MB -> "Disk full"
+      * existing file > 10 MB -> "File >10MB use streaming"
+      * NUL byte in content -> "Binary file"
+    """
+    content_bytes = content.encode("utf-8")
+    size = len(content_bytes)
+
+    # Size cap for a single write.
+    if size > MAX_SAFE_WRITE_BYTES:
+        return {
+            "stdout": f"ERROR: File too large ({_human_size(size)}). Use a streaming tool for files >10MB.",
+            "error": "File >10MB use streaming",
+            "path": path,
+            "exitCode": 1,
+            "success": False,
+        }
+
+    # Existing-file size guard.
+    resolved = os.path.realpath(os.path.expanduser(path))
+    if os.path.exists(resolved) and os.path.getsize(resolved) > MAX_SAFE_WRITE_BYTES:
+        return {
+            "stdout": f"ERROR: Target file is {_human_size(os.path.getsize(resolved))} (>10MB). Use a streaming tool.",
+            "error": "File >10MB use streaming",
+            "path": path,
+            "exitCode": 1,
+            "success": False,
+        }
+
+    # Binary-content guard (NUL byte in the payload).
+    if b"\x00" in content_bytes[:8192]:
+        return {
+            "stdout": "ERROR: Refusing to write binary content.",
+            "error": "Binary file",
+            "path": path,
+            "exitCode": 1,
+            "success": False,
+        }
+
+    # Disk-space guard (2x content + 10 MB headroom).
+    try:
+        usage = shutil.disk_usage(resolved or ".")
+        if usage.free < size * 2 + 10 * 1024 * 1024:
+            return {
+                "stdout": f"ERROR: Insufficient disk space (need ~{_human_size(size * 2 + 10 * 1024 * 1024)}, have {_human_size(usage.free)}).",
+                "error": "Disk full",
+                "path": path,
+                "exitCode": 1,
+                "success": False,
+            }
+    except OSError:
+        pass
+
+    return None
+
+
+def _acquire_lock(path: str) -> dict[str, Any] | None:
+    """Try to acquire a short-lived exclusive lock for [path]. Returns error dict if held."""
+    key = os.path.realpath(os.path.expanduser(path))
+    now = time.monotonic()
+    with _LOCKS_GUARD:
+        entry = _file_locks.get(key)
+        if entry is not None and not entry[0].locked():
+            _file_locks.pop(key, None)
+            entry = None
+        if entry is not None:
+            if now < entry[1]:
+                return {
+                    "stdout": f"ERROR: File locked (in use): {path}",
+                    "error": "File locked",
+                    "path": path,
+                    "exitCode": 423,
+                    "success": False,
+                }
+        lock = threading.Lock()
+        if not lock.acquire(blocking=False):
+            # Race: another thread grabbed it between checks.
+            entry = _file_locks.get(key)
+            if entry is not None and now < entry[1]:
+                return {
+                    "stdout": f"ERROR: File locked (in use): {path}",
+                    "error": "File locked",
+                    "path": path,
+                    "exitCode": 423,
+                    "success": False,
+                }
+        _file_locks[key] = [lock, now + _LOCK_TTL]
+    return None
+
+
+def _release_lock(path: str) -> None:
+    key = os.path.realpath(os.path.expanduser(path))
+    with _LOCKS_GUARD:
+        entry = _file_locks.get(key)
+        if entry is not None:
+            try:
+                entry[0].release()
+            except RuntimeError:
+                pass
+            _file_locks.pop(key, None)
+
+
+def _audit_log(method: str, path: str, size: int, sha: str) -> None:
+    """Append a single audit record to .nexon/file_ops.log."""
+    try:
+        os.makedirs(_NEXON_DIR, exist_ok=True)
+        rec = f"[{datetime.now().isoformat(timespec='seconds')}] {method} {path} {size} {sha}"
+        with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(rec + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        pass
+
+
+def _ensure_trash() -> str:
+    os.makedirs(_TRASH_DIR, exist_ok=True)
+    return _TRASH_DIR
+
+
+def _trash_name(path: str) -> str:
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return f"{ts}_{Path(path).name}"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -677,7 +927,8 @@ def read_file_rich(
     max_lines: int = DEFAULT_MAX_LINES,
     encoding: str = "utf-8",
     show_line_numbers: bool = True,
-) -> FileReadResult:
+    workspace_dir: str = "",
+) -> FileReadResult | dict[str, Any]:
     """
     Read a file and return a structured, AI-optimized result.
 
@@ -703,6 +954,10 @@ def read_file_rich(
     show_line_numbers : bool
         Whether to prefix lines with numbers.
     """
+    if not _is_safe(path, workspace_dir):
+        err = _unsafe_error(path)
+        return err
+
     p = Path(path).expanduser()
 
     if not p.exists():
@@ -937,12 +1192,16 @@ def write_file_rich(
     encoding: str = "utf-8",
     create_dirs: bool = True,
     backup: bool = True,
-) -> WriteResult:
+    workspace_dir: str = "",
+    expected_sha256: str = "",
+) -> WriteResult | dict[str, Any]:
     """
     Atomically write a file with an optional backup.
 
     Uses a temp-file rename strategy so the write is atomic (no partial files).
-    Creates parent directories by default.
+    Creates parent directories by default. Enforces the workspace jail, per-write
+    pre-checks (disk space / size cap / binary content), and a short-lived
+    exclusive lock so two callers cannot write the same file at once.
 
     Parameters
     ----------
@@ -956,36 +1215,57 @@ def write_file_rich(
         Create parent directories if they don't exist.
     backup : bool
         If the file exists, save a .bak copy before overwriting.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
+    expected_sha256 : str
+        If set, the existing file's SHA-256 must match (optimistic concurrency).
     """
+    # ── Security jail ──
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
+
+    # ── Optimistic concurrency guard ──
+    if expected_sha256:
+        p_check = Path(path).expanduser()
+        if p_check.is_file():
+            actual = _sha256_file(p_check)
+            if actual.lower() != expected_sha256.lower():
+                return {
+                    "stdout": f"ERROR: File changed externally (SHA-256 mismatch): {path}",
+                    "error": "File changed externally",
+                    "path": str(p),
+                    "exitCode": 1,
+                    "success": False,
+                }
+
+    # ── Pre-write validation ──
+    err = _pre_write_checks(path, content)
+    if err is not None:
+        return err
+
+    # ── Exclusive lock ──
+    err = _acquire_lock(path)
+    if err is not None:
+        return err
+
     p = Path(path).expanduser()
     lines_before = 0
     backup_path = ""
-
-    if p.exists() and p.is_file():
-        old_lines = _read_lines_safe(p)
-        lines_before = len(old_lines)
-        if backup:
-            backup_path = str(p) + ".bak"
-            shutil.copy2(str(p), backup_path)
-
-    if create_dirs:
-        p.parent.mkdir(parents=True, exist_ok=True)
-
-    # Atomic write via temp file
-    import tempfile
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    size_bytes = 0
     try:
-        with os.fdopen(tmp_fd, "w", encoding=encoding) as f:
-            f.write(content)
-        os.replace(tmp_path, str(p))
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        raise
+        if p.exists() and p.is_file():
+            old_lines = _read_lines_safe(p)
+            lines_before = len(old_lines)
+            if backup:
+                backup_path = str(p) + ".bak"
+                shutil.copy2(str(p), backup_path)
+        if create_dirs:
+            p.parent.mkdir(parents=True, exist_ok=True)
 
-    size_bytes = p.stat().st_size
+        size_bytes = _atomic_write(str(p), content, encoding)
+    finally:
+        _release_lock(path)
+
     lines_after = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
 
     header = OutputRenderer.write_header(
@@ -994,6 +1274,19 @@ def write_file_rich(
         lines_before=lines_before,
         lines_after=lines_after,
         size_bytes=size_bytes,
+    )
+    parts = [header]
+    if backup_path:
+        parts.append(f"  Backup: {_rel_path(backup_path)}")
+    parts.append(f"  ✓ Write successful. Verify with: dart_diagnostics or read_file_rich path={path}")
+    block = "\n".join(parts)
+
+    _audit_log("write", str(p), size_bytes, _sha256_file(p))
+
+    return WriteResult(
+        path=str(p), action="WRITTEN",
+        lines_before=lines_before, lines_after=lines_after,
+        size_bytes=size_bytes, backup_path=backup_path, block=block,
     )
     parts = [header]
     if backup_path:
@@ -1051,7 +1344,9 @@ def patch_file_rich(
     patches: list[dict[str, Any]],
     encoding: str = "utf-8",
     backup: bool = True,
-) -> PatchResult:
+    workspace_dir: str = "",
+    expected_sha256: str = "",
+) -> PatchResult | dict[str, Any]:
     """
     Apply multiple search-and-replace patches to a file atomically.
 
@@ -1071,7 +1366,14 @@ def patch_file_rich(
         File encoding.
     backup : bool
         Save a .bak backup before modifying.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
+    expected_sha256 : str
+        If set, the existing file's SHA-256 must match (optimistic concurrency).
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
+
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -1152,14 +1454,40 @@ def patch_file_rich(
     ))
     diff_text = "".join(diff_lines[:200])  # cap diff at 200 lines
 
+    # Optimistic concurrency guard.
+    if expected_sha256 and p.is_file():
+        actual = _sha256_file(p)
+        if actual.lower() != expected_sha256.lower():
+            return {
+                "stdout": f"ERROR: File changed externally (SHA-256 mismatch): {path}",
+                "error": "File changed externally",
+                "path": str(p),
+                "exitCode": 1,
+                "success": False,
+            }
+
+    # Pre-write validation (disk / size cap / binary content).
+    err = _pre_write_checks(path, content)
+    if err is not None:
+        return err
+
     # Create the backup only for a successful commit, then write atomically.
-    if backup:
-        backup_path = str(p) + ".bak"
-        shutil.copy2(str(p), backup_path)
-    write_file_rich(path, content, encoding, backup=False)
+    backup_path = ""
+    lock_err = _acquire_lock(path)
+    if lock_err is not None:
+        return lock_err
+    try:
+        if backup:
+            backup_path = str(p) + ".bak"
+            shutil.copy2(str(p), backup_path)
+        size_bytes = _atomic_write(str(p), content, encoding)
+    finally:
+        _release_lock(path)
 
     size_bytes = p.stat().st_size
     lines_after = content.count("\n") + 1
+
+    _audit_log("patch", str(p), size_bytes, _sha256_file(p))
 
     # ── Build AI block ──
     header = OutputRenderer.write_header(
@@ -1204,12 +1532,15 @@ def replace_lines_rich(
     new_content: str,
     encoding: str = "utf-8",
     backup: bool = True,
-) -> PatchResult:
+    workspace_dir: str = "",
+) -> PatchResult | dict[str, Any]:
     """
     Replace a specific line range with new content.
 
     Preserves all lines outside the range. Returns a diff.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -1238,6 +1569,7 @@ def replace_lines_rich(
         patches=[{"search": patch.search, "replace": patch.replace, "label": patch.label}],
         encoding=encoding,
         backup=backup,
+        workspace_dir=workspace_dir,
     )
 
 
@@ -1246,12 +1578,15 @@ def insert_lines_rich(
     after_line: int,
     content: str,
     encoding: str = "utf-8",
-) -> WriteResult:
+    workspace_dir: str = "",
+) -> WriteResult | dict[str, Any]:
     """
     Insert lines after a specific line number.
 
     after_line=0 inserts at the beginning of the file.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -1263,7 +1598,7 @@ def insert_lines_rich(
 
     insert_idx = max(0, min(after_line, len(lines)))
     result = lines[:insert_idx] + new_lines + lines[insert_idx:]
-    return write_file_rich(path, "".join(result), encoding, backup=True)
+    return write_file_rich(path, "".join(result), encoding, backup=True, workspace_dir=workspace_dir)
 
 
 def delete_lines_rich(
@@ -1271,8 +1606,11 @@ def delete_lines_rich(
     start_line: int,
     end_line: int,
     encoding: str = "utf-8",
-) -> WriteResult:
+    workspace_dir: str = "",
+) -> WriteResult | dict[str, Any]:
     """Delete a range of lines from a file."""
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -1281,7 +1619,7 @@ def delete_lines_rich(
     start_idx = max(0, start_line - 1)
     end_idx = min(len(lines), end_line)
     result = lines[:start_idx] + lines[end_idx:]
-    return write_file_rich(path, "".join(result), encoding, backup=True)
+    return write_file_rich(path, "".join(result), encoding, backup=True, workspace_dir=workspace_dir)
 
 
 # ── File outline (structure extraction) ───────────────────────────────
@@ -1430,6 +1768,8 @@ async def search_files_rich(
     case_sensitive: bool = False,
     max_matches: int = 80,
     context_lines: int = 2,
+    exclude: list[str] | None = None,
+    workspace_dir: str = "",
 ) -> SearchResult:
     """
     Search for text in files using ripgrep (if available) or grep.
@@ -1454,13 +1794,26 @@ async def search_files_rich(
         Maximum number of matches to return.
     context_lines : int
         Lines of context around each match.
+    exclude : list of str, optional
+        Subdirectory names to skip (e.g., ["build", ".dart_tool"]).
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(path, workspace_dir):
+        return SearchResult(
+            query=query,
+            path=path,
+            matches=[],
+            backend="blocked",
+            block=_unsafe_error(path)["stdout"],
+        )
+    skip_dirs = set(exclude) | EXTRA_SKIP_DIRS
     # Try ripgrep first (much faster), fallback to grep
     rg = shutil.which("rg")
     backend = "ripgrep" if rg else "grep"
 
     if rg:
-        cmd_parts = [rg, "--line-number", "--no-heading", "--color=never"]
+        cmd_parts = [rg, "--line-number", "--no-heading", "--color=never", "--ig"]
         if not case_sensitive:
             cmd_parts.append("--ignore-case")
         if context_lines > 0:
@@ -1468,6 +1821,8 @@ async def search_files_rich(
         if extensions:
             for ext in extensions:
                 cmd_parts.extend(["--glob", f"*.{ext.lstrip('.')}"])
+        for d in skip_dirs:
+            cmd_parts.extend(["--glob", f"!{d}/**"])
         cmd_parts.extend(["--max-count", "1"])  # 1 match per file for context
         cmd_parts.extend([f"--max-filesize=2M", query, path])
         command = " ".join(shlex.quote(str(p)) for p in cmd_parts)
@@ -1479,6 +1834,9 @@ async def search_files_rich(
         if extensions:
             for ext in extensions:
                 cmd_parts.append(f"--include=*.{ext.lstrip('.')}")
+        cmd_parts.append(f"--exclude-dir=.*")
+        for d in skip_dirs:
+            cmd_parts.append(f"--exclude-dir={d}")
         cmd_parts.extend([query, path])
         command = " ".join(shlex.quote(str(p)) for p in cmd_parts)
 
@@ -1581,6 +1939,7 @@ def tree_rich(
     max_depth: int = 4,
     show_hidden: bool = False,
     extensions: list[str] | None = None,
+    workspace_dir: str = "",
 ) -> dict[str, Any]:
     """
     Generate an annotated directory tree.
@@ -1597,8 +1956,12 @@ def tree_rich(
     show_hidden : bool
         Whether to show dotfiles.
     extensions : list of str, optional
-        If set, only show files with these extensions.
+         If set, only show files with these extensions.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.is_dir():
         raise NotADirectoryError(f"Not a directory: {path}")
@@ -1621,6 +1984,7 @@ def tree_rich(
             e for e in entries
             if (show_hidden or not e.name.startswith("."))
             and e.name not in SKIP_DIRS
+            and e.name != ".nexon"
         ]
 
         for i, entry in enumerate(visible):
@@ -1675,6 +2039,7 @@ def append_file_rich(
     content: str,
     encoding: str = "utf-8",
     create_if_missing: bool = True,
+    workspace_dir: str = "",
 ) -> dict[str, Any]:
     """
     Append content to a file, optionally creating it if missing.
@@ -1689,7 +2054,11 @@ def append_file_rich(
         File encoding (default utf-8).
     create_if_missing : bool
         If True and the file doesn't exist, create it (and parent dirs).
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser()
     existed = p.exists()
 
@@ -1709,10 +2078,14 @@ def append_file_rich(
 
     with open(str(p), "a", encoding=encoding) as f:
         f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
 
     new_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
     total_lines = lines_before + new_lines
     size_after = p.stat().st_size
+
+    _audit_log("append", str(p), size_after, _sha256_file(p))
 
     action = "APPENDED" if existed else "CREATED+APPENDED"
     header = OutputRenderer.tool_header(
@@ -1738,18 +2111,32 @@ def append_file_rich(
 def delete_path_rich(
     path: str,
     recursive: bool = False,
+    workspace_dir: str = "",
+    permanent: bool = False,
 ) -> dict[str, Any]:
     """
-    Delete a file or directory with safety guards.
+    Soft-delete a file or directory into `.nexon/trash/` with safety guards.
+
+    By default the item is moved to the workspace trash (recoverable via
+    restore_trash) instead of being destroyed irreversibly. Pass
+    `permanent=True` to bypass the trash and unlink immediately — this still
+    respects the workspace jail and the protected-roots guard but skips the
+    trash folder.
 
     Parameters
     ----------
     path : str
         Target path to delete.
     recursive : bool
-        If True, allow deleting non-empty directories.
-        If False and path is a non-empty directory, fail safely.
+        If True, allow removing non-empty directories.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
+    permanent : bool
+        If True, unlink the file instead of trashing it.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
+
     p = Path(path).expanduser().resolve()
 
     # Hard-block: never delete system-critical paths
@@ -1776,41 +2163,87 @@ def delete_path_rich(
         }
 
     was_dir = p.is_dir()
-    deleted_count = 0
 
-    if p.is_file() or p.is_symlink():
-        size = p.stat().st_size if p.is_file() else 0
-        p.unlink()
-        deleted_count = 1
-        detail = f"  Deleted file: {_rel_path(str(p))}  ({_human_size(size)})"
-    elif p.is_dir():
-        if not recursive:
-            # Check if empty
-            children = list(p.iterdir())
-            if children:
+    # Permanent deletion (still jail-checked above).
+    if permanent:
+        lock_err = _acquire_lock(path)
+        if lock_err is not None:
+            return lock_err
+        try:
+            if p.is_file() or p.is_symlink():
+                size = p.stat().st_size if p.is_file() else 0
+                p.unlink()
+                deleted_count = 1
+                detail = f"  Permanently deleted: {_rel_path(str(p))}  ({_human_size(size)})"
+                size_bytes = size
+            elif p.is_dir():
+                if not recursive:
+                    children = list(p.iterdir())
+                    if children:
+                        return {
+                            "stdout": f"ERROR: Directory is not empty ({len(children)} items). Use recursive=true to force.\n  Path: {path}",
+                            "exitCode": 1,
+                            "success": False,
+                            "error": f"Non-empty directory ({len(children)} items). Set recursive=true.",
+                        }
+                count = 0
+                for root, dirs, files in os.walk(str(p), topdown=False):
+                    count += len(files) + len(dirs)
+                shutil.rmtree(str(p))
+                count += 1
+                deleted_count = count
+                size_bytes = 0
+                detail = f"  Permanently removed: {_rel_path(str(p))}\n  Items removed: {count}"
+            else:
+                _release_lock(path)
                 return {
-                    "stdout": f"ERROR: Directory is not empty ({len(children)} items). Use recursive=true to force.\n  Path: {path}",
+                    "stdout": f"ERROR: Cannot delete special file type: {path}",
                     "exitCode": 1,
                     "success": False,
-                    "error": f"Non-empty directory ({len(children)} items). Set recursive=true.",
+                    "error": f"Unsupported file type: {path}",
                 }
-            p.rmdir()
-            deleted_count = 1
-            detail = f"  Deleted empty directory: {_rel_path(str(p))}"
-        else:
-            # Count items before deletion
-            for root, dirs, files in os.walk(str(p)):
-                deleted_count += len(files)
-                deleted_count += len(dirs)
-            deleted_count += 1  # the root dir itself
-            shutil.rmtree(str(p))
-            detail = f"  Recursively deleted: {_rel_path(str(p))}\n  Items removed: {deleted_count}"
+        finally:
+            _release_lock(path)
+        _audit_log("delete", str(p), size_bytes, "")
     else:
+        # Soft delete: move into the workspace trash.
+        trash_root = _ensure_trash()
+        trash_name = _trash_name(str(p))
+        # Avoid name collisions inside trash.
+        dest = os.path.join(trash_root, trash_name)
+        base = dest
+        i = 1
+        while os.path.exists(dest):
+            dest = f"{base}.{i}"
+            i += 1
+        try:
+            if p.is_dir() and not recursive and any(p.iterdir()):
+                return {
+                    "stdout": f"ERROR: Directory is not empty ({len(list(p.iterdir()))} items). Use recursive=true to force.\n  Path: {path}",
+                    "exitCode": 1,
+                    "success": False,
+                    "error": f"Non-empty directory. Set recursive=true.",
+                }
+            shutil.move(str(p), dest)
+        except shutil.Error as exc:
+            return {
+                "stdout": f"ERROR: Could not trash {path}: {exc}",
+                "exitCode": 1,
+                "success": False,
+                "error": str(exc),
+            }
+        deleted_count = 1
+        detail = f"  Moved to trash: {_rel_path(str(p))}  →  {_rel_path(dest)}"
+        _audit_log("delete(trash)", str(p), 0, "")
+        # Return both the resolved path and the trash destination.
         return {
-            "stdout": f"ERROR: Cannot delete special file type: {path}",
-            "exitCode": 1,
-            "success": False,
-            "error": f"Unsupported file type: {path}",
+            "stdout": f"{OutputRenderer.tool_header('TRASH', f'{('directory' if was_dir else 'file')}  │  moved')}\n{OutputRenderer._divider()}\n{detail}\n{OutputRenderer._divider()}",
+            "path": str(p),
+            "trashPath": dest,
+            "wasDir": was_dir,
+            "deletedCount": deleted_count,
+            "exitCode": 0,
+            "success": True,
         }
 
     kind = "directory" if was_dir else "file"
@@ -1830,10 +2263,109 @@ def delete_path_rich(
     }
 
 
+def list_trash_rich(workspace_dir: str = "") -> dict[str, Any]:
+    """Return the contents of the workspace trash folder."""
+    base = os.path.realpath(
+        os.path.expanduser(workspace_dir) or _workspace()
+    )
+    trash = os.path.join(base, ".nexon", "trash")
+    if not os.path.isdir(trash):
+        return {
+            "stdout": "Trash is empty.",
+            "path": trash,
+            "items": [],
+            "count": 0,
+            "exitCode": 0,
+            "success": True,
+        }
+    items = []
+    for name in sorted(os.listdir(trash)):
+        full = os.path.join(trash, name)
+        try:
+            st = os.stat(full)
+            items.append({
+                "name": name,
+                "path": full,
+                "sizeBytes": st.st_size,
+                "mtime": st.st_mtime,
+                "kind": "directory" if os.path.isdir(full) else "file",
+            })
+        except OSError:
+            continue
+    header = OutputRenderer.tool_header("TRASH", f"{len(items)} item(s)")
+    body_lines = [
+        f"  {i['kind'][:5]:>5}  {i['name']}  ({_human_size(i['sizeBytes'])})"
+        for i in items
+    ]
+    block = f"{header}\n{OutputRenderer._divider()}\n  {_rel_path(trash)}\n" + "\n".join(body_lines) + f"\n{OutputRenderer._divider()}"
+    return {
+        "stdout": block,
+        "path": trash,
+        "items": items,
+        "count": len(items),
+        "exitCode": 0,
+        "success": True,
+    }
+
+
+def restore_trash_rich(
+    name: str,
+    workspace_dir: str = "",
+    dest: str = "",
+) -> dict[str, Any]:
+    """
+    Restore an item from the workspace trash.
+
+    `name` is the trash entry name (e.g. the timestamped name shown by
+    list_trash). `dest`, if provided, overrides the restore location.
+    """
+    base = os.path.realpath(
+        os.path.expanduser(workspace_dir) or _workspace()
+    )
+    trash = os.path.join(base, ".nexon", "trash")
+    src = os.path.join(trash, name)
+    if not os.path.exists(src):
+        return {
+            "stdout": f"ERROR: Trash entry not found: {name}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Trash entry not found: {name}",
+        }
+    if not dest:
+        # Restore to its original name at the workspace root.
+        original_name = name.split("_", 3)[-1] if name.count("_") >= 3 else name
+        dest = os.path.join(base, original_name)
+    else:
+        dest = os.path.expanduser(dest)
+    dest = os.path.realpath(dest)
+    # Do not allow restoring outside the jail.
+    if not _is_safe(dest, workspace_dir):
+        return _unsafe_error(dest)
+    if os.path.exists(dest):
+        return {
+            "stdout": f"ERROR: Destination already exists: {dest}",
+            "exitCode": 1,
+            "success": False,
+            "error": f"Destination exists: {dest}",
+        }
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    shutil.move(src, dest)
+    _audit_log("restore", dest, 0, "")
+    block = f"{OutputRenderer.tool_header('RESTORE', _rel_path(dest))}\n{OutputRenderer._divider()}\n  Restored {name} → {_rel_path(dest)}\n{OutputRenderer._divider()}"
+    return {
+        "stdout": block,
+        "path": dest,
+        "trashName": name,
+        "exitCode": 0,
+        "success": True,
+    }
+
+
 def move_path_rich(
     src: str,
     dest: str,
     overwrite: bool = False,
+    workspace_dir: str = "",
 ) -> dict[str, Any]:
     """
     Move (rename) a file or directory.
@@ -1846,7 +2378,11 @@ def move_path_rich(
         Destination path.
     overwrite : bool
         If True, overwrite the destination if it exists.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(src, workspace_dir) or not _is_safe(dest, workspace_dir):
+        return _unsafe_error(src if not _is_safe(src, workspace_dir) else dest)
     ps = Path(src).expanduser().resolve()
     pd = Path(dest).expanduser()
 
@@ -1886,6 +2422,8 @@ def move_path_rich(
     body = f"  From: {ps}\n  To:   {resolved_dest}"
     block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
 
+    _audit_log("move", str(ps), 0, "")
+
     return {
         "stdout": block,
         "src": str(ps),
@@ -1900,6 +2438,7 @@ def copy_path_rich(
     src: str,
     dest: str,
     overwrite: bool = False,
+    workspace_dir: str = "",
 ) -> dict[str, Any]:
     """
     Copy a file or directory (recursively for directories).
@@ -1912,7 +2451,11 @@ def copy_path_rich(
         Destination path.
     overwrite : bool
         If True, overwrite the destination if it exists.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(src, workspace_dir) or not _is_safe(dest, workspace_dir):
+        return _unsafe_error(src if not _is_safe(src, workspace_dir) else dest)
     ps = Path(src).expanduser().resolve()
     pd = Path(dest).expanduser()
 
@@ -1953,6 +2496,8 @@ def copy_path_rich(
     body = f"  From: {ps}\n  To:   {resolved_dest}"
     block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
 
+    _audit_log("copy", str(ps), size, "")
+
     return {
         "stdout": block,
         "src": str(ps),
@@ -1967,6 +2512,7 @@ def copy_path_rich(
 def mkdir_path_rich(
     path: str,
     parents: bool = True,
+    workspace_dir: str = "",
 ) -> dict[str, Any]:
     """
     Create a directory (and parents if requested).
@@ -1977,7 +2523,11 @@ def mkdir_path_rich(
         Directory path to create.
     parents : bool
         If True, create parent directories as needed (like mkdir -p).
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser()
 
     if p.exists():
@@ -2014,6 +2564,8 @@ def mkdir_path_rich(
     )
     block = f"{header}\n{OutputRenderer._divider()}\n  Created: {resolved}\n{OutputRenderer._divider()}"
 
+    _audit_log("mkdir", str(resolved), 0, "")
+
     return {
         "stdout": block,
         "path": str(resolved),
@@ -2023,7 +2575,10 @@ def mkdir_path_rich(
     }
 
 
-def stat_path_rich(path: str) -> dict[str, Any]:
+def stat_path_rich(
+    path: str,
+    workspace_dir: str = "",
+) -> dict[str, Any]:
     """
     Return detailed metadata for a file or directory.
 
@@ -2033,6 +2588,8 @@ def stat_path_rich(path: str) -> dict[str, Any]:
         Target path.
     """
     import datetime
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser().resolve()
 
     if not p.exists():
@@ -2059,6 +2616,18 @@ def stat_path_rich(path: str) -> dict[str, Any]:
     permissions = stat.filemode(s.st_mode)
     lang = LANG_MAP.get(p.suffix.lower(), "") if p.is_file() else ""
 
+    # Enhanced metadata: binary detection, line count, sha256 (files only).
+    is_binary = _is_binary_file(p) if p.is_file() else False
+    line_count = 0
+    sha = ""
+    if p.is_file() and not is_binary:
+        try:
+            with open(str(p), "r", encoding="utf-8", errors="replace") as f:
+                line_count = sum(1 for _ in f)
+        except OSError:
+            line_count = 0
+        sha = _sha256_file(p)
+
     mtime_str = datetime.datetime.fromtimestamp(s.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
     atime_str = datetime.datetime.fromtimestamp(s.st_atime).strftime("%Y-%m-%d %H:%M:%S")
     ctime_str = datetime.datetime.fromtimestamp(s.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
@@ -2082,6 +2651,11 @@ def stat_path_rich(path: str) -> dict[str, Any]:
     ]
     if lang:
         lines.append(f"  Language:    {lang}")
+    if p.is_file():
+        lines.append(f"  Binary:      {is_binary}")
+        lines.append(f"  Line count:  {line_count:,}")
+        if sha:
+            lines.append(f"  SHA-256:     {sha[:16]}…")
     if is_symlink:
         lines.append(f"  Link target: {link_target}")
 
@@ -2098,10 +2672,15 @@ def stat_path_rich(path: str) -> dict[str, Any]:
         "uid": s.st_uid,
         "gid": s.st_gid,
         "mtime": s.st_mtime,
+        "mtimeIso": mtime_str,
         "atime": s.st_atime,
+        "ctime": s.st_ctime,
         "isSymlink": is_symlink,
         "linkTarget": link_target,
         "language": lang,
+        "isBinary": is_binary,
+        "lineCount": line_count,
+        "sha256": sha,
         "exitCode": 0,
         "success": True,
     }
@@ -2111,6 +2690,7 @@ def chmod_path_rich(
     path: str,
     mode: str,
     recursive: bool = False,
+    workspace_dir: str = "",
 ) -> dict[str, Any]:
     """
     Change file/directory permissions.
@@ -2123,7 +2703,11 @@ def chmod_path_rich(
         Octal mode string (e.g., '755', '644').
     recursive : bool
         If True and path is a directory, apply chmod recursively.
+    workspace_dir : str
+        Jail root. Empty uses the configured workspace.
     """
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
     p = Path(path).expanduser().resolve()
 
     if not p.exists():
@@ -2176,6 +2760,8 @@ def chmod_path_rich(
     )
     body = f"  Path: {p}\n  Old: {old_mode}\n  New: {new_mode} ({mode})\n  Items changed: {changed_count}"
     block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+
+    _audit_log("chmod", str(p), 0, "")
 
     return {
         "stdout": block,
