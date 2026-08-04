@@ -24,7 +24,7 @@ class LiveVoiceOverlay extends StatefulWidget {
 }
 
 class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   bool _showCaptions = true;
   late final Timer _orbTimer;
   bool _pulseUp = false;
@@ -34,6 +34,7 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.engine.addListener(_onEngineChange);
     _thinkingCtrl = AnimationController(
       vsync: this,
@@ -120,7 +121,13 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
       ),
     );
 
-    if (shouldRequest != true || !mounted) return;
+    if (shouldRequest != true) {
+      if (mounted) {
+        widget.engine.setError('Microphone permission was not granted.');
+      }
+      return;
+    }
+    if (!mounted) return;
 
     // requestMicPermission() fires the real Android RECORD_AUDIO OS dialog.
     final granted = await widget.engine.requestMicPermission();
@@ -131,6 +138,8 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
       final newStatus = await widget.engine.micPermissionStatus();
       if (newStatus.isPermanentlyDenied && mounted) {
         _showPermanentlyDeniedDialog();
+      } else {
+        widget.engine.setError('Microphone permission was not granted.');
       }
     }
   }
@@ -190,6 +199,7 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _orbTimer.cancel();
     _thinkingCtrl.dispose();
     widget.engine.removeListener(_onEngineChange);
@@ -197,7 +207,17 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
   }
 
   void _onEngineChange() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  /// Intercept the Android back button while the overlay is visible so the
+  /// engine is interrupted and no background audio keeps playing.
+  @override
+  Future<bool> didPopRoute() {
+    if (!mounted) return Future.value(true);
+    widget.onClose();
+    return Future.value(true);
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────

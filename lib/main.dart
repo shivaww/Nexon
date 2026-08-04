@@ -790,15 +790,21 @@ class _ChatHomePageState extends State<ChatHomePage> {
       barrierLabel: 'Live Voice Mode',
       transitionDuration: const Duration(milliseconds: 300),
       pageBuilder: (context, anim1, anim2) {
-        return LiveVoiceOverlay(
-          engine: _liveVoiceEngine,
-          onSendPrompt: (prompt) {
-            _sendMessage(promptText: prompt);
+        return PopScope(
+          canPop: true,
+          onPopInvoked: (didPop) {
+            if (didPop) _liveVoiceEngine.interrupt();
           },
-          onClose: () {
-            _liveVoiceEngine.interrupt();
-            Navigator.of(context).pop();
-          },
+          child: LiveVoiceOverlay(
+            engine: _liveVoiceEngine,
+            onSendPrompt: (prompt) {
+              _sendMessage(promptText: prompt);
+            },
+            onClose: () {
+              _liveVoiceEngine.interrupt();
+              Navigator.of(context).pop();
+            },
+          ),
         );
       },
     );
@@ -2246,7 +2252,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 fullText += textChunk;
                 if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
                     _liveVoiceEngine.state == LiveVoiceState.speaking) {
-                  _liveVoiceEngine.feedStreamToken(textChunk);
+                  // Skip tool-call / SSML tag chunks so they are not spoken
+                  // (e.g. <tool_request>, <dialect>, </reasoning>). Pure
+                  // speech chunks are stripped of SSML at enqueue time.
+                  if (!textChunk.contains('<')) {
+                    _liveVoiceEngine.feedStreamToken(textChunk);
+                  }
                 }
               }
             }
