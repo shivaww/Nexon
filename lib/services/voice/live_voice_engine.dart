@@ -277,22 +277,28 @@ class LiveVoiceEngine extends ChangeNotifier {
     notifyListeners();
     try {
       await _disposeNativeTts(); // don't keep both loaded
+      await _disposeKittenTts(); // Free old model before loading a new one
       final kitten = KittenTTS();
-      await kitten.initialize(
-        onProgress: (double progress, String status) {
-          _ttsDownloadProgress = progress.clamp(0.0, 1.0);
-          _ttsStatus = status;
-          notifyListeners();
-        },
-      );
-      _kittenTts = kitten;
-      _kittenReady = true;
-      _activeTtsEngine = 'KittenTTS';
-      debugPrint('LiveVoice active TTS engine: KittenTTS');
-      return true;
+      try {
+        await kitten.initialize(
+          onProgress: (double progress, String status) {
+            _ttsDownloadProgress = progress.clamp(0.0, 1.0);
+            _ttsStatus = status;
+            notifyListeners();
+          },
+        );
+        _kittenTts = kitten;
+        _kittenReady = true;
+        _activeTtsEngine = 'KittenTTS';
+        debugPrint('LiveVoice active TTS engine: KittenTTS');
+        return true;
+      } catch (e) {
+        await kitten.dispose(); // Cleanup failed instance to prevent memory leak
+        debugPrint('LiveVoice KittenTTS failed; using flutter_tts fallback: $e');
+        return false;
+      }
     } catch (e) {
-      await _disposeKittenTts();
-      debugPrint('LiveVoice KittenTTS failed; using flutter_tts fallback: $e');
+      debugPrint('LiveVoice KittenTTS setup error: $e');
       return false;
     } finally {
       _isPreparingTts = false;
@@ -474,6 +480,7 @@ class LiveVoiceEngine extends ChangeNotifier {
     _isTtsSpeaking = false;
     await _audioPlayer?.stop();
     await _flutterTts?.stop();
+    await _disposeKittenTts(); // Free heavy KittenTTS memory when stopped
     if (_currentSentenceCompleter != null &&
         !_currentSentenceCompleter!.isCompleted) {
       _currentSentenceCompleter!.complete();
