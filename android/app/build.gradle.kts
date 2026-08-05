@@ -17,6 +17,8 @@ val flutterVersionName = localProperties.getProperty("flutter.versionName") ?: "
 android {
     namespace = "com.termuxforge.app"
     compileSdk = 36
+    // Keep native Flutter plugins on a single, current NDK revision.
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
