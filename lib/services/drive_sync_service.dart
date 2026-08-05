@@ -660,7 +660,7 @@ class DriveSyncService {
           if (jwtToken != null && jwtToken.isNotEmpty) 'Authorization': 'Bearer $jwtToken',
         },
         body: jsonEncode({'refresh_token': refreshToken}),
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final payload = jsonDecode(response.body) as Map<String, dynamic>;
@@ -756,13 +756,16 @@ class DriveSyncService {
           }
         }
         final failure = _DriveFailure.fromResponse(response.statusCode, body);
+        diagnostics?.add('⚠️ Direct Google OAuth refresh failed (${response.statusCode}): $body');
         if (failure.invalidGrant) {
           return const _RefreshResult(
             error: 'Google Drive authorization was revoked or expired. Please sign in again.',
             needsRelogin: true,
           );
         }
-      } catch (_) {}
+      } catch (e) {
+        diagnostics?.add('⚠️ Direct Google OAuth refresh request failed: $e');
+      }
     }
 
     return const _RefreshResult(
