@@ -75,10 +75,6 @@ dependencies:
   url_launcher: ^6.3.1
   flutter_tts: ^4.2.0
   just_audio: ^0.9.46
-  flutter_kitten_tts:
-    git:
-      url: https://github.com/ikeoffiah/kitten_tts_flutter.git
-      ref: main
   speech_to_text: ^7.0.0
   
   # Markdown

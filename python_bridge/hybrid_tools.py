@@ -61,6 +61,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
+from workspace import WorkspaceManager
+
+workspace_mgr = WorkspaceManager()
 
 logger = logging.getLogger("termux_forge.hybrid_tools")
 

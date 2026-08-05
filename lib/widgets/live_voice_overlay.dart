@@ -279,8 +279,6 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
                   _buildBottomControls(state),
                   const SizedBox(height: 12),
 
-                  // Voice picker (KittenTTS voices)
-                  _buildVoicePicker(),
                   const SizedBox(height: 24),
                 ],
               ),
@@ -687,47 +685,4 @@ class _LiveVoiceOverlayState extends State<LiveVoiceOverlay>
     );
   }
 
-  // ── Voice picker ──────────────────────────────────────────────────────────
-
-  Widget _buildVoicePicker() {
-    final voice = widget.engine.kittenVoice;
-    return LiquidGlassSurface(
-      margin: const EdgeInsets.symmetric(horizontal: 24),
-      borderRadius: BorderRadius.circular(16),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-      highlightColor: Colors.white.withValues(alpha: 0.55),
-      sigma: 10,
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: voice,
-          isExpanded: true,
-          icon: const Icon(Icons.keyboard_arrow_down_rounded),
-          items: widget.engine.kittenVoices
-              .map(
-                (v) => DropdownMenuItem(
-                  value: v,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.record_voice_over_rounded,
-                          size: 16, color: Color(0xFF9B6B43)),
-                      const SizedBox(width: 8),
-                      Text(
-                        'KittenTTS · $v',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Color(0xFF2D241C),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-              .toList(),
-          onChanged: (v) {
-            if (v != null) widget.engine.setKittenVoice(v);
-          },
-        ),
-      ),
-    );
-  }
 }

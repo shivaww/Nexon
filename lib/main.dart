@@ -12403,7 +12403,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Native TTS Fallback Voice',
+                'Voice',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,
@@ -12412,7 +12412,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               ),
               const SizedBox(height: 2),
               const Text(
-                'Used for read-aloud and Live Voice only if KittenTTS is unavailable. KittenTTS voices are selected inside Live Voice Mode.',
+                'The voice used for read-aloud and Live Voice.',
                 style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
               ),
               const SizedBox(height: 12),

@@ -1,12 +1,7 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_kitten_tts/flutter_kitten_tts.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:just_audio/just_audio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -14,33 +9,11 @@ import 'package:speech_to_text/speech_to_text.dart';
 enum LiveVoiceState { idle, listening, thinking, speaking, error }
 
 /// Hands-free speech recognition and reply playback.
-///
-/// KittenTTS is created only when it is first needed. If model setup or PCM
-/// playback fails, the engine releases it and uses native flutter_tts instead.
+/// Uses the device's native TTS engine (flutter_tts) for all voice output.
 class LiveVoiceEngine extends ChangeNotifier {
   final SpeechToText _speechToText = SpeechToText();
-  final List<String> kittenVoices = const [
-    'Bella',
-    'Jasper',
-    'Luna',
-    'Bruno',
-    'Rosie',
-    'Hugo',
-    'Kiki',
-    'Leo',
-  ];
-
   FlutterTts? _flutterTts;
-  KittenTTS? _kittenTts;
-  AudioPlayer? _audioPlayer;
   bool _speechInitialized = false;
-  bool _kittenReady = false;
-  bool _kittenAttempted = false;
-  bool _isPreparingTts = false;
-  double _ttsDownloadProgress = 0;
-  String _ttsStatus = '';
-  String _kittenVoice = 'Jasper';
-  String _activeTtsEngine = 'KittenTTS';
   bool _stopRequested = false;
   int _silentRestartCount = 0;
   ValueChanged<String>? _onFinalSpeechResult;
@@ -57,11 +30,6 @@ class LiveVoiceEngine extends ChangeNotifier {
   String get errorMessage => _errorMessage;
   double _soundLevel = 0;
   double get soundLevel => _soundLevel;
-  bool get isPreparingTts => _isPreparingTts;
-  double get ttsDownloadProgress => _ttsDownloadProgress;
-  String get ttsStatus => _ttsStatus;
-  String get activeTtsEngine => _activeTtsEngine;
-  String get kittenVoice => _kittenVoice;
 
   final List<String> _sentenceQueue = [];
   bool _isTtsSpeaking = false;
@@ -73,12 +41,6 @@ class LiveVoiceEngine extends ChangeNotifier {
       _state = newState;
       notifyListeners();
     }
-  }
-
-  void setKittenVoice(String voice) {
-    if (!kittenVoices.contains(voice) || voice == _kittenVoice) return;
-    _kittenVoice = voice;
-    notifyListeners();
   }
 
   // ── Permission ────────────────────────────────────────────────────────────
@@ -266,46 +228,7 @@ class LiveVoiceEngine extends ChangeNotifier {
     if (!_isTtsSpeaking) unawaited(_playNextSentence());
   }
 
-  // ── KittenTTS ─────────────────────────────────────────────────────────────
-
-  Future<bool> _ensureKittenTts() async {
-    if (_kittenReady) return true;
-    _kittenAttempted = true;
-    _isPreparingTts = true;
-    _ttsDownloadProgress = 0;
-    _ttsStatus = 'Preparing high-quality voice…';
-    notifyListeners();
-    try {
-      await _disposeNativeTts(); // don't keep both loaded
-      await _disposeKittenTts(); // Free old model before loading a new one
-      final kitten = KittenTTS();
-      try {
-        await kitten.initialize(
-          onProgress: (double progress, String status) {
-            _ttsDownloadProgress = progress.clamp(0.0, 1.0);
-            _ttsStatus = status;
-            notifyListeners();
-          },
-        );
-        _kittenTts = kitten;
-        _kittenReady = true;
-        _activeTtsEngine = 'KittenTTS';
-        debugPrint('LiveVoice active TTS engine: KittenTTS');
-        return true;
-      } catch (e) {
-        await kitten.dispose(); // Cleanup failed instance to prevent memory leak
-        debugPrint('LiveVoice KittenTTS failed; using flutter_tts fallback: $e');
-        return false;
-      }
-    } catch (e) {
-      debugPrint('LiveVoice KittenTTS setup error: $e');
-      return false;
-    } finally {
-      _isPreparingTts = false;
-      _ttsStatus = '';
-      notifyListeners();
-    }
-  }
+  // ── TTS ────────────────────────────────────────────────────────────────────
 
   Future<void> _playNextSentence() async {
     if (_stopRequested) {
@@ -323,30 +246,10 @@ class LiveVoiceEngine extends ChangeNotifier {
     sentence = sanitizeForNaturalTts(sentence);
     _currentSentenceCompleter = Completer<void>();
 
-    if (await _ensureKittenTts()) {
-      try {
-        final audio = await _kittenTts!.generate(
-          sentence,
-          voice: _kittenVoice,
-          speed: 1.0,
-        );
-        await _playKittenAudio(
-          audio,
-        ); // _finishSentence() invoked in its finally
-        return;
-      } catch (e) {
-        debugPrint('LiveVoice KittenTTS generation/playback failed: $e');
-        await _disposeKittenTts();
-        _finishSentence(); // idempotent; no-op if _playKittenAudio finally already finished
-        return;
-      }
-    }
-
-    // Fallback: native flutter_tts (reached only when KittenTTS is not ready).
     try {
       await _speakWithNative(sentence);
     } catch (e) {
-      debugPrint('LiveVoice native TTS fallback failed: $e');
+      debugPrint('LiveVoice TTS failed: $e');
       _errorMessage = 'Voice playback is unavailable.';
       _finishSentence();
       _setState(LiveVoiceState.error);
@@ -354,10 +257,7 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   Future<void> _speakWithNative(String sentence) async {
-    await _disposeKittenTts(); // don't keep both loaded simultaneously
     final tts = _flutterTts ??= FlutterTts();
-    _activeTtsEngine = 'Native TTS';
-    debugPrint('LiveVoice active TTS engine: Native TTS');
     tts.setCompletionHandler(_finishSentence);
     tts.setCancelHandler(_finishSentence);
     tts.setErrorHandler((message) => _finishSentence());
@@ -367,104 +267,19 @@ class LiveVoiceEngine extends ChangeNotifier {
     await tts.speak(sentence);
   }
 
-  Future<void> _playKittenAudio(Float32List samples) async {
-    if (samples.isEmpty)
-      throw StateError('KittenTTS returned no audio samples');
-    final dir = await getTemporaryDirectory();
-    final file = File(
-      '${dir.path}/kitten_${DateTime.now().millisecondsSinceEpoch}_${_sentenceQueue.length}.wav',
-    );
-    await file.writeAsBytes(_wavBytes(samples, sampleRate: 24000), flush: true);
-    final player = _audioPlayer ??= AudioPlayer();
-    try {
-      await player.stop();
-      await player.setFilePath(file.path);
-      final completed = player.playerStateStream
-          .firstWhere(
-            (state) => state.processingState == ProcessingState.completed,
-          )
-          .timeout(const Duration(seconds: 20));
-      await player.play();
-      await completed;
-    } catch (e) {
-      debugPrint('LiveVoice KittenTTS playback error: $e');
-      rethrow;
-    } finally {
-      try {
-        await file.delete();
-      } catch (_) {
-        // File already removed or inaccessible; safe to ignore.
-      }
-      _finishSentence();
-    }
-  }
-
-  Uint8List _wavBytes(Float32List samples, {required int sampleRate}) {
-    const channels = 1;
-    const bitsPerSample = 16;
-    final byteRate = sampleRate * channels * bitsPerSample ~/ 8;
-    const blockAlign = channels * bitsPerSample ~/ 8;
-    final dataSize = samples.length * 2;
-    final bytes = ByteData(44 + dataSize);
-    void ascii(int offset, String value) {
-      for (var i = 0; i < value.length; i++) {
-        bytes.setUint8(offset + i, value.codeUnitAt(i));
-      }
-    }
-
-    ascii(0, 'RIFF');
-    bytes.setUint32(4, 36 + dataSize, Endian.little);
-    ascii(8, 'WAVE');
-    ascii(12, 'fmt ');
-    bytes.setUint32(16, 16, Endian.little);
-    bytes.setUint16(
-      20,
-      1,
-      Endian.little,
-    ); // 1 = linear PCM (was 3 = IEEE float)
-    bytes.setUint16(22, channels, Endian.little);
-    bytes.setUint32(24, sampleRate, Endian.little);
-    bytes.setUint32(28, byteRate, Endian.little);
-    bytes.setUint16(32, blockAlign, Endian.little);
-    bytes.setUint16(34, bitsPerSample, Endian.little);
-    ascii(36, 'data');
-    bytes.setUint32(40, dataSize, Endian.little);
-    for (var i = 0; i < samples.length; i++) {
-      final sample = samples[i].clamp(-1.0, 1.0);
-      bytes.setInt16(44 + i * 2, (sample * 32767).toInt(), Endian.little);
-    }
-    return bytes.buffer.asUint8List();
-  }
-
   void _finishSentence() {
     _isTtsSpeaking = false;
     final completer = _currentSentenceCompleter;
-    // Only complete + advance once per sentence so a double finish (e.g. the
-    // KittenTTS playback finally *and* the caller catch both firing) never
+    // Only complete + advance once per sentence so a double finish never
     // schedules the next sentence twice.
     if (completer == null || completer.isCompleted) return;
     completer.complete();
     unawaited(_playNextSentence());
   }
 
-  Future<void> _disposeNativeTts() async {
-    final tts = _flutterTts;
-    _flutterTts = null;
-    if (tts != null) await tts.stop();
-  }
-
-  Future<void> _disposeKittenTts() async {
-    final kitten = _kittenTts;
-    _kittenTts = null;
-    _kittenReady = false;
-    if (kitten != null) await kitten.dispose();
-  }
-
   Future<void> interrupt() async {
     _stopRequested = true;
     _onFinalSpeechResult = null;
-    _kittenAttempted = false;
-    _kittenReady = false;
     _sentenceQueue.clear();
     await stopTts();
     await _speechToText.stop();
@@ -473,14 +288,10 @@ class LiveVoiceEngine extends ChangeNotifier {
 
   Future<void> stopTts() async {
     _stopRequested = true;
-    _kittenAttempted = false;
-    _kittenReady = false;
     _sentenceQueue.clear();
     _streamBuffer.clear();
     _isTtsSpeaking = false;
-    await _audioPlayer?.stop();
     await _flutterTts?.stop();
-    await _disposeKittenTts(); // Free heavy KittenTTS memory when stopped
     if (_currentSentenceCompleter != null &&
         !_currentSentenceCompleter!.isCompleted) {
       _currentSentenceCompleter!.complete();
@@ -496,8 +307,6 @@ class LiveVoiceEngine extends ChangeNotifier {
   void dispose() {
     _speechToText.cancel();
     _flutterTts?.stop();
-    _kittenTts?.dispose();
-    _audioPlayer?.dispose();
     super.dispose();
   }
 }
