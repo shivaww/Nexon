@@ -303,6 +303,11 @@ class LiveVoiceEngine extends ChangeNotifier {
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
 
+  // ── TTS model-download stubs (native flutter_tts has no download step) ───
+  bool get isPreparingTts => false;
+  double get ttsDownloadProgress => 0.0;
+  String get ttsStatus => '';
+
   @override
   void dispose() {
     _speechToText.cancel();
