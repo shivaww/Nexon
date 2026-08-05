@@ -85,3 +85,6 @@ backend/
 
 # llama.cpp server logs
 llama_server_*.log
+
+# patch tool backups
+.mpt_backups/

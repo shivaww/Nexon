@@ -16,7 +16,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:nexon/widgets/scrollable_table_builder.dart';
 
 import 'package:nexon/core/theme/app_colors.dart';
 import 'package:nexon/presentation/widgets/forge_app_bar.dart';
@@ -1068,9 +1067,6 @@ class _MessageBubble extends StatelessWidget {
       data: message.content,
       selectable: true,
       extensionSet: md.ExtensionSet.gitHubFlavored,
-      builders: {
-        'table': ScrollableTableBuilder(),
-      },
       styleSheet: MarkdownStyleSheet.fromTheme(
         Theme.of(context),
       ).copyWith(
@@ -1113,6 +1109,20 @@ class _MessageBubble extends StatelessWidget {
         listBullet: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: AppColors.textSecondary,
             ),
+        tableColumnWidth: const IntrinsicColumnWidth(),
+        tableHeadAlign: TextAlign.left,
+        tableBorder: TableBorder.all(color: AppColors.borderSubtle, width: 1),
+        tableHead: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+        tableBody: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.textPrimary,
+            ),
+        tableCellsPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 8,
+        ),
       ),
     );
   }

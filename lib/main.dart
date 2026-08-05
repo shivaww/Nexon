@@ -9,7 +9,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_markdown_latex/flutter_markdown_latex.dart';
 import 'package:markdown/markdown.dart' as md;
-import 'package:nexon/widgets/scrollable_table_builder.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/widgets/diff_viewer_widget.dart';
@@ -10109,7 +10108,6 @@ class MessageBubble extends StatelessWidget {
               ),
               textScaleFactor: 1.15,
             ),
-            'table': ScrollableTableBuilder(),
           },
           extensionSet: md.ExtensionSet(
             [
@@ -10156,6 +10154,12 @@ class MessageBubble extends StatelessWidget {
               color: Color(0xFF2D241C),
               fontWeight: FontWeight.bold,
               fontSize: 14,
+            ),
+            tableColumnWidth: const IntrinsicColumnWidth(),
+            tableHeadAlign: TextAlign.left,
+            tableCellsPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 8,
             ),
           ),
         ),
@@ -17897,9 +17901,10 @@ class _FullScreenDocxViewerState extends State<FullScreenDocxViewer> {
                     data: widget.docxContent,
                     selectable: true,
                     extensionSet: md.ExtensionSet.gitHubFlavored,
-                    builders: {'table': ScrollableTableBuilder()},
                     styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                         .copyWith(
+                          tableColumnWidth: const IntrinsicColumnWidth(),
+                          tableHeadAlign: TextAlign.left,
                           h1: const TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.w900,
@@ -18208,7 +18213,15 @@ class _FullScreenMdViewerState extends State<FullScreenMdViewer> {
                     data: widget.mdContent,
                     selectable: true,
                     extensionSet: md.ExtensionSet.gitHubFlavored,
-                    builders: {'table': ScrollableTableBuilder()},
+                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                        .copyWith(
+                          tableColumnWidth: const IntrinsicColumnWidth(),
+                          tableHeadAlign: TextAlign.left,
+                          tableBorder: TableBorder.all(
+                            color: const Color(0xFFE7D8C4),
+                            width: 1,
+                          ),
+                        ),
                   ),
                 ),
               ),
