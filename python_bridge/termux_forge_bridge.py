@@ -77,6 +77,7 @@ from hybrid_tools import (
     tree_rich,
     diff_files_rich,
     OutputRenderer,
+    tool_result_dict,
     append_file_rich,
     delete_path_rich,
     move_path_rich,
@@ -1453,8 +1454,9 @@ class TermuxForgeBridge:
                 max_lines=max_lines,
                 encoding=encoding,
                 show_line_numbers=show_line_numbers,
+                workspace_dir=workspace_dir,
             )
-            return result.to_dict()
+            return tool_result_dict(result)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
@@ -1521,7 +1523,7 @@ class TermuxForgeBridge:
             if p and not self.security.validate_path(p):
                 raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {p}")
         try:
-            result = multi_read_rich(reads, max_lines_per_file)
+            result = multi_read_rich(reads, max_lines_per_file, workspace_dir)
             return result.to_dict()
         except Exception as exc:
             raise JsonRpcError(ErrorCode.INTERNAL_ERROR, str(exc))
@@ -1578,8 +1580,8 @@ class TermuxForgeBridge:
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime, expected_exists)
             checkpoint = await self._auto_checkpoint("write_file", [path], workspace_dir) if auto_checkpoint else None
-            result = write_file_rich(path, content, encoding, create_dirs, backup)
-            return self._with_checkpoint(result.to_dict(), checkpoint)
+            result = write_file_rich(path, content, encoding, create_dirs, backup, workspace_dir)
+            return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except Exception as exc:
             if isinstance(exc, JsonRpcError):
                 raise
@@ -1608,8 +1610,8 @@ class TermuxForgeBridge:
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
             checkpoint = await self._auto_checkpoint("patch_file", [path], workspace_dir) if auto_checkpoint else None
-            result = patch_file_rich(path, patches, encoding, backup)
-            return self._with_checkpoint(result.to_dict(), checkpoint)
+            result = patch_file_rich(path, patches, encoding, backup, workspace_dir)
+            return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
@@ -1637,8 +1639,8 @@ class TermuxForgeBridge:
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
             checkpoint = await self._auto_checkpoint("replace_lines", [path], workspace_dir) if auto_checkpoint else None
-            result = replace_lines_rich(path, start_line, end_line, new_content, encoding, backup)
-            return self._with_checkpoint(result.to_dict(), checkpoint)
+            result = replace_lines_rich(path, start_line, end_line, new_content, encoding, backup, workspace_dir)
+            return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
@@ -1664,8 +1666,8 @@ class TermuxForgeBridge:
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
             checkpoint = await self._auto_checkpoint("insert_lines", [path], workspace_dir) if auto_checkpoint else None
-            result = insert_lines_rich(path, after_line, content, encoding)
-            return self._with_checkpoint(result.to_dict(), checkpoint)
+            result = insert_lines_rich(path, after_line, content, encoding, workspace_dir)
+            return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
@@ -1691,8 +1693,8 @@ class TermuxForgeBridge:
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
             checkpoint = await self._auto_checkpoint("delete_lines", [path], workspace_dir) if auto_checkpoint else None
-            result = delete_lines_rich(path, start_line, end_line, encoding)
-            return self._with_checkpoint(result.to_dict(), checkpoint)
+            result = delete_lines_rich(path, start_line, end_line, encoding, workspace_dir)
+            return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
         except Exception as exc:
@@ -1863,6 +1865,7 @@ class TermuxForgeBridge:
         result = append_file_rich(
             path=path, content=content, encoding=encoding,
             create_if_missing=create_if_missing,
+            workspace_dir=workspace_dir,
         )
         return self._with_checkpoint(result, checkpoint)
 
@@ -1881,7 +1884,9 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         self._assert_expected_file_state(path, expected_sha256, expected_mtime)
         checkpoint = await self._auto_checkpoint("delete_path", [path], workspace_dir) if auto_checkpoint else None
-        return self._with_checkpoint(delete_path_rich(path=path, recursive=recursive), checkpoint)
+        return self._with_checkpoint(
+            delete_path_rich(path=path, recursive=recursive, workspace_dir=workspace_dir), checkpoint,
+        )
 
     async def _hybrid_move_path(
         self,
@@ -1904,7 +1909,9 @@ class TermuxForgeBridge:
         if Path(dest).exists():
             checkpoint_paths.append(dest)
         checkpoint = await self._auto_checkpoint("move_path", checkpoint_paths, workspace_dir) if auto_checkpoint else None
-        return self._with_checkpoint(move_path_rich(src=src, dest=dest, overwrite=overwrite), checkpoint)
+        return self._with_checkpoint(
+            move_path_rich(src=src, dest=dest, overwrite=overwrite, workspace_dir=workspace_dir), checkpoint,
+        )
 
     async def _hybrid_copy_path(
         self,
@@ -1927,7 +1934,9 @@ class TermuxForgeBridge:
         checkpoint = None
         if auto_checkpoint and overwrite and Path(dest).exists():
             checkpoint = await self._auto_checkpoint("copy_overwrite", [dest], workspace_dir)
-        return self._with_checkpoint(copy_path_rich(src=src, dest=dest, overwrite=overwrite), checkpoint)
+        return self._with_checkpoint(
+            copy_path_rich(src=src, dest=dest, overwrite=overwrite, workspace_dir=workspace_dir), checkpoint,
+        )
 
     async def _hybrid_mkdir_path(
         self,
@@ -1939,7 +1948,7 @@ class TermuxForgeBridge:
         """Create a directory."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
-        return mkdir_path_rich(path=path, parents=parents)
+        return mkdir_path_rich(path=path, parents=parents, workspace_dir=workspace_dir)
 
     async def _hybrid_stat_path(
         self,
@@ -1950,7 +1959,7 @@ class TermuxForgeBridge:
         """Return detailed file/directory metadata."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
-        return stat_path_rich(path=path)
+        return stat_path_rich(path=path, workspace_dir=workspace_dir)
 
     async def _hybrid_chmod_path(
         self,
@@ -1968,7 +1977,7 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         self._assert_expected_file_state(path, expected_sha256, expected_mtime)
         checkpoint = await self._auto_checkpoint("chmod_path", [path], workspace_dir) if auto_checkpoint else None
-        result = chmod_path_rich(path=path, mode=mode, recursive=recursive)
+        result = chmod_path_rich(path=path, mode=mode, recursive=recursive, workspace_dir=workspace_dir)
         if checkpoint and isinstance(result.get("stdout"), str):
             result["stdout"] += "\n  Note: checkpoint restores file contents; permission rollback may require chmod."
         return self._with_checkpoint(result, checkpoint)

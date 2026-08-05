@@ -338,9 +338,12 @@ def _audit_log(method: str, path: str, size: int, sha: str) -> None:
         pass
 
 
-def _ensure_trash() -> str:
-    os.makedirs(_TRASH_DIR, exist_ok=True)
-    return _TRASH_DIR
+def _ensure_trash(workspace_dir: str = "") -> str:
+    """Return the trash directory for this operation's workspace."""
+    workspace = os.path.realpath(os.path.expanduser(workspace_dir or _workspace()))
+    trash_dir = os.path.join(workspace, ".nexon", "trash")
+    os.makedirs(trash_dir, exist_ok=True)
+    return trash_dir
 
 
 def _trash_name(path: str) -> str:
@@ -920,6 +923,11 @@ class FileReadResult:
         }
 
 
+def tool_result_dict(result: Any) -> dict[str, Any]:
+    """Normalize a rich-result object or an already-structured error result."""
+    return result.to_dict() if hasattr(result, "to_dict") else result
+
+
 def read_file_rich(
     path: str,
     start_line: int = 1,
@@ -1107,6 +1115,7 @@ class MultiReadResult:
 def multi_read_rich(
     reads: list[dict[str, Any]],
     max_lines_per_file: int = DEFAULT_MAX_LINES,
+    workspace_dir: str = "",
 ) -> MultiReadResult:
     """
     Batch-read multiple files or multiple ranges from one file.
@@ -1140,7 +1149,12 @@ def multi_read_rich(
             blocks.append(f"\n{'═' * 66}\n  [{i + 1}/{len(reads)}] {label}\n{'═' * 66}")
 
         try:
-            result = read_file_rich(path, start, end, max_lines_per_file)
+            result = read_file_rich(
+                path, start, end, max_lines_per_file, workspace_dir=workspace_dir,
+            )
+            if isinstance(result, dict):
+                blocks.append(result.get("stdout", f"Cannot read {_rel_path(path)}"))
+                continue
             results.append(result)
             blocks.append(result.content_block)
             total_lines += result.shown_lines
@@ -1233,7 +1247,7 @@ def write_file_rich(
                 return {
                     "stdout": f"ERROR: File changed externally (SHA-256 mismatch): {path}",
                     "error": "File changed externally",
-                    "path": str(p),
+                    "path": str(p_check),
                     "exitCode": 1,
                     "success": False,
                 }
@@ -1561,7 +1575,7 @@ def replace_lines_rich(
 
     patch = PatchSpec(
         search="".join(lines[start_idx:end_idx]),
-        replace=new_content,
+        replace="".join(new_lines),
         label=f"lines {start_line}–{end_line}",
     )
     return patch_file_rich(
@@ -2207,7 +2221,7 @@ def delete_path_rich(
         _audit_log("delete", str(p), size_bytes, "")
     else:
         # Soft delete: move into the workspace trash.
-        trash_root = _ensure_trash()
+        trash_root = _ensure_trash(workspace_dir)
         trash_name = _trash_name(str(p))
         # Avoid name collisions inside trash.
         dest = os.path.join(trash_root, trash_name)
@@ -2590,9 +2604,9 @@ def stat_path_rich(
     import datetime
     if not _is_safe(path, workspace_dir):
         return _unsafe_error(path)
-    p = Path(path).expanduser().resolve()
+    p = Path(path).expanduser()
 
-    if not p.exists():
+    if not p.exists() and not p.is_symlink():
         return {
             "stdout": f"ERROR: Path does not exist: {path}",
             "exitCode": 1,
@@ -2601,7 +2615,7 @@ def stat_path_rich(
         }
 
     try:
-        s = p.stat()
+        s = p.lstat()
     except OSError as e:
         return {
             "stdout": f"ERROR: Cannot stat: {e}",
@@ -2614,13 +2628,13 @@ def stat_path_rich(
     link_target = str(os.readlink(str(p))) if is_symlink else None
     kind = "symlink" if is_symlink else ("directory" if p.is_dir() else "file")
     permissions = stat.filemode(s.st_mode)
-    lang = LANG_MAP.get(p.suffix.lower(), "") if p.is_file() else ""
+    lang = LANG_MAP.get(p.suffix.lower(), "") if p.is_file() and not is_symlink else ""
 
     # Enhanced metadata: binary detection, line count, sha256 (files only).
-    is_binary = _is_binary_file(p) if p.is_file() else False
+    is_binary = _is_binary_file(p) if p.is_file() and not is_symlink else False
     line_count = 0
     sha = ""
-    if p.is_file() and not is_binary:
+    if p.is_file() and not is_symlink and not is_binary:
         try:
             with open(str(p), "r", encoding="utf-8", errors="replace") as f:
                 line_count = sum(1 for _ in f)
@@ -2843,7 +2857,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "read_file_rich",
-        lambda **kw: read_file_rich(**kw).to_dict(),
+        lambda **kw: tool_result_dict(read_file_rich(**kw)),
         "Read a file with numbered lines, language detection, and navigation hints",
         {
             "path": "str — absolute or ~ path",
@@ -2855,7 +2869,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "multi_read_rich",
-        lambda reads, **kw: multi_read_rich(reads, **kw).to_dict(),
+        lambda reads, **kw: tool_result_dict(multi_read_rich(reads, **kw)),
         "Batch-read multiple files or ranges in one call",
         {
             "reads": "list — each item: {path, start_line, end_line, label}",
@@ -2865,7 +2879,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "write_file_rich",
-        lambda **kw: write_file_rich(**kw).to_dict(),
+        lambda **kw: tool_result_dict(write_file_rich(**kw)),
         "Atomically write a file with auto-backup and write verification",
         {
             "path": "str — target file path",
@@ -2877,7 +2891,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "patch_file_rich",
-        lambda **kw: patch_file_rich(**kw).to_dict(),
+        lambda **kw: tool_result_dict(patch_file_rich(**kw)),
         "Apply multiple search-replace patches atomically with diff output",
         {
             "path": "str — target file path",
@@ -2888,7 +2902,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "replace_lines_rich",
-        lambda **kw: replace_lines_rich(**kw).to_dict(),
+        lambda **kw: tool_result_dict(replace_lines_rich(**kw)),
         "Replace a specific line range with new content, with diff output",
         {
             "path": "str — target file path",
@@ -2900,7 +2914,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "insert_lines_rich",
-        lambda **kw: insert_lines_rich(**kw).to_dict(),
+        lambda **kw: tool_result_dict(insert_lines_rich(**kw)),
         "Insert lines after a specific line number",
         {
             "path": "str — target file path",
@@ -2911,7 +2925,7 @@ def build_registry(executor, security) -> HybridToolRegistry:
 
     reg.register(
         "delete_lines_rich",
-        lambda **kw: delete_lines_rich(**kw).to_dict(),
+        lambda **kw: tool_result_dict(delete_lines_rich(**kw)),
         "Delete a specific line range from a file",
         {
             "path": "str — target file path",

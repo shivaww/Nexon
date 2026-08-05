@@ -82,7 +82,7 @@ jobs:
       # flutter_kitten_tts explicitly requests CMake 3.18.1. Install it
       # alongside the NDK pinned by android/app/build.gradle.kts.
       - name: Install Android native toolchain
-        run: sdkmanager --install "ndk;28.2.13676358" "cmake;3.18.1"
+        run: "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --install "ndk;28.2.13676358" "cmake;3.18.1"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
