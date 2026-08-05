@@ -39,6 +39,8 @@ import 'package:nexon/services/slash_command/slash_command_service.dart';
 import 'package:nexon/services/context_compression/context_compression_service.dart';
 import 'package:nexon/services/checkpoint/checkpoint_service.dart';
 import 'package:nexon/services/workspace/workspace_service.dart';
+import 'package:nexon/services/termux_bridge/termux_bridge_service.dart';
+import 'package:nexon/services/termux_bridge/bridge_protocol.dart';
 import 'package:uuid/uuid.dart';
 
 /// Shared warm cream/tan glassmorphism container matching Nexon's palette.
@@ -1098,6 +1100,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         settings: settings,
         model: model,
         messages: summarizerMessages,
+        studyModeEnabled: _studyModeEnabled,
       );
       final cleanResp = responseText
           .replaceAll(RegExp(r"```json"), "")
@@ -1158,6 +1161,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         settings: settings,
         model: model,
         messages: messages,
+        studyModeEnabled: _studyModeEnabled,
       );
       final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(responseText);
       if (jsonMatch != null) {
@@ -2219,6 +2223,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           settings: settings,
           model: activeModel,
           messages: historyForApi,
+          studyModeEnabled: _studyModeEnabled,
         );
 
         final completer = Completer<void>();
@@ -4139,6 +4144,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             plannerMessages,
             plannerMessages.length,
           ),
+          studyModeEnabled: _studyModeEnabled,
         );
 
         await for (final chunk in plannerStream) {
@@ -4412,6 +4418,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 stepMessages,
                 stepMessages.length,
               ),
+              studyModeEnabled: _studyModeEnabled,
             );
 
             await for (final chunk in stream) {
@@ -5317,6 +5324,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                     stepReflectMessages,
                     stepReflectMessages.length,
                   ),
+                  studyModeEnabled: _studyModeEnabled,
                 );
                 final cleanReflectResp = reflectResp
                     .replaceAll(RegExp(r"```json\s*|\s*```"), "")
@@ -5510,6 +5518,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               writerMessages,
               writerMessages.length,
             ),
+            studyModeEnabled: _studyModeEnabled,
           );
 
           await for (final chunk in stream) {
@@ -11427,6 +11436,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Future<void> _pickFile() async {
+    const maxFileSizeBytes = 5 * 1024 * 1024; // 5 MB
+    const maxContentChars = 50000; // 50K chars — keeps SharedPreferences under limit
+
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -11446,18 +11458,96 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         allowMultiple: false,
       );
       if (result != null && result.files.single.path != null) {
-        final file = File(result.files.single.path!);
+        final path = result.files.single.path!;
+        final file = File(path);
+
+        // Reject oversized files before they hit memory.
+        final stat = await file.stat();
+        if (stat.size > maxFileSizeBytes) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'File too large (${(stat.size / 1024 / 1024).toStringAsFixed(1)} MB). Max: 5 MB.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+
         final ext = result.files.single.extension?.toLowerCase();
         String text = '';
 
         if (ext == 'pdf') {
-          final PdfDocument document = PdfDocument(
-            inputBytes: await file.readAsBytes(),
-          );
-          text = PdfTextExtractor(document).extractText();
-          document.dispose();
+          final bytes = await file.readAsBytes();
+          final PdfDocument document = PdfDocument(inputBytes: bytes);
+          try {
+            text = PdfTextExtractor(document).extractText();
+          } finally {
+            document.dispose();
+          }
         } else {
           text = await file.readAsString();
+        }
+
+        if (_studyModeEnabled) {
+          // ── Study mode: route to Termux workspace ──
+          try {
+            final workspaceRoot =
+                '${widget.agenticWorkspace.replaceAll(RegExp(r'/+$'), '')}/.nexon/workspace';
+            final workspaceDir = Directory(workspaceRoot);
+            await workspaceDir.create(recursive: true);
+            final destFile = File('${workspaceDir.path}/${result.files.single.name}');
+            await file.copy(destFile.path);
+
+            // Ingest via Python bridge
+            final bridge = TermuxBridgeService.instance;
+            if (bridge.isConnected) {
+              final req = BridgeRequest(
+                id: const Uuid().v4(),
+                method: 'workspace_ingest',
+                params: {'file_path': destFile.path},
+                timeout: 60,
+              );
+              final resp = await bridge.sendCommand(req);
+              if (resp.error != null) {
+                debugPrint('workspace_ingest error: ${resp.error}');
+              }
+            }
+
+            const maxPreviewChars = 500;
+            final preview = text.length > maxPreviewChars
+                ? '${text.substring(0, maxPreviewChars)}… [Workspace file — use workspace_search() to query]'
+                : '$text\n[Workspace file — use workspace_search() to query]';
+
+            widget.onFileAttached(
+              AttachedFile(
+                name: result.files.single.name,
+                content: preview,
+                workspacePath: destFile.path,
+              ),
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('${result.files.single.name} indexed in workspace')),
+              );
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Workspace ingest failed: $e')),
+              );
+            }
+          }
+          return;
+        }
+
+        // ── Normal mode: inline attachment ──
+        // Truncate so SharedPreferences (and the LLM context) don't blow up.
+        if (text.length > maxContentChars) {
+          text =
+              '${text.substring(0, maxContentChars)}\n\n[Content truncated — file exceeds size limit for full analysis]';
         }
 
         widget.onFileAttached(
@@ -14682,6 +14772,7 @@ class ChatClient {
     required ProviderSettings settings,
     required String model,
     required List<ChatMessage> messages,
+    bool studyModeEnabled = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final isManagedMode = provider.id == 'nexon';
@@ -14733,9 +14824,13 @@ class ChatClient {
               'model': model,
               'messages': messages.map((message) {
                 String finalText = message.text;
-                if (message.files.isNotEmpty) {
+                // In study mode, workspace files are NOT inlined — LLM queries them via tools.
+                final inlineFiles = studyModeEnabled
+                    ? message.files.where((f) => !f.isWorkspaceFile).toList()
+                    : message.files;
+                if (inlineFiles.isNotEmpty) {
                   finalText += '\n\n';
-                  for (final file in message.files) {
+                  for (final file in inlineFiles) {
                     finalText +=
                         '--- File: ${file.name} ---\n${file.content}\n\n';
                   }
@@ -14827,6 +14922,7 @@ class ChatClient {
     required ProviderSettings settings,
     required String model,
     required List<ChatMessage> messages,
+    bool studyModeEnabled = false,
   }) async* {
     final prefs = await SharedPreferences.getInstance();
     final isManagedMode = provider.id == 'nexon';
@@ -14878,9 +14974,13 @@ class ChatClient {
               'model': model,
               'messages': messages.map((message) {
                 String finalText = message.text;
-                if (message.files.isNotEmpty) {
+                // In study mode, workspace files are NOT inlined — LLM queries them via tools.
+                final inlineFiles = studyModeEnabled
+                    ? message.files.where((f) => !f.isWorkspaceFile).toList()
+                    : message.files;
+                if (inlineFiles.isNotEmpty) {
                   finalText += '\n\n';
-                  for (final file in message.files) {
+                  for (final file in inlineFiles) {
                     finalText +=
                         '--- File: ${file.name} ---\n${file.content}\n\n';
                   }
@@ -15485,13 +15585,25 @@ enum MessageRole {
 class AttachedFile {
   final String name;
   final String content;
+  final String? workspacePath;
 
-  const AttachedFile({required this.name, required this.content});
+  const AttachedFile({
+    required this.name,
+    required this.content,
+    this.workspacePath,
+  });
 
-  Map<String, dynamic> toJson() => {'name': name, 'content': content};
+  bool get isWorkspaceFile => workspacePath != null;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'content': content,
+    if (workspacePath != null) 'workspacePath': workspacePath,
+  };
   factory AttachedFile.fromJson(Map<String, dynamic> json) => AttachedFile(
     name: json['name']?.toString() ?? '',
     content: json['content']?.toString() ?? '',
+    workspacePath: json['workspacePath']?.toString(),
   );
 }
 
