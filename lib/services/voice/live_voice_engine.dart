@@ -20,7 +20,14 @@ enum LiveVoiceState { idle, listening, thinking, speaking, error }
 class LiveVoiceEngine extends ChangeNotifier {
   final SpeechToText _speechToText = SpeechToText();
   final List<String> kittenVoices = const [
-    'Bella', 'Jasper', 'Luna', 'Bruno', 'Rosie', 'Hugo', 'Kiki', 'Leo',
+    'Bella',
+    'Jasper',
+    'Luna',
+    'Bruno',
+    'Rosie',
+    'Hugo',
+    'Kiki',
+    'Leo',
   ];
 
   FlutterTts? _flutterTts;
@@ -36,6 +43,7 @@ class LiveVoiceEngine extends ChangeNotifier {
   String _activeTtsEngine = 'KittenTTS';
   bool _stopRequested = false;
   int _silentRestartCount = 0;
+  ValueChanged<String>? _onFinalSpeechResult;
 
   LiveVoiceState _state = LiveVoiceState.idle;
   LiveVoiceState get state => _state;
@@ -130,13 +138,7 @@ class LiveVoiceEngine extends ChangeNotifier {
           _errorMessage = 'Mic/Speech error: ${val.errorMsg}';
           _setState(LiveVoiceState.error);
         },
-        onStatus: (status) {
-          if ((status == 'done' || status == 'notListening') &&
-              _state == LiveVoiceState.listening &&
-              _recognizedText.isNotEmpty) {
-            _setState(LiveVoiceState.thinking);
-          }
-        },
+        onStatus: _handleSpeechStatus,
       );
       _speechInitialized = _isSpeechAvailable; // only mark done when success
       if (!_isSpeechAvailable) {
@@ -154,14 +156,18 @@ class LiveVoiceEngine extends ChangeNotifier {
 
   // ── Listening ─────────────────────────────────────────────────────────────
 
-  Future<void> startListening({required ValueChanged<String> onFinalResult}) async {
+  Future<void> startListening({
+    required ValueChanged<String> onFinalResult,
+  }) async {
     // Permission must be granted before speech_to_text is used.
     if (!await requestMicPermission()) return;
     if (!await initSpeech()) return;
 
     _silentRestartCount = 0;
+    _onFinalSpeechResult = onFinalResult;
     await stopTts();
-    _stopRequested = false; // fresh listening session — do not drop the first reply
+    _stopRequested =
+        false; // fresh listening session — do not drop the first reply
     _recognizedText = '';
     _errorMessage = '';
     _setState(LiveVoiceState.listening);
@@ -183,21 +189,6 @@ class LiveVoiceEngine extends ChangeNotifier {
         _soundLevel = level.clamp(0.0, 10.0) / 10.0;
         notifyListeners();
       },
-      onStatus: (status) {
-        // Auto-restart after a brief silence so the mic stays live without an
-        // infinite loop (capped at 3 silent restarts per listening session).
-        if ((status == 'done' || status == 'notListening') &&
-            _state == LiveVoiceState.listening &&
-            _recognizedText.trim().isEmpty) {
-          if (_silentRestartCount >= 3) return;
-          _silentRestartCount++;
-          Future.delayed(const Duration(milliseconds: 600), () {
-            if (_state == LiveVoiceState.listening) {
-              _listen(onFinalResult: onFinalResult);
-            }
-          });
-        }
-      },
       listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 2),
       partialResults: true,
@@ -205,7 +196,33 @@ class LiveVoiceEngine extends ChangeNotifier {
     );
   }
 
-  Future<void> stopListening() => _speechToText.stop();
+  void _handleSpeechStatus(String status) {
+    if ((status != 'done' && status != 'notListening') ||
+        _state != LiveVoiceState.listening) {
+      return;
+    }
+    if (_recognizedText.isNotEmpty) {
+      _setState(LiveVoiceState.thinking);
+      return;
+    }
+
+    // speech_to_text exposes status through initialize(), not listen().
+    // Keep the capped silent-restart behavior using that global callback.
+    final onFinalResult = _onFinalSpeechResult;
+    if (onFinalResult == null || _silentRestartCount >= 3) return;
+    _silentRestartCount++;
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (_state == LiveVoiceState.listening &&
+          identical(_onFinalSpeechResult, onFinalResult)) {
+        _listen(onFinalResult: onFinalResult);
+      }
+    });
+  }
+
+  Future<void> stopListening() async {
+    _onFinalSpeechResult = null;
+    await _speechToText.stop();
+  }
 
   // ── TTS streaming ─────────────────────────────────────────────────────────
 
@@ -221,8 +238,9 @@ class LiveVoiceEngine extends ChangeNotifier {
     _spokenText = _streamBuffer.toString();
     notifyListeners();
     final currentText = _streamBuffer.toString();
-    final matches =
-        RegExp(r'(?<=[.!?])\s+(?=[A-Z0-9])|\n+').allMatches(currentText).toList();
+    final matches = RegExp(
+      r'(?<=[.!?])\s+(?=[A-Z0-9])|\n+',
+    ).allMatches(currentText).toList();
     if (matches.isEmpty) return;
     var lastCut = 0;
     for (final match in matches) {
@@ -260,11 +278,13 @@ class LiveVoiceEngine extends ChangeNotifier {
     try {
       await _disposeNativeTts(); // don't keep both loaded
       final kitten = KittenTTS();
-      await kitten.initialize(onProgress: (double progress, String status) {
-        _ttsDownloadProgress = progress.clamp(0.0, 1.0);
-        _ttsStatus = status;
-        notifyListeners();
-      });
+      await kitten.initialize(
+        onProgress: (double progress, String status) {
+          _ttsDownloadProgress = progress.clamp(0.0, 1.0);
+          _ttsStatus = status;
+          notifyListeners();
+        },
+      );
       _kittenTts = kitten;
       _kittenReady = true;
       _activeTtsEngine = 'KittenTTS';
@@ -299,8 +319,14 @@ class LiveVoiceEngine extends ChangeNotifier {
 
     if (await _ensureKittenTts()) {
       try {
-        final audio = await _kittenTts!.generate(sentence, voice: _kittenVoice, speed: 1.0);
-        await _playKittenAudio(audio); // _finishSentence() invoked in its finally
+        final audio = await _kittenTts!.generate(
+          sentence,
+          voice: _kittenVoice,
+          speed: 1.0,
+        );
+        await _playKittenAudio(
+          audio,
+        ); // _finishSentence() invoked in its finally
         return;
       } catch (e) {
         debugPrint('LiveVoice KittenTTS generation/playback failed: $e');
@@ -336,7 +362,8 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   Future<void> _playKittenAudio(Float32List samples) async {
-    if (samples.isEmpty) throw StateError('KittenTTS returned no audio samples');
+    if (samples.isEmpty)
+      throw StateError('KittenTTS returned no audio samples');
     final dir = await getTemporaryDirectory();
     final file = File(
       '${dir.path}/kitten_${DateTime.now().millisecondsSinceEpoch}_${_sentenceQueue.length}.wav',
@@ -347,7 +374,9 @@ class LiveVoiceEngine extends ChangeNotifier {
       await player.stop();
       await player.setFilePath(file.path);
       final completed = player.playerStateStream
-          .firstWhere((state) => state.processingState == ProcessingState.completed)
+          .firstWhere(
+            (state) => state.processingState == ProcessingState.completed,
+          )
           .timeout(const Duration(seconds: 20));
       await player.play();
       await completed;
@@ -376,12 +405,17 @@ class LiveVoiceEngine extends ChangeNotifier {
         bytes.setUint8(offset + i, value.codeUnitAt(i));
       }
     }
+
     ascii(0, 'RIFF');
     bytes.setUint32(4, 36 + dataSize, Endian.little);
     ascii(8, 'WAVE');
     ascii(12, 'fmt ');
     bytes.setUint32(16, 16, Endian.little);
-    bytes.setUint16(20, 1, Endian.little); // 1 = linear PCM (was 3 = IEEE float)
+    bytes.setUint16(
+      20,
+      1,
+      Endian.little,
+    ); // 1 = linear PCM (was 3 = IEEE float)
     bytes.setUint16(22, channels, Endian.little);
     bytes.setUint32(24, sampleRate, Endian.little);
     bytes.setUint32(28, byteRate, Endian.little);
@@ -422,6 +456,7 @@ class LiveVoiceEngine extends ChangeNotifier {
 
   Future<void> interrupt() async {
     _stopRequested = true;
+    _onFinalSpeechResult = null;
     _kittenAttempted = false;
     _kittenReady = false;
     _sentenceQueue.clear();
@@ -439,7 +474,8 @@ class LiveVoiceEngine extends ChangeNotifier {
     _isTtsSpeaking = false;
     await _audioPlayer?.stop();
     await _flutterTts?.stop();
-    if (_currentSentenceCompleter != null && !_currentSentenceCompleter!.isCompleted) {
+    if (_currentSentenceCompleter != null &&
+        !_currentSentenceCompleter!.isCompleted) {
       _currentSentenceCompleter!.complete();
     }
   }
@@ -476,24 +512,39 @@ String sanitizeForTts(String text) {
 
   // Markdown links [text](url) -> text.
   result = result.replaceAllMapped(
-      RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1] ?? '');
+    RegExp(r'\[([^\]]*)\]\([^)]*\)'),
+    (m) => m[1] ?? '',
+  );
 
   // Bare http(s):// and www. URLs.
-  result = result.replaceAll(RegExp(r'https?://\S+', caseSensitive: false), ' ');
+  result = result.replaceAll(
+    RegExp(r'https?://\S+', caseSensitive: false),
+    ' ',
+  );
   result = result.replaceAll(RegExp(r'www\.\S+', caseSensitive: false), ' ');
 
   // Currency: $50 / $1,000.00 -> "50 dollars" / "1,000.00 dollars".
   result = result.replaceAllMapped(
-      RegExp(r'\$\s*(\d[\d,]*(?:\.\d+)?)'), (m) => '${m[1]} dollars');
+    RegExp(r'\$\s*(\d[\d,]*(?:\.\d+)?)'),
+    (m) => '${m[1]} dollars',
+  );
 
   // Percent: 50% -> "50 percent".
   result = result.replaceAllMapped(
-      RegExp(r'(\d[\d,]*(?:\.\d+)?)\s*%'), (m) => '${m[1]} percent');
+    RegExp(r'(\d[\d,]*(?:\.\d+)?)\s*%'),
+    (m) => '${m[1]} percent',
+  );
 
   // Markdown blockquotes, headings and list markers at line starts.
   result = result.replaceAll(RegExp(r'^[ \t]*>[ \t]*', multiLine: true), ' ');
-  result = result.replaceAll(RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true), ' ');
-  result = result.replaceAll(RegExp(r'^[ \t]*[-*+][ \t]+', multiLine: true), ' ');
+  result = result.replaceAll(
+    RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true),
+    ' ',
+  );
+  result = result.replaceAll(
+    RegExp(r'^[ \t]*[-*+][ \t]+', multiLine: true),
+    ' ',
+  );
 
   // Markdown emphasis / strikethrough pairs.
   result = result.replaceAll(RegExp(r'\*\*'), ' ');
@@ -507,17 +558,17 @@ String sanitizeForTts(String text) {
   result = result.replaceAll(RegExp(r'\s+(?=[,.!?;:)])'), '');
 
   // Fix duplicate punctuation (e.g. "ok!!!") while keeping one for prosody.
-  result = result.replaceAllMapped(
-      RegExp(r'([,.!?;:])\1+'), (m) => m[1]!);
+  result = result.replaceAllMapped(RegExp(r'([,.!?;:])\1+'), (m) => m[1]!);
 
   // Emoji and unicode pictographs.
   result = result.replaceAll(
-      RegExp(
-        r'[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}'
-        r'\u{2190}-\u{21FF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]',
-        unicode: true,
-      ),
-      ' ');
+    RegExp(
+      r'[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}'
+      r'\u{2190}-\u{21FF}\u{FE00}-\u{FE0F}\u{200D}\u{20E3}]',
+      unicode: true,
+    ),
+    ' ',
+  );
 
   // Collapse whitespace.
   result = result.replaceAll(RegExp(r'\s+'), ' ');
@@ -542,34 +593,52 @@ String sanitizeForNaturalTts(String text) {
 
   // Markdown links [text](url) -> text.
   result = result.replaceAllMapped(
-      RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1] ?? '');
+    RegExp(r'\[([^\]]*)\]\([^)]*\)'),
+    (m) => m[1] ?? '',
+  );
 
   // Bare http(s):// and www. URLs.
-  result = result.replaceAll(RegExp(r'https?://\S+', caseSensitive: false), ' ');
+  result = result.replaceAll(
+    RegExp(r'https?://\S+', caseSensitive: false),
+    ' ',
+  );
   result = result.replaceAll(RegExp(r'www\.\S+', caseSensitive: false), ' ');
 
   // $number -> number dollars.
-  result = result.replaceAllMapped(RegExp(r'\$(\d+)'), (m) => '${m[1]} dollars');
+  result = result.replaceAllMapped(
+    RegExp(r'\$(\d+)'),
+    (m) => '${m[1]} dollars',
+  );
 
   // number% -> number percent.
   result = result.replaceAllMapped(
-      RegExp(r'(\d+)\s*%'), (m) => '${m[1]} percent');
+    RegExp(r'(\d+)\s*%'),
+    (m) => '${m[1]} percent',
+  );
 
   // number*number or number x number -> number times number.
   result = result.replaceAllMapped(
-      RegExp(r'(\d+)\s*[*xX]\s*(\d+)'), (m) => '${m[1]} times ${m[2]}');
+    RegExp(r'(\d+)\s*[*xX]\s*(\d+)'),
+    (m) => '${m[1]} times ${m[2]}',
+  );
 
   // number-number -> number to number.
   result = result.replaceAllMapped(
-      RegExp(r'(\d+)\s*-\s*(\d+)'), (m) => '${m[1]} to ${m[2]}');
+    RegExp(r'(\d+)\s*-\s*(\d+)'),
+    (m) => '${m[1]} to ${m[2]}',
+  );
 
   // number+number -> number plus number.
   result = result.replaceAllMapped(
-      RegExp(r'(\d+)\s*\+\s*(\d+)'), (m) => '${m[1]} plus ${m[2]}');
+    RegExp(r'(\d+)\s*\+\s*(\d+)'),
+    (m) => '${m[1]} plus ${m[2]}',
+  );
 
   // number=number -> number equals number.
   result = result.replaceAllMapped(
-      RegExp(r'(\d+)\s*=\s*(\d+)'), (m) => '${m[1]} equals ${m[2]}');
+    RegExp(r'(\d+)\s*=\s*(\d+)'),
+    (m) => '${m[1]} equals ${m[2]}',
+  );
 
   // & -> and.
   result = result.replaceAll('&', ' and ');
@@ -584,9 +653,15 @@ String sanitizeForNaturalTts(String text) {
   result = result.replaceAll(RegExp(r'--|—'), ',');
 
   // Markdown headings, blockquotes and list markers at line starts.
-  result = result.replaceAll(RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true), ' ');
+  result = result.replaceAll(
+    RegExp(r'^[ \t]*#{1,6}[ \t]+', multiLine: true),
+    ' ',
+  );
   result = result.replaceAll(RegExp(r'^[ \t]*>[ \t]*', multiLine: true), ' ');
-  result = result.replaceAll(RegExp(r'^[ \t]*[-*+][ \t]+', multiLine: true), ' ');
+  result = result.replaceAll(
+    RegExp(r'^[ \t]*[-*+][ \t]+', multiLine: true),
+    ' ',
+  );
 
   // Markdown emphasis / strikethrough pairs.
   result = result.replaceAll(RegExp(r'\*\*'), ' ');
