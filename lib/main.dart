@@ -10883,6 +10883,21 @@ class MediaAndModelSheet extends StatefulWidget {
 }
 
 class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
+  bool _studyModeEnabled = false;
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('study_mode_enabled_v1', _studyModeEnabled);
+  }
+
+  Future<void> _loadStudyModeSetting() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
+      });
+    }
+  }
   int _activeTab = 0;
   bool _isFetchingModels = false;
   bool _managedSubscriptionEnabled = false;
