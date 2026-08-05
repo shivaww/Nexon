@@ -717,6 +717,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   final HttpClient _mcpHttpClient = HttpClient()
     ..connectionTimeout = const Duration(seconds: 30);
   bool _deepResearchEnabled = false;
+  bool _studyModeEnabled = false;
 
   /// User-configured token budget for writer-phase evidence (set in settings).
   int _writerContextBudget = 32000;
@@ -1448,6 +1449,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
       _deepResearchEnabled = deepResearchRaw ?? false;
+      _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
       _writerContextBudget = writerContextBudgetRaw ?? 32000;
       if (selected != null &&
           providerCatalog.any((provider) => provider.id == selected)) {
@@ -1494,6 +1496,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setBool('svg_visuals_enabled_v1', _svgVisualsEnabled);
     await prefs.setString('shell_permission_v1', _shellPermission);
     await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
+    await prefs.setBool('study_mode_enabled_v1', _studyModeEnabled);
     await prefs.setInt('writer_context_budget_v1', _writerContextBudget);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
@@ -1889,6 +1892,21 @@ jobs:
               "Date: $currentDateStr. Use current-year data unless asked otherwise.\n\n"
               "Render via markdown code blocks:\n"
               "- LaTeX: \\[ ... \\] or \\( ... \\)\n";
+
+          if (_studyModeEnabled) {
+            systemPromptText +=
+                "\n\n[MODE: STUDY / CROSS-DOCUMENT ANALYSIS ACTIVE]\n"
+                "AVAILABLE WORKSPACE TOOLS:\n"
+                "- `workspace_list()`: Returns list of uploaded files, file sizes, and quota status.\n"
+                "- `workspace_search(query: str, top_k: int = 5)`: Returns relevant text chunks matching search query.\n"
+                "- `workspace_ingest(file_path: str)`: Processes/indexes a file or zip archive into the workspace.\n\n"
+                "PROTOCOL:\n"
+                "1. WORKSPACE AUDIT: Run `workspace_list()` before formulating answers for multi-file contexts.\n"
+                "2. CONTEXT RETRIEVAL: Do NOT load entire large files. Call `workspace_search(query)` for relevant text chunks.\n"
+                "3. SYNTHESIS & COMPARISON: Cross-reference facts across documents. Highlight consensus and contradictions.\n"
+                "4. CITATIONS: Include direct citations for derived claims (e.g., `[Source: textbook_ch1.pdf, Page 4]`).\n"
+                "5. TABLES & DIAGRAMS: Retain markdown tables and flowcharts when explaining concepts.\n\n";
+          }
 
           if (_svgVisualsEnabled) {
             systemPromptText +=
@@ -11556,14 +11574,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               ),
             ),
 
-            // Custom Tab Bar Selector
-            Container(
+            // Custom Tab Bar Selector (Liquid Glass style)
+            LiquidGlassSurface(
               margin: const EdgeInsets.symmetric(vertical: 14),
               padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF3EBE0),
-                borderRadius: BorderRadius.circular(14),
-              ),
+              borderRadius: BorderRadius.circular(16),
               child: Row(
                 children: [
                   _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
@@ -12284,6 +12299,49 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   }
                   setState(() => _deepResearchEnabled = val);
                   widget.onDeepResearchEnabledChanged(val);
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Study Mode / Cross-Document Analysis Card
+        LiquidGlassSurface(
+          padding: const EdgeInsets.all(16),
+          borderRadius: BorderRadius.circular(18),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Study Mode / Cross-Document Analysis',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D241C),
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Cross-reference sources, synthesize insights, and build study guides across documents',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6C5946),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _studyModeEnabled,
+                activeColor: const Color(0xFF7B4E2E),
+                onChanged: (val) async {
+                  setState(() => _studyModeEnabled = val);
+                  await _saveSettings();
                 },
               ),
             ],

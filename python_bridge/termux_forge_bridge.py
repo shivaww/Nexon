@@ -234,6 +234,9 @@ class TermuxForgeBridge:
         r.register("ping", self._ping)
         r.register("version_check", self._version_check)
         r.register("workspace_validate", self._workspace_validate)
+        r.register("workspace_list", self._workspace_list)
+        r.register("workspace_search", self._workspace_search)
+        r.register("workspace_ingest", self._workspace_ingest)
 
         # ── MCP ───────────────────────────────────────────────────────
         r.register("mcp_server_manage", self._mcp_server_manage)
@@ -888,6 +891,18 @@ class TermuxForgeBridge:
             "isGitRepo": is_git,
             "isApproved": self.security.validate_path(path),
         }
+
+    async def _workspace_list(self) -> dict:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().list_files()
+
+    async def _workspace_search(self, query: str = "", top_k: int = 5) -> list:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().search_chunks(query, top_k=top_k)
+
+    async def _workspace_ingest(self, file_path: str = "") -> dict:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().ingest_file(file_path)
 
     # ── MCP ───────────────────────────────────────────────────────────
 

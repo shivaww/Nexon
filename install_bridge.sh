@@ -8,7 +8,7 @@ echo "=== Nexon Environment Setup ==="
 echo "[1/2] Checking and installing system packages..."
 
 # Install essential system packages & Termux python binary modules
-pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl python-aiohttp python-psutil 2>/dev/null || apt-get install -y curl python git wget jq tar clang make ripgrep 2>/dev/null || true
+pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl poppler python-aiohttp python-psutil 2>/dev/null || apt-get install -y curl python git wget jq tar clang make ripgrep poppler-utils 2>/dev/null || true
 
 echo "[2/2] Setting up Nexon Bridge..."
 TARGET_DIR="$HOME/nexon_bridge"
@@ -44,6 +44,7 @@ aiofiles>=23.0,<25.0
 psutil>=5.9.0
 requests>=2.31.0
 python-docx
+pypdf
 EOF
 
 # Install python requirements with fallbacks and binary wheels
@@ -57,7 +58,7 @@ echo "  -> Verifying Python modules..."
 python3 -c "import aiohttp, websockets, psutil, requests; print('✅ All core Python modules verified successfully!')" 2>/dev/null || {
     echo "  -> Installing pre-compiled binary modules fallback..."
     pkg install -y python-aiohttp python-psutil || true
-    pip install --break-system-packages websockets aiofiles requests python-docx || true
+    pip install --break-system-packages websockets aiofiles requests python-docx pypdf || true
 }
 
 echo "=== Nexon Python Bridge environment ready! ==="
