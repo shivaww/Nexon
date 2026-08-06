@@ -2386,6 +2386,73 @@ class TermuxForgeBridge:
             return [self.resolve_params_paths(item, workspace) for item in params]
         return params
 
+    async def _handle_workspace_upload(self, request: web.Request) -> web.Response:
+        """Handle file upload for Study Mode / Cross-Document Analysis.
+
+        Accepts multipart/form-data with a 'file' field. Streams the file
+        to the workspace directory and triggers chunk indexing via
+        WorkspaceManager — avoiding full in-memory text extraction on the
+        Flutter side.
+        """
+        try:
+            reader = await request.multipart()
+            if reader is None:
+                return web.json_response({"error": "Expected multipart/form-data"}, status=400)
+
+            field = await reader.next()
+            if field is None or field.name != 'file':
+                return web.json_response({"error": "Missing 'file' field in upload"}, status=400)
+
+            filename = field.filename or 'upload.dat'
+            # Sanitise filename to prevent path traversal
+            safe_name = Path(filename).name
+
+            from workspace import WorkspaceManager
+            mgr = WorkspaceManager()
+
+            # Quota pre-check before writing
+            quota = mgr.check_storage_quota()
+            if not quota.get("allowed", False):
+                return web.json_response(
+                    {"status": "error", "message": quota.get("reason", "Quota exceeded")},
+                    status=413,
+                )
+
+            dest = mgr.workspace_path / safe_name
+            # Stream to disk in 64 KB chunks — memory-efficient for mobile
+            size_written = 0
+            with open(dest, 'wb') as out_f:
+                while True:
+                    chunk = await field.read_chunk(65536)
+                    if not chunk:
+                        break
+                    size_written += len(chunk)
+                    if size_written > 25 * 1024 * 1024:  # 25 MB hard cap
+                        out_f.close()
+                        dest.unlink(missing_ok=True)
+                        return web.json_response(
+                            {"status": "error", "message": "File exceeds 25 MB upload limit"},
+                            status=413,
+                        )
+                    out_f.write(chunk)
+
+            # Ingest (chunk + index) via WorkspaceManager
+            result = mgr.ingest_file(str(dest))
+            if result.get("status") == "error":
+                return web.json_response(result, status=422)
+
+            return web.json_response({
+                "status": "success",
+                "file": safe_name,
+                "workspace_path": str(dest),
+                "size_bytes": size_written,
+                "index_summary": result.get("index_summary", {}),
+            })
+
+        except Exception as exc:
+            logger.error("Workspace upload failed: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
     async def _handle_http_post(self, request: web.Request) -> web.Response:
         """Handle HTTP POST requests to /mcp from the legacy Dart client."""
         if request.path != '/mcp':
@@ -2517,8 +2584,9 @@ class TermuxForgeBridge:
         )
         
         # Start HTTP server
-        self._http_app = web.Application()
+        self._http_app = web.Application(client_max_size=30 * 1024 * 1024)  # 30 MB upload limit
         self._http_app.router.add_post('/mcp', self._handle_http_post)
+        self._http_app.router.add_post('/workspace/upload', self._handle_workspace_upload)
         
         # Also support OPTIONS for CORS if needed
         async def handle_options(request):
@@ -2531,6 +2599,7 @@ class TermuxForgeBridge:
                 }
             )
         self._http_app.router.add_options('/mcp', handle_options)
+        self._http_app.router.add_options('/workspace/upload', handle_options)
         
         self._http_runner = web.AppRunner(self._http_app)
         await self._http_runner.setup()

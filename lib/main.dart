@@ -886,6 +886,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     _activeSessionId = newSession.id;
     _agenticEnabled = false; // Default off for new chat
     _deepResearchEnabled = false; // Default off for new chat
+    _studyModeEnabled = false; // Default off for new chat
   }
 
   Future<void> _loadSessions() async {
@@ -912,6 +913,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
               _activeSessionId = first.id;
               _agenticEnabled = false; // Default off for new chat
               _deepResearchEnabled = false; // Default off for new chat
+              _studyModeEnabled = false; // Default off for new chat
               hasEmptySession = true;
             }
           }
@@ -936,6 +938,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             _activeSessionId = newId;
             _agenticEnabled = false; // Default off for new chat
             _deepResearchEnabled = false; // Default off for new chat
+            _studyModeEnabled = false; // Default off for new chat
           }
           _editingMessageIndex = null;
         });
@@ -1289,6 +1292,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
           (session.title == 'New Chat' || session.title == 'Welcome Chat')) {
         _agenticEnabled = false;
         _deepResearchEnabled = false;
+        _studyModeEnabled = false;
       }
     });
     _saveSettings();
@@ -5680,6 +5684,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       _editingMessageIndex = null;
       _agenticEnabled = false; // Default off for new chat
       _deepResearchEnabled = false; // Default off for new chat
+      _studyModeEnabled = false; // Default off for new chat
     });
     _saveSessions();
   }
@@ -5983,6 +5988,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           artifactsEnabled: _artifactsEnabled,
           svgVisualsEnabled: _svgVisualsEnabled,
           deepResearchEnabled: _deepResearchEnabled,
+          studyModeEnabled: _studyModeEnabled,
           writerContextBudget: _writerContextBudget,
           agenticWorkspace: _agenticWorkspace,
           customMcpUrl: _customMcpUrl,
@@ -6013,6 +6019,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           onDeepResearchEnabledChanged: (val) async {
             setState(() {
               _deepResearchEnabled = val;
+            });
+            await _saveSettings();
+          },
+          onStudyModeEnabledChanged: (val) async {
+            setState(() {
+              _studyModeEnabled = val;
             });
             await _saveSettings();
           },
@@ -10834,6 +10846,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.artifactsEnabled,
     required this.svgVisualsEnabled,
     required this.deepResearchEnabled,
+    required this.studyModeEnabled,
     required this.writerContextBudget,
     required this.agenticWorkspace,
     required this.customMcpUrl,
@@ -10842,6 +10855,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onArtifactsEnabledChanged,
     required this.onSvgVisualsEnabledChanged,
     required this.onDeepResearchEnabledChanged,
+    required this.onStudyModeEnabledChanged,
     required this.onWriterContextBudgetChanged,
     required this.onAgenticWorkspaceChanged,
     required this.onCustomMcpUrlChanged,
@@ -10864,6 +10878,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final bool artifactsEnabled;
   final bool svgVisualsEnabled;
   final bool deepResearchEnabled;
+  final bool studyModeEnabled;
   final int writerContextBudget;
   final String agenticWorkspace;
   final String customMcpUrl;
@@ -10874,7 +10889,8 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<bool> onArtifactsEnabledChanged;
   final ValueChanged<bool> onSvgVisualsEnabledChanged;
   final ValueChanged<bool> onDeepResearchEnabledChanged;
-  final ValueChanged<int> onWriterContextBudgetChanged;
+  final ValueChanged<bool> onDeepResearchEnabledChanged;
+  final ValueChanged<bool> onStudyModeEnabledChanged;
   final ValueChanged<String> onAgenticWorkspaceChanged;
   final ValueChanged<String> onCustomMcpUrlChanged;
   final ValueChanged<String> onImageAttached;
@@ -10892,20 +10908,11 @@ class MediaAndModelSheet extends StatefulWidget {
 }
 
 class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
-  bool _studyModeEnabled = false;
+  late bool _studyModeEnabled;
 
-  Future<void> _saveSettings() async {
+  Future<void> _saveStudyMode(bool val) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('study_mode_enabled_v1', _studyModeEnabled);
-  }
-
-  Future<void> _loadStudyModeSetting() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
-      });
-    }
+    await prefs.setBool('study_mode_enabled_v1', val);
   }
   int _activeTab = 0;
   bool _isFetchingModels = false;
@@ -10957,6 +10964,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _artifactsEnabled = widget.artifactsEnabled;
     _svgVisualsEnabled = widget.svgVisualsEnabled;
     _deepResearchEnabled = widget.deepResearchEnabled;
+    _studyModeEnabled = widget.studyModeEnabled;
     _writerContextBudget = widget.writerContextBudget;
     _writerContextBudgetController = TextEditingController(
       text: widget.writerContextBudget.toString(),
@@ -11013,6 +11021,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         oldWidget.searchSettings.enabled != widget.searchSettings.enabled ||
         oldWidget.agenticEnabled != widget.agenticEnabled ||
         oldWidget.deepResearchEnabled != widget.deepResearchEnabled ||
+        oldWidget.studyModeEnabled != widget.studyModeEnabled ||
         oldWidget.searchSettings.provider != widget.searchSettings.provider) {
       setState(() {
         _selectedProviderId = widget.provider.id;
@@ -11034,6 +11043,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         _artifactsEnabled = widget.artifactsEnabled;
         _svgVisualsEnabled = widget.svgVisualsEnabled;
         _deepResearchEnabled = widget.deepResearchEnabled;
+        _studyModeEnabled = widget.studyModeEnabled;
         _writerContextBudget = widget.writerContextBudget;
         _searchProvider = widget.searchSettings.provider;
       });
@@ -11477,8 +11487,69 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         }
 
         final ext = result.files.single.extension?.toLowerCase();
-        String text = '';
 
+        if (_studyModeEnabled) {
+          // ── Study mode: stream-upload to Termux workspace via bridge HTTP ──
+          // Memory-efficient: file is streamed in chunks, NOT read entirely into RAM.
+          try {
+            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload');
+            final httpClient = HttpClient();
+            final httpReq = await httpClient.postUrl(uploadUri);
+
+            final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
+            httpReq.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
+
+            final fileName = result.files.single.name;
+            // Write multipart header
+            final header = '--$boundary\r\n'
+                'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n'
+                'Content-Type: application/octet-stream\r\n\r\n';
+            httpReq.add(utf8.encode(header));
+
+            // Stream file in 64 KB chunks — avoids loading entire file into memory
+            final stream = file.openRead();
+            await for (final chunk in stream) {
+              httpReq.add(chunk);
+            }
+
+            // Write multipart footer
+            httpReq.add(utf8.encode('\r\n--$boundary--\r\n'));
+
+            final httpResp = await httpReq.close();
+            final respBody = await httpResp.transform(utf8.decoder).join();
+            httpClient.close();
+
+            if (httpResp.statusCode != 200) {
+              throw Exception('Upload failed (${httpResp.statusCode}): $respBody');
+            }
+
+            final respJson = jsonDecode(respBody) as Map<String, dynamic>;
+            final workspacePath = respJson['workspace_path'] as String? ?? '';
+
+            widget.onFileAttached(
+              AttachedFile(
+                name: fileName,
+                content: '[Workspace file — use workspace_search() to query]',
+                workspacePath: workspacePath,
+              ),
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('$fileName indexed in workspace')),
+              );
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Workspace upload failed: $e')),
+              );
+            }
+          }
+          return;
+        }
+
+        // ── Normal mode: read file into memory for inline attachment ──
+        String text = '';
         if (ext == 'pdf') {
           final bytes = await file.readAsBytes();
           final PdfDocument document = PdfDocument(inputBytes: bytes);
@@ -11489,58 +11560,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           }
         } else {
           text = await file.readAsString();
-        }
-
-        if (_studyModeEnabled) {
-          // ── Study mode: route to Termux workspace ──
-          try {
-            final workspaceRoot =
-                '${widget.agenticWorkspace.replaceAll(RegExp(r'/+$'), '')}/.nexon/workspace';
-            final workspaceDir = Directory(workspaceRoot);
-            await workspaceDir.create(recursive: true);
-            final destFile = File('${workspaceDir.path}/${result.files.single.name}');
-            await file.copy(destFile.path);
-
-            // Ingest via Python bridge
-            final bridge = TermuxBridgeService.instance;
-            if (bridge.isConnected) {
-              final req = BridgeRequest(
-                id: const Uuid().v4(),
-                method: 'workspace_ingest',
-                params: {'file_path': destFile.path},
-                timeout: 60,
-              );
-              final resp = await bridge.sendCommand(req);
-              if (resp.error != null) {
-                debugPrint('workspace_ingest error: ${resp.error}');
-              }
-            }
-
-            const maxPreviewChars = 500;
-            final preview = text.length > maxPreviewChars
-                ? '${text.substring(0, maxPreviewChars)}… [Workspace file — use workspace_search() to query]'
-                : '$text\n[Workspace file — use workspace_search() to query]';
-
-            widget.onFileAttached(
-              AttachedFile(
-                name: result.files.single.name,
-                content: preview,
-                workspacePath: destFile.path,
-              ),
-            );
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('${result.files.single.name} indexed in workspace')),
-              );
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Workspace ingest failed: $e')),
-              );
-            }
-          }
-          return;
         }
 
         // ── Normal mode: inline attachment ──
@@ -12446,7 +12465,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 activeColor: const Color(0xFF7B4E2E),
                 onChanged: (val) async {
                   setState(() => _studyModeEnabled = val);
-                  await _saveSettings();
+                  await _saveStudyMode(val);
+                  widget.onStudyModeEnabledChanged(val);
                 },
               ),
             ],
