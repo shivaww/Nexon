@@ -1284,16 +1284,10 @@ class _ChatHomePageState extends State<ChatHomePage> {
         );
       }
 
-      // Turn off agentic file access and deep research modes if switching to an empty new/welcome chat
-      final userMsgs = session.messages.where(
-        (m) => m.role == MessageRole.user,
-      );
-      if (userMsgs.isEmpty &&
-          (session.title == 'New Chat' || session.title == 'Welcome Chat')) {
-        _agenticEnabled = false;
-        _deepResearchEnabled = false;
-        _studyModeEnabled = false;
-      }
+      // Turn off agentic file access, deep research, and study modes when switching sessions
+      _agenticEnabled = false;
+      _deepResearchEnabled = false;
+      _studyModeEnabled = false;
     });
     _saveSettings();
     _saveSessions();
@@ -1904,16 +1898,25 @@ jobs:
           if (_studyModeEnabled) {
             systemPromptText +=
                 "\n\n[MODE: STUDY / CROSS-DOCUMENT ANALYSIS ACTIVE]\n"
-                "AVAILABLE WORKSPACE TOOLS:\n"
-                "- `workspace_list()`: Returns list of uploaded files, file sizes, and quota status.\n"
-                "- `workspace_search(query: str, top_k: int = 5)`: Returns relevant text chunks matching search query.\n"
-                "- `workspace_ingest(file_path: str)`: Processes/indexes a file or zip archive into the workspace.\n\n"
+                "You have access to a document workspace via XML tool calls. Use <mcp_request> tags to query documents.\n\n"
+                "AVAILABLE WORKSPACE TOOLS (emit ONE per turn, then wait for result):\n"
+                "- workspace_list: List uploaded files, sizes, and quota.\n"
+                "  <mcp_request>{\"method\":\"workspace_list\",\"params\":{}}</mcp_request>\n"
+                "- workspace_search: Search across all documents for relevant text chunks (lightweight RAG).\n"
+                "  <mcp_request>{\"method\":\"workspace_search\",\"params\":{\"query\":\"search terms\",\"top_k\":5}}</mcp_request>\n"
+                "- workspace_ingest: Index a new file from the workspace directory.\n"
+                "  <mcp_request>{\"method\":\"workspace_ingest\",\"params\":{\"file_path\":\"/path/to/file\"}}</mcp_request>\n"
+                "- workspace_read_page: Read a specific page of a document (text only, images skipped).\n"
+                "  <mcp_request>{\"method\":\"workspace_read_page\",\"params\":{\"file_path\":\"file.pdf\",\"page\":1}}</mcp_request>\n"
+                "- workspace_get_outline: Get document structure (headings, chapters, outline).\n"
+                "  <mcp_request>{\"method\":\"workspace_get_outline\",\"params\":{\"file_path\":\"file.pdf\"}}</mcp_request>\n\n"
                 "PROTOCOL:\n"
-                "1. WORKSPACE AUDIT: Run `workspace_list()` before formulating answers for multi-file contexts.\n"
-                "2. CONTEXT RETRIEVAL: Do NOT load entire large files. Call `workspace_search(query)` for relevant text chunks.\n"
+                "1. WORKSPACE AUDIT: Call workspace_list before formulating answers for multi-file contexts.\n"
+                "2. CONTEXT RETRIEVAL: Do NOT load entire large files. Use workspace_search for relevant text chunks.\n"
                 "3. SYNTHESIS & COMPARISON: Cross-reference facts across documents. Highlight consensus and contradictions.\n"
                 "4. CITATIONS: Include direct citations for derived claims (e.g., `[Source: textbook_ch1.pdf, Page 4]`).\n"
-                "5. TABLES & DIAGRAMS: Retain markdown tables and flowcharts when explaining concepts.\n\n";
+                "5. TABLES & DIAGRAMS: Retain markdown tables and flowcharts when explaining concepts.\n"
+                "6. ONE TOOL PER TURN: Emit one <mcp_request> per turn, then STOP and wait for results.\n\n";
           }
 
           if (_svgVisualsEnabled) {
@@ -2044,7 +2047,7 @@ jobs:
                 "CRITICAL DIRECTIVE ON VISUALS: You MUST proactively generate ```chart blocks whenever discussing data, comparisons, metrics, statistics, or trends. Do NOT generate SVG visuals.\n";
           }
 
-          if (_agenticEnabled) {
+          if (_agenticEnabled && !_studyModeEnabled) {
             systemPromptText += r"""
 AGENTIC IDE — You are the AI engine of a real, production-grade mobile IDE powered by Termux on Android.
 You have full shell access AND a suite of structured file tools via a Python bridge.
@@ -2667,7 +2670,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           }
         }
 
-        if (_agenticEnabled && mcpMatch != null) {
+        if ((_agenticEnabled || _studyModeEnabled) && mcpMatch != null) {
           final mcpMatches = [mcpMatch];
           for (final match in mcpMatches) {
             executedTools = true;
@@ -2973,6 +2976,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             'file_outline',
             'search_rich',
             'tree',
+            'workspace_list',
+            'workspace_search',
+            'workspace_read_page',
+            'workspace_get_outline',
           };
 
           if (toolResultMatch != null &&
@@ -5751,6 +5758,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         _editingMessageIndex = null;
         _agenticEnabled = false;
         _deepResearchEnabled = false;
+        _studyModeEnabled = false;
       });
     }
     await _saveSessions();
@@ -11627,6 +11635,46 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         if (_studyModeEnabled) {
           // ── Study mode: stream-upload to Termux workspace via bridge HTTP ──
           // Memory-efficient: file is streamed in chunks, NOT read entirely into RAM.
+          final fileName = result.files.single.name;
+          final fileSize = await file.length();
+          final progressNotifier = ValueNotifier<double>(0.0);
+          bool dialogShown = false;
+
+          if (mounted) {
+            showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                title: Text('Uploading $fileName…'),
+                content: ValueListenableBuilder<double>(
+                  valueListenable: progressNotifier,
+                  builder: (ctx, value, _) {
+                    final uploadedKb = (value * fileSize / 1024).round();
+                    final totalKb = (fileSize / 1024).round();
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        LinearProgressIndicator(
+                          value: value > 0 ? value : null,
+                          backgroundColor: Colors.white24,
+                          valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF7B4E2E)),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          value > 0
+                              ? '${(value * 100).round()}%  ($uploadedKb KB / $totalKb KB)'
+                              : 'Connecting…',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            );
+            dialogShown = true;
+          }
+
           try {
             final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload');
             final httpClient = HttpClient();
@@ -11635,17 +11683,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
             httpReq.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
 
-            final fileName = result.files.single.name;
             // Write multipart header
             final header = '--$boundary\r\n'
                 'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n'
                 'Content-Type: application/octet-stream\r\n\r\n';
             httpReq.add(utf8.encode(header));
 
-            // Stream file in 64 KB chunks — avoids loading entire file into memory
+            // Stream file in 64 KB chunks with progress tracking
+            int bytesUploaded = 0;
             final stream = file.openRead();
             await for (final chunk in stream) {
               httpReq.add(chunk);
+              bytesUploaded += chunk.length;
+              progressNotifier.value = bytesUploaded / fileSize;
             }
 
             // Write multipart footer
@@ -11654,6 +11704,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             final httpResp = await httpReq.close();
             final respBody = await httpResp.transform(utf8.decoder).join();
             httpClient.close();
+
+            if (mounted && dialogShown) {
+              Navigator.of(context, rootNavigator: true).pop();
+              dialogShown = false;
+            }
 
             if (httpResp.statusCode != 200) {
               throw Exception('Upload failed (${httpResp.statusCode}): $respBody');
@@ -11665,7 +11720,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             widget.onFileAttached(
               AttachedFile(
                 name: fileName,
-                content: '[Workspace file — use workspace_search() to query]',
+                content: '[Workspace file — use <mcp_request> to query]',
                 workspacePath: workspacePath,
               ),
             );
@@ -11675,6 +11730,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               );
             }
           } catch (e) {
+            if (mounted && dialogShown) {
+              Navigator.of(context, rootNavigator: true).pop();
+            }
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('Workspace upload failed: $e')),
@@ -12289,8 +12347,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     value: _agenticEnabled,
                     activeColor: const Color(0xFF7B4E2E),
                     onChanged: (val) {
-                      setState(() => _agenticEnabled = val);
+                      setState(() {
+                        _agenticEnabled = val;
+                        if (val) _studyModeEnabled = false;
+                      });
                       widget.onAgenticEnabledChanged(val);
+                      if (val) widget.onStudyModeEnabledChanged(false);
                     },
                   ),
                 ],
@@ -12600,9 +12662,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 value: _studyModeEnabled,
                 activeColor: const Color(0xFF7B4E2E),
                 onChanged: (val) async {
-                  setState(() => _studyModeEnabled = val);
+                  setState(() {
+                    _studyModeEnabled = val;
+                    if (val) _agenticEnabled = false;
+                  });
                   await _saveStudyMode(val);
                   widget.onStudyModeEnabledChanged(val);
+                  if (val) widget.onAgenticEnabledChanged(false);
                 },
               ),
             ],

@@ -16,6 +16,8 @@ class LiveVoiceEngine extends ChangeNotifier {
   bool _speechInitialized = false;
   bool _stopRequested = false;
   int _silentRestartCount = 0;
+  bool _continuous = false;
+  bool _muted = false;
   ValueChanged<String>? _onFinalSpeechResult;
 
   LiveVoiceState _state = LiveVoiceState.idle;
@@ -126,6 +128,8 @@ class LiveVoiceEngine extends ChangeNotifier {
     if (!await initSpeech()) return;
 
     _silentRestartCount = 0;
+    _continuous = true;
+    _muted = false;
     _onFinalSpeechResult = onFinalResult;
     await stopTts();
     _stopRequested =
@@ -139,10 +143,21 @@ class LiveVoiceEngine extends ChangeNotifier {
   Future<void> _listen({required ValueChanged<String> onFinalResult}) async {
     await _speechToText.listen(
       onResult: (SpeechRecognitionResult result) {
+        final words = result.recognizedWords;
+        // Barge-in: user speaks while TTS is playing
+        if (_state == LiveVoiceState.speaking && _isBargeIn(words)) {
+          _muted = true;
+          unawaited(stopTts());
+          _setState(LiveVoiceState.listening);
+          _recognizedText = words;
+          notifyListeners();
+          return;
+        }
         _recognizedText = result.recognizedWords;
         notifyListeners();
         if (result.finalResult && _recognizedText.trim().isNotEmpty) {
           _silentRestartCount = 0;
+          _muted = false;
           _setState(LiveVoiceState.thinking);
           onFinalResult(_recognizedText.trim());
         }
@@ -158,7 +173,34 @@ class LiveVoiceEngine extends ChangeNotifier {
     );
   }
 
+  bool _isBargeIn(String words) {
+    final normalized = words.toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9\s]'),
+      ' ',
+    ).trim();
+    if (normalized.isEmpty) return false;
+    final tokens = normalized.split(RegExp(r'\s+'));
+    if (tokens.length == 1 && tokens.first.length < 4) return false;
+    final lastThree = tokens.length > 3 ? tokens.sublist(tokens.length - 3) : tokens;
+    final spokenLower = _spokenText.toLowerCase();
+    final queueLower = _sentenceQueue.join(' ').toLowerCase();
+    for (final token in lastThree) {
+      if (!spokenLower.contains(token) && !queueLower.contains(token)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void _handleSpeechStatus(String status) {
+    // While speaking in continuous mode, restart listening so user can barge in
+    if (_state == LiveVoiceState.speaking && _continuous) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (_continuous && _state == LiveVoiceState.speaking) {
+          unawaited(_ensureBargeInListening());
+        }
+      });
+    }
     if ((status != 'done' && status != 'notListening') ||
         _state != LiveVoiceState.listening) {
       return;
@@ -171,7 +213,7 @@ class LiveVoiceEngine extends ChangeNotifier {
     // speech_to_text exposes status through initialize(), not listen().
     // Keep the capped silent-restart behavior using that global callback.
     final onFinalResult = _onFinalSpeechResult;
-    if (onFinalResult == null || _silentRestartCount >= 3) return;
+    if (onFinalResult == null || (!_continuous && _silentRestartCount >= 3)) return;
     _silentRestartCount++;
     Future.delayed(const Duration(milliseconds: 600), () {
       if (_state == LiveVoiceState.listening &&
@@ -182,6 +224,8 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   Future<void> stopListening() async {
+    _continuous = false;
+    _muted = false;
     _onFinalSpeechResult = null;
     await _speechToText.stop();
   }
@@ -196,6 +240,7 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   void feedStreamToken(String token) {
+    if (_muted) return;
     _streamBuffer.write(token);
     _spokenText = _streamBuffer.toString();
     notifyListeners();
@@ -216,13 +261,25 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   void endStreamResponse() {
+    if (_muted) return;
     final remaining = _streamBuffer.toString().trim();
     if (remaining.isNotEmpty) _enqueueSentence(remaining);
     _streamBuffer.clear();
+    if (_sentenceQueue.isEmpty && !_isTtsSpeaking) {
+      if (_continuous) {
+        unawaited(_resumeListening());
+      } else {
+        _setState(LiveVoiceState.idle);
+      }
+    }
   }
 
   void _enqueueSentence(String rawSentence) {
     final clean = sanitizeForNaturalTts(stripSsml(rawSentence));
+    if (rawSentence.contains('\\') &&
+        !RegExp(r'[a-zA-Z]{4,}').hasMatch(clean)) {
+      return;
+    }
     if (clean.length < 2) return;
     _sentenceQueue.add(clean);
     if (!_isTtsSpeaking) unawaited(_playNextSentence());
@@ -237,11 +294,18 @@ class LiveVoiceEngine extends ChangeNotifier {
     }
     if (_sentenceQueue.isEmpty) {
       _isTtsSpeaking = false;
-      if (_state == LiveVoiceState.speaking) _setState(LiveVoiceState.idle);
+      if (_state == LiveVoiceState.speaking) {
+        if (_continuous) {
+          unawaited(_resumeListening());
+        } else {
+          _setState(LiveVoiceState.idle);
+        }
+      }
       return;
     }
     _isTtsSpeaking = true;
     _setState(LiveVoiceState.speaking);
+    if (_continuous) unawaited(_ensureBargeInListening());
     var sentence = _sentenceQueue.removeAt(0);
     sentence = sanitizeForNaturalTts(sentence);
     _currentSentenceCompleter = Completer<void>();
@@ -277,8 +341,31 @@ class LiveVoiceEngine extends ChangeNotifier {
     unawaited(_playNextSentence());
   }
 
+  Future<void> _resumeListening() async {
+    await _speechToText.stop();
+    _stopRequested = false;
+    _muted = false;
+    _recognizedText = '';
+    _setState(LiveVoiceState.listening);
+    final onFinalResult = _onFinalSpeechResult;
+    if (onFinalResult != null) {
+      await _listen(onFinalResult: onFinalResult);
+    }
+  }
+
+  Future<void> _ensureBargeInListening() async {
+    if (!_continuous || _speechToText.isListening) return;
+    if (!await initSpeech()) return;
+    final onFinalResult = _onFinalSpeechResult;
+    if (onFinalResult != null) {
+      await _listen(onFinalResult: onFinalResult);
+    }
+  }
+
   Future<void> interrupt() async {
     _stopRequested = true;
+    _continuous = false;
+    _muted = false;
     _onFinalSpeechResult = null;
     _sentenceQueue.clear();
     await stopTts();
@@ -324,6 +411,15 @@ String sanitizeForTts(String text) {
 
   // SSML-style tags.
   result = result.replaceAll(RegExp(r'<[^>]*>'), ' ');
+
+  // LaTeX math removal
+  result = result.replaceAll(RegExp(r'\\\[[\s\S]*?\\\]'), ' ');
+  result = result.replaceAll(RegExp(r'\\\([\s\S]*?\\\)'), ' ');
+  result = result.replaceAll(RegExp(r'\$\$[\s\S]*?\$\$'), ' ');
+  result = result.replaceAll(RegExp(r'\$[^$\n]*\$'), ' ');
+  result = result.replaceAll(RegExp(r'\\[a-zA-Z]+'), ' ');
+  result = result.replaceAll(RegExp(r'\\[^a-zA-Z\s]'), ' ');
+  result = result.replaceAll(RegExp(r'[\u2200-\u22FF\u2A00-\u2AFF\u27C0-\u27EF]'), ' ');
 
   // Fenced code blocks ```...``` -> "code block".
   result = result.replaceAll(RegExp(r'```[\s\S]*?```'), ' code block ');
@@ -405,6 +501,15 @@ String sanitizeForNaturalTts(String text) {
   if (text.isEmpty) return '';
 
   var result = text;
+
+  // LaTeX math removal
+  result = result.replaceAll(RegExp(r'\\\[[\s\S]*?\\\]'), ' ');
+  result = result.replaceAll(RegExp(r'\\\([\s\S]*?\\\)'), ' ');
+  result = result.replaceAll(RegExp(r'\$\$[\s\S]*?\$\$'), ' ');
+  result = result.replaceAll(RegExp(r'\$[^$\n]*\$'), ' ');
+  result = result.replaceAll(RegExp(r'\\[a-zA-Z]+'), ' ');
+  result = result.replaceAll(RegExp(r'\\[^a-zA-Z\s]'), ' ');
+  result = result.replaceAll(RegExp(r'[\u2200-\u22FF\u2A00-\u2AFF\u27C0-\u27EF]'), ' ');
 
   // Fenced code blocks ```...``` -> ' . Code block. '
   result = result.replaceAll(RegExp(r'```[\s\S]*?```'), ' . Code block. ');

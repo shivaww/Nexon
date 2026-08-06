@@ -22,13 +22,21 @@ MAX_FILE_SIZE_MB = 25     # Max single upload file size (MB)
 CHUNK_SIZE_CHARS = 1200   # ~250-300 words per chunk
 CHUNK_OVERLAP = 150       # Overlap between consecutive chunks
 
-# Prohibited executable/binary formats
+# Prohibited executable/binary/media/image formats
 BLOCKED_EXTENSIONS = {
     ".apk", ".exe", ".dll", ".so", ".bin", ".iso", ".img",
-    ".deb", ".rpm", ".dmg", ".class", ".pyc", ".o", ".a", ".elf"
+    ".deb", ".rpm", ".dmg", ".class", ".pyc", ".o", ".a", ".elf",
+    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".flv", ".wmv", ".webm",
+    ".ogg", ".flac", ".aac", ".m4a", ".m4v", ".mkv",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp",
+    ".svg", ".ico", ".psd", ".ai", ".raw"
 }
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".csv", ".json"}
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".docx", ".doc", ".txt", ".md", ".csv", ".json",
+    ".rtf", ".odt", ".pptx", ".ppt", ".xlsx", ".xls",
+    ".epub", ".html", ".htm", ".xml", ".log", ".tex"
+}
 
 
 class WorkspaceManager:
@@ -151,11 +159,13 @@ class WorkspaceManager:
                 reader = pypdf.PdfReader(file_path)
                 pages = []
                 for idx, page in enumerate(reader.pages):
+                    # Extract text only — images are explicitly skipped
                     page_text = page.extract_text() or ""
                     pages.append(f"\n--- [Page {idx + 1}] ---\n{page_text}")
                 return "\n".join(pages)
             except ImportError:
                 if shutil.which("pdftotext"):
+                    # pdftotext extracts text only, images are ignored
                     out_txt = file_path.with_suffix(".tmp.txt")
                     os.system(f"pdftotext '{file_path}' '{out_txt}'")
                     if out_txt.exists():
@@ -214,6 +224,179 @@ class WorkspaceManager:
             json.dump(chunks, idx_f)
 
         return {"total_files": len(files), "total_chunks": len(chunks)}
+
+    def read_page(self, file_path: str, page: int = 1) -> Dict[str, Any]:
+        """Read a specific page of a document (text only, images skipped)."""
+        path = Path(file_path)
+        if not path.exists():
+            # Try relative to workspace
+            path = self.workspace_path / file_path
+        if not path.exists():
+            return {"status": "error", "message": f"File not found: {file_path}"}
+
+        ext = path.suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            return {"status": "error", "message": f"Unsupported format {ext}"}
+
+        if ext == ".pdf":
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(str(path))
+                total_pages = len(reader.pages)
+                if page < 1 or page > total_pages:
+                    return {"status": "error", "message": f"Page {page} out of range (1-{total_pages})"}
+                page_text = reader.pages[page - 1].extract_text() or ""
+                return {
+                    "status": "success",
+                    "file": path.name,
+                    "page": page,
+                    "total_pages": total_pages,
+                    "content": page_text.strip()
+                }
+            except ImportError:
+                if shutil.which("pdftotext"):
+                    import subprocess
+                    result = subprocess.run(
+                        ["pdftotext", "-f", str(page), "-l", str(page), str(path), "-"],
+                        capture_output=True, text=True
+                    )
+                    return {
+                        "status": "success",
+                        "file": path.name,
+                        "page": page,
+                        "content": result.stdout.strip()
+                    }
+                return {"status": "error", "message": "PDF extractor unavailable"}
+        elif ext in [".docx", ".doc"]:
+            try:
+                import docx
+                doc = docx.Document(str(path))
+                # Approximate pages by paragraph count (no native page concept)
+                content = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                return {
+                    "status": "success",
+                    "file": path.name,
+                    "page": page,
+                    "total_pages": 1,
+                    "content": content
+                }
+            except ImportError:
+                return {"status": "error", "message": "python-docx unavailable"}
+        else:
+            # For text files, return entire content
+            text = self.extract_text_content(path)
+            return {
+                "status": "success",
+                "file": path.name,
+                "page": 1,
+                "total_pages": 1,
+                "content": text.strip()
+            }
+
+    def get_outline(self, file_path: str) -> Dict[str, Any]:
+        """Get document structure (headings, chapters, outline) — text only."""
+        path = Path(file_path)
+        if not path.exists():
+            path = self.workspace_path / file_path
+        if not path.exists():
+            return {"status": "error", "message": f"File not found: {file_path}"}
+
+        ext = path.suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            return {"status": "error", "message": f"Unsupported format {ext}"}
+
+        if ext == ".pdf":
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(str(path))
+                outline = []
+                total_pages = len(reader.pages)
+
+                def _walk_outline(items, depth=0):
+                    for item in items:
+                        if isinstance(item, list):
+                            _walk_outline(item, depth + 1)
+                        else:
+                            title = item.title if hasattr(item, 'title') else str(item)
+                            page_num = None
+                            try:
+                                page_num = reader.get_destination_page_number(item) + 1
+                            except Exception:
+                                pass
+                            outline.append({
+                                "title": title,
+                                "page": page_num,
+                                "depth": depth
+                            })
+
+                if reader.outline:
+                    _walk_outline(reader.outline)
+
+                if not outline:
+                    # Fallback: generate outline from text content (first lines of each page)
+                    for idx, pg in enumerate(reader.pages):
+                        text = (pg.extract_text() or "").strip()[:200]
+                        if text:
+                            outline.append({
+                                "title": text.split("\n")[0][:100],
+                                "page": idx + 1,
+                                "depth": 0
+                            })
+
+                return {
+                    "status": "success",
+                    "file": path.name,
+                    "total_pages": total_pages,
+                    "outline": outline
+                }
+            except ImportError:
+                return {"status": "error", "message": "pypdf unavailable for outline"}
+        elif ext == ".docx":
+            try:
+                import docx
+                doc = docx.Document(str(path))
+                outline = []
+                for p in doc.paragraphs:
+                    if p.style and p.style.name and "Heading" in p.style.name:
+                        try:
+                            level = int(p.style.name.split()[-1])
+                        except (ValueError, IndexError):
+                            level = 1
+                        outline.append({"title": p.text, "page": None, "depth": level - 1})
+                return {
+                    "status": "success",
+                    "file": path.name,
+                    "total_pages": 1,
+                    "outline": outline
+                }
+            except ImportError:
+                return {"status": "error", "message": "python-docx unavailable"}
+        else:
+            # For text/md files, extract headings
+            text = self.extract_text_content(path)
+            lines = text.split("\n")
+            outline = []
+            for idx, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    level = len(stripped) - len(stripped.lstrip("#"))
+                    outline.append({
+                        "title": stripped.lstrip("# ").strip(),
+                        "page": None,
+                        "depth": level - 1
+                    })
+                elif stripped and len(stripped) < 100 and idx == 0:
+                    outline.append({
+                        "title": stripped,
+                        "page": None,
+                        "depth": 0
+                    })
+            return {
+                "status": "success",
+                "file": path.name,
+                "total_pages": 1,
+                "outline": outline
+            }
 
     def search_chunks(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """Search indexed chunks from disk using keyword scoring."""

@@ -237,6 +237,8 @@ class TermuxForgeBridge:
         r.register("workspace_list", self._workspace_list)
         r.register("workspace_search", self._workspace_search)
         r.register("workspace_ingest", self._workspace_ingest)
+        r.register("workspace_read_page", self._workspace_read_page)
+        r.register("workspace_get_outline", self._workspace_get_outline)
 
         # ── MCP ───────────────────────────────────────────────────────
         r.register("mcp_server_manage", self._mcp_server_manage)
@@ -903,6 +905,14 @@ class TermuxForgeBridge:
     async def _workspace_ingest(self, file_path: str = "") -> dict:
         from workspace import WorkspaceManager
         return WorkspaceManager().ingest_file(file_path)
+
+    async def _workspace_read_page(self, file_path: str = "", page: int = 1) -> dict:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().read_page(file_path, page=page)
+
+    async def _workspace_get_outline(self, file_path: str = "") -> dict:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().get_outline(file_path)
 
     # ── MCP ───────────────────────────────────────────────────────────
 
@@ -2406,6 +2416,20 @@ class TermuxForgeBridge:
             filename = field.filename or 'upload.dat'
             # Sanitise filename to prevent path traversal
             safe_name = Path(filename).name
+
+            # Pre-check extension before streaming — reject non-document files
+            from workspace import ALLOWED_EXTENSIONS, BLOCKED_EXTENSIONS
+            file_ext = Path(safe_name).suffix.lower()
+            if file_ext in BLOCKED_EXTENSIONS:
+                return web.json_response(
+                    {"status": "error", "message": f"Blocked file type: {file_ext}. Binary/media files are not allowed."},
+                    status=415,
+                )
+            if file_ext not in ALLOWED_EXTENSIONS:
+                return web.json_response(
+                    {"status": "error", "message": f"Unsupported file type: {file_ext}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"},
+                    status=415,
+                )
 
             from workspace import WorkspaceManager
             mgr = WorkspaceManager()
