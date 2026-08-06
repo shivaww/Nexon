@@ -627,10 +627,13 @@ CRITICAL DIRECTIVES:
 2. Do NOT invent alternative tool-call syntaxes. Use ONLY the exact XML tag formats shown above.
 3. You must run searches and fetches iteratively.
 4. Selection of Search parameters:
-   - For recent/current-events-flavored queries (product releases, benchmark results, pricing, "latest", "current", "2026"), default to time_range="month" or topic="news".
+   - For recent/current-events-flavored queries (product releases, benchmark results, pricing, "latest", "current", "2026"), default to time_range="week" or time_range="day" or topic="news". Avoid time_range="month" for fast-changing topics.
    - For general/foundational/definitional queries (explaining a concept, historical background), omit time_range entirely to avoid artificially excluding older-but-still-correct foundational sources.
+   - Do NOT rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.
 5. Once you have collected enough info for this phase, output <step_complete/> to finish the phase.
-6. You can output multiple `<search_request>` tags (or multiple `<read_url>` tags) in a single response to execute them in parallel. Do not mix search and read url tags in the same message. Wait for the user response after each action.""";
+6. You can output multiple `<search_request>` tags (or multiple `<read_url>` tags) in a single response to execute them in parallel. Do not mix search and read url tags in the same message. Wait for the user response after each action.
+
+7. RECENCY & ACCURACY: For time-sensitive queries (news, versions, releases), ALWAYS use time_range="week" or time_range="day". Do NOT rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.""";
 
   static const String summarizerSystemPrompt = """ROLE: Summarization agent.
 Extract information from the provided source. Output ONLY a valid JSON object matching the schema below.
@@ -2189,9 +2192,11 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 "NEVER guess, hallucinate, or provide outdated information for time-sensitive queries, recent events, current software/library versions, or facts outside your knowledge cutoff. If you are not 100% certain, you MUST use the web.\n\n"
                 "STRICT WORKFLOW (Respect the ONE tool call per turn rule):\n"
                 "1. SEARCH: Output <search_request>precise query here</search_request> to get search results, then STOP. Wait for the result.\n"
+                "   - RECENCY: For time-sensitive queries (news, versions, releases), ALWAYS add time_range=\"week\" or time_range=\"day\". Example: <search_request time_range=\"week\">latest flutter version</search_request>\n"
                 "2. READ: After viewing the search results, output <read_url>URL</read_url> to fetch the full content of the most relevant page, then STOP. Wait for the result.\n"
-                "3. ANSWER: Synthesize the fetched page content to provide an accurate, up-to-date response with citations.\n\n"
-                "CRITICAL: Never skip Step 1 or Step 2. Do not answer from memory if the topic requires live data. If search results are insufficient, perform another <search_request> with a different query.\n";
+                "3. CROSS-REFERENCE: Do NOT rely on a single source. If the first source is insufficient, outdated, or lacks detail, perform another <search_request> with a different query or read another <read_url>. Continue searching until you have verified, up-to-date information from multiple sources.\n"
+                "4. ANSWER: Synthesize the fetched page content to provide an accurate, up-to-date response with citations.\n\n"
+                "CRITICAL: Never skip Step 1 or Step 2. Do not answer from memory if the topic requires live data. If search results are insufficient or outdated, perform another <search_request> with a different query. You MUST keep searching until you find current, accurate information.\n";
           }
 
           systemPromptText +=
@@ -2604,6 +2609,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   htmlBody = bodyMatch.group(1) ?? htmlBody;
                 }
 
+                // Strip boilerplate/navigation tags to save tokens
+                htmlBody = htmlBody.replaceAll(
+                  RegExp(r'<(nav|header|footer|aside)\b[^>]*>[\s\S]*?</\1>', caseSensitive: false, dotAll: true),
+                  ' ',
+                );
+
                 htmlBody = htmlBody.replaceAll(
                   RegExp(
                     r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
@@ -2643,8 +2654,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
               urlResult = text;
               if (urlResult.length > 8000) {
+                // Truncate at a sentence boundary to avoid cutting mid-sentence
+                final substring = urlResult.substring(0, 8000);
+                final lastPeriod = substring.lastIndexOf('. ');
+                final endIdx = lastPeriod > 6000 ? lastPeriod + 1 : 8000;
                 urlResult =
-                    urlResult.substring(0, 8000) +
+                    urlResult.substring(0, endIdx) +
                     '\n\n...[truncated due to length]';
               }
             } catch (e) {
