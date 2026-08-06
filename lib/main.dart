@@ -2291,7 +2291,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               }
             }
 
-            if (updateStopwatch.elapsedMilliseconds > 250) {
+            if (updateStopwatch.elapsedMilliseconds > 80) {
               setState(() {
                 final idx = _sessions.indexWhere(
                   (s) => s.id == targetSessionId,
@@ -9758,6 +9758,8 @@ class MessageBubble extends StatelessWidget {
               if (message.reasoning.isNotEmpty && reasoningEnabled)
                 ThoughtBlock(thought: message.reasoning),
               ..._parseRichMessageContent(context, message.text),
+              if (animationState != AvatarAnimationState.idle)
+                const _StreamingCursor(),
             ],
             const SizedBox(height: 4),
             const Divider(color: Color(0xFFE7D8C4), height: 1),
@@ -10026,9 +10028,25 @@ class MessageBubble extends StatelessWidget {
         ),
       ];
     }
-    return parseContentBlocks(
-      text,
-    ).map((block) => _buildSingleBlock(context, block)).toList();
+    final blocks = parseContentBlocks(text);
+    // While streaming, the last ``` fence is still open — render that final
+    // block as a lightweight streaming view so tokens flow in smoothly, and
+    // swap to the rich artifact widget once the fence closes.
+    final unclosedFence = text.split('```').length % 2 == 0;
+    final widgets = <Widget>[];
+    for (var i = 0; i < blocks.length; i++) {
+      final block = blocks[i];
+      final streaming = animationState != AvatarAnimationState.idle &&
+          i == blocks.length - 1 &&
+          block.isCode &&
+          unclosedFence;
+      widgets.add(
+        streaming
+            ? _StreamingCodeBlock(code: block.content, language: block.language)
+            : _buildSingleBlock(context, block),
+      );
+    }
+    return widgets;
   }
 
   Widget _buildSingleBlock(BuildContext context, ContentBlock block) {
@@ -10277,6 +10295,124 @@ class _PulseDotState extends State<PulseDot>
         end: 1,
       ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut)),
       child: const CircleAvatar(radius: 4, backgroundColor: Color(0xFF8A6A4F)),
+    );
+  }
+}
+
+// ── Streaming cursor: the app sparkle, pulsing while the LLM streams ──
+
+class _StreamingCursor extends StatefulWidget {
+  const _StreamingCursor({this.size = 16, this.inline = false, super.key});
+
+  final double size;
+  final bool inline;
+
+  @override
+  State<_StreamingCursor> createState() => _StreamingCursorState();
+}
+
+class _StreamingCursorState extends State<_StreamingCursor>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = _controller.value;
+        final sparkle = Transform.scale(
+          scale: 0.75 + 0.3 * t,
+          child: Opacity(
+            opacity: 0.45 + 0.55 * t,
+            child: Image.asset(
+              'assets/icon_transparent.png',
+              width: widget.size,
+              height: widget.size,
+              fit: BoxFit.contain,
+            ),
+          ),
+        );
+        if (widget.inline) return sparkle;
+        return Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 2),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [sparkle]),
+        );
+      },
+    );
+  }
+}
+
+/// Lightweight code view shown while an artifact/code fence is still open,
+/// so tokens stream in smoothly instead of re-rendering heavy artifact
+/// widgets on every chunk. Swaps to the rich artifact widget on completion.
+class _StreamingCodeBlock extends StatelessWidget {
+  const _StreamingCodeBlock({
+    required this.code,
+    required this.language,
+    super.key,
+  });
+
+  final String code;
+  final String language;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF3A3A3A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.code, size: 13, color: Color(0xFF9CDCFE)),
+              const SizedBox(width: 6),
+              Text(
+                language.isEmpty ? 'streaming' : language,
+                style: const TextStyle(
+                  color: Color(0xFF9CDCFE),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              const _StreamingCursor(size: 14, inline: true),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SelectableText(
+            code,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12.5,
+              height: 1.4,
+              color: Color(0xFFD4D4D4),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
