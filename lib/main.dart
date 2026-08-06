@@ -11025,7 +11025,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<bool> onArtifactsEnabledChanged;
   final ValueChanged<bool> onSvgVisualsEnabledChanged;
   final ValueChanged<bool> onDeepResearchEnabledChanged;
-  final ValueChanged<bool> onDeepResearchEnabledChanged;
+  final ValueChanged<int> onWriterContextBudgetChanged;
   final ValueChanged<bool> onStudyModeEnabledChanged;
   final ValueChanged<String> onAgenticWorkspaceChanged;
   final ValueChanged<String> onCustomMcpUrlChanged;
