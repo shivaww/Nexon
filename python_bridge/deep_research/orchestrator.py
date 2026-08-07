@@ -140,11 +140,12 @@ class DeepResearchOrchestrator:
 
         Strategy (better than dropping whole phases):
         1. Always keep phase headers.
-        2. Prefer FACT records over FINDING records.
-        3. Round-robin findings across phases.
-        4. Drop low-confidence findings first.
+        2. When prefer_facts (default): process FACT records first, then findings.
+           When False: process FINDING records first, then facts.
+        3. Round-robin secondary records across phases.
+        4. Drop low-confidence records first.
         5. After each add, recompute used = estimate_tokens(accepted).
-        6. If still over budget, truncate facts as well.
+        6. If still over budget, truncate the primary record type as well.
         """
         phases = self._read_temp()
         if not phases:
@@ -191,11 +192,14 @@ class DeepResearchOrchestrator:
             # ~4 chars per token heuristic (more stable than word*1.3)
             return max(1, (len(text) + 3) // 4) if text else 0
 
-        # Start with facts + metadata only
+        # Start with metadata + primary records (facts if prefer_facts, else findings)
         accepted: list[dict[str, Any]] = []
         used = 0
         truncated_facts = 0
         truncated_findings = 0
+
+        primary_key = "facts" if prefer_facts else "findings"
+        secondary_key = "findings" if prefer_facts else "facts"
 
         for phase in working:
             base = {
@@ -211,32 +215,38 @@ class DeepResearchOrchestrator:
             accepted.append(base)
             used = estimate_tokens(accepted)
 
-            # Add facts greedily; full recompute after each add.
-            kept_facts: list[dict] = []
-            for fact in phase["facts"]:
-                kept_facts.append(fact)
-                base["facts"] = kept_facts
+            # Add primary records greedily; full recompute after each add.
+            kept_primary: list[dict] = []
+            for record in phase[primary_key]:
+                kept_primary.append(record)
+                base[primary_key] = kept_primary
                 used = estimate_tokens(accepted)
                 if used > max_evidence_tokens:
-                    kept_facts.pop()
-                    base["facts"] = list(kept_facts)
+                    kept_primary.pop()
+                    base[primary_key] = list(kept_primary)
                     used = estimate_tokens(accepted)
-                    truncated_facts += 1
-            base["facts"] = kept_facts
+                    if prefer_facts:
+                        truncated_facts += 1
+                    else:
+                        truncated_findings += 1
+            base[primary_key] = kept_primary
 
-        # Round-robin findings across phases; full recompute after each add.
-        max_rounds = max((len(p["findings"]) for p in working), default=0)
+        # Round-robin secondary records across phases; full recompute after each add.
+        max_rounds = max((len(p[secondary_key]) for p in working), default=0)
         for round_i in range(max_rounds):
             for p_idx, phase in enumerate(working):
-                if round_i >= len(phase["findings"]):
+                if round_i >= len(phase[secondary_key]):
                     continue
-                finding = phase["findings"][round_i]
-                accepted[p_idx]["findings"].append(finding)
+                record = phase[secondary_key][round_i]
+                accepted[p_idx][secondary_key].append(record)
                 used = estimate_tokens(accepted)
                 if used > max_evidence_tokens:
-                    accepted[p_idx]["findings"].pop()
+                    accepted[p_idx][secondary_key].pop()
                     used = estimate_tokens(accepted)
-                    truncated_findings += 1
+                    if prefer_facts:
+                        truncated_findings += 1
+                    else:
+                        truncated_facts += 1
 
         # If still over budget (headers alone can overshoot), drop facts too.
         used = estimate_tokens(accepted)

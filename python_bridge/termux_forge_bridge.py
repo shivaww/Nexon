@@ -965,14 +965,60 @@ class TermuxForgeBridge:
         prefer_facts: bool = True,
     ) -> dict:
         """Budget-aware evidence export (facts first, round-robin findings)."""
-        return self.deep_research.export_for_writer(
+        result = self.deep_research.export_for_writer(
             max_evidence_tokens=int(max_evidence_tokens or 26000),
             prefer_facts=bool(prefer_facts),
         )
+        # Also convert to compact structured text for the writer LLM
+        if result.get("content") and result["content"] != "[]":
+            try:
+                phases = json.loads(result["content"])
+                result["compact_text"] = self._format_evidence_compact(phases)
+            except Exception:
+                pass
+        return result
 
     async def _deep_research_reset(self, keep_checkpoint: bool = False) -> dict:
         """Clear temp.json and in-memory caches."""
         return await self.deep_research.reset_run(keep_checkpoint=bool(keep_checkpoint))
+
+    def _format_evidence_compact(self, phases: list) -> str:
+        """Convert JSON evidence to structured text (~40% fewer tokens than JSON)."""
+        lines = []
+        for phase in phases:
+            if not isinstance(phase, dict):
+                continue
+            title = phase.get("phase_title", "Unknown Phase")
+            summary = phase.get("summary", "")
+            facts = phase.get("facts", [])
+            findings = phase.get("findings", [])
+
+            lines.append(f"## {title}")
+            if summary:
+                lines.append(f"Summary: {summary}\n")
+            if facts:
+                lines.append(f"### Facts ({len(facts)})")
+                for f in facts:
+                    if not isinstance(f, dict):
+                        continue
+                    conf = f.get("confidence", "medium").upper()
+                    metric = f.get("metric", "")
+                    subject = f.get("subject", "")
+                    value = f.get("value", "")
+                    source = f.get("source", "")
+                    lines.append(f"- [{conf}] {subject} {metric}: {value} (Source: {source})")
+                lines.append("")
+            if findings:
+                lines.append(f"### Findings ({len(findings)})")
+                for f in findings:
+                    if not isinstance(f, dict):
+                        continue
+                    conf = f.get("confidence", "medium").upper()
+                    text_val = f.get("text", "")
+                    source = f.get("source", "")
+                    lines.append(f"- [{conf}] {text_val} (Source: {source})")
+                lines.append("")
+        return "\n".join(lines)
 
     async def _deep_research_update_phase(
         self,
@@ -1072,7 +1118,7 @@ class TermuxForgeBridge:
                 async with session.post(
                     "https://api.tavily.com/search",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=15)
+                    timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:
                     if resp.status >= 300:
                         body = await resp.text()
@@ -1096,11 +1142,14 @@ class TermuxForgeBridge:
         stage_id: str = "stage_mcp",
         query_id: str = "query_mcp",
         allow_pdf: bool = False,
+        query: str = "",
     ) -> dict:
         """Fetch a URL via the bridge (single I/O path for Deep Research).
 
         HTML is cleaned with TextCleaner. PDFs are deliberately never extracted:
         a large PDF can exhaust the mobile process and writer context budget.
+        When a query is provided, the cleaner applies keyword relevance filtering
+        to reduce the output by ~90%, keeping only paragraphs relevant to the query.
         """
         target_url = url or uri
         if not target_url:
@@ -1166,7 +1215,7 @@ class TermuxForgeBridge:
                     try:
                         body = await resp.text(errors="replace")
                         from deep_research.cleaner import TextCleaner
-                        text = TextCleaner().clean(body)
+                        text = TextCleaner().clean(body, query=query)
                         return {
                             "status": "success",
                             "content": text,

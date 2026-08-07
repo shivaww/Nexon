@@ -131,13 +131,16 @@ class DeepResearchBridgeClient {
   }
 
   /// Single I/O path for HTML fetch; the bridge always skips PDFs.
+  /// When [query] is provided, the bridge applies keyword relevance filtering
+  /// to reduce output by ~90%, keeping only paragraphs relevant to the query.
   Future<Map<String, dynamic>> readUrl(
     String url, {
     bool allowPdf = false,
+    String query = '',
   }) async {
     return call(
       'read_url',
-      params: {'url': url, 'allow_pdf': allowPdf},
+      params: {'url': url, 'allow_pdf': allowPdf, 'query': query},
       timeout: const Duration(seconds: 90),
     );
   }

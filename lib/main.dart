@@ -1130,6 +1130,79 @@ class _ChatHomePageState extends State<ChatHomePage> {
     };
   }
 
+  /// Batch summarizer: extract facts/findings from multiple sources in ONE LLM call.
+  /// This cuts API usage by ~80% compared to per-URL summarization.
+  Future<Map<String, dynamic>> _summarizeBatchInline({
+    required Map<String, String> sources,
+    required String query,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+  }) async {
+    if (sources.isEmpty) return {'facts': [], 'findings': []};
+
+    // Build combined content with source markers
+    final StringBuffer combinedContent = StringBuffer();
+    combinedContent.writeln('Research Query: $query');
+    combinedContent.writeln();
+    for (final entry in sources.entries) {
+      combinedContent.writeln('=== SOURCE: ${entry.key} ===');
+      final content = entry.value;
+      if (content.length > 8000) {
+        combinedContent.writeln(content.substring(0, 8000));
+        combinedContent.writeln('...[truncated]');
+      } else {
+        combinedContent.writeln(content);
+      }
+      combinedContent.writeln();
+    }
+
+    final summarizerMessages = [
+      ChatMessage(
+        role: MessageRole.system,
+        text: DeepResearchPrompts.summarizerSystemPrompt +
+            '\n\nYou are summarizing MULTIPLE sources. ' +
+            'Each source is marked with === SOURCE: <url> ===. ' +
+            'Extract facts and findings from ALL sources. ' +
+            'Tag each fact and finding with its source URL. ' +
+            'Deduplicate across sources — if two sources report the same fact, ' +
+            'keep only one with the more authoritative source.',
+      ),
+      ChatMessage(
+        role: MessageRole.user,
+        text: combinedContent.toString(),
+      ),
+    ];
+
+    try {
+      final responseText = await _chatClient.sendChat(
+        provider: provider,
+        settings: settings,
+        model: model,
+        messages: summarizerMessages,
+        studyModeEnabled: _studyModeEnabled,
+      );
+      final cleanResp = responseText
+          .replaceAll(RegExp(r'```json'), '')
+          .replaceAll('```', '')
+          .trim();
+      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(cleanResp);
+      if (jsonMatch != null) {
+        final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
+        return DeepResearchHelpers.normalizeEvidence(
+          parsed,
+          sourceUrl: sources.keys.first,
+        );
+      }
+    } catch (e) {
+      debugPrint('Batch summarization failed: $e');
+    }
+    return {
+      'facts': <Map<String, dynamic>>[],
+      'findings': <Map<String, dynamic>>[],
+    };
+  }
+
   Future<bool> _checkResearchSufficiency({
     required String phaseGoal,
     required List<Map<String, dynamic>> facts,
@@ -4253,6 +4326,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       final List<Map<String, dynamic>> phaseFindings = [];
       final List<Map<String, dynamic>> phaseSkippedPdfs = [];
       final List<Map<String, dynamic>> phaseFailedFetches = [];
+      final StringBuffer crossPhaseContext = StringBuffer();
 
       for (int i = 0; i < steps.length; i++) {
         final stageId = steps[i]['id'] as String;
@@ -4401,6 +4475,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             text:
                 "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
+                "${crossPhaseContext.length > 0 ? 'Previous phases context (do NOT re-search these topics):\n$crossPhaseContext\n\n' : ''}"
                 "Current date and time: $phaseCurrentTime. You MUST use the latest information available as of this timestamp. "
                 "For time-sensitive claims, search with a suitable recency filter, verify dates on the fetched source, and never rely on model memory.\n\n"
                 "Please formulate search queries or read specific URLs to gather evidence. "
@@ -4834,6 +4909,11 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               String factDedupKey(Map item) =>
                   '${item['metric']}|${item['subject']}|${item['value']}';
 
+              // Batch summarization: collect fetched texts, summarize in ONE LLM call
+              final Map<String, String> fetchedTexts = {};
+              final Map<String, String> fetchedEventIds = {};
+              final Map<String, Stopwatch> fetchedStopwatches = {};
+
               await Future.wait(
                 Iterable<int>.generate(urls.length).map((idx) async {
                   final url = urls[idx];
@@ -5014,6 +5094,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                       return _deepResearchBridge.readUrl(
                         targetUrl,
                         allowPdf: false,
+                        query: queryText,
                       );
                     });
                     // Bridge skipped_pdf is the source of truth for PDF exclusion.
@@ -5076,145 +5157,6 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                     urlResults[idx] = errStr;
                   }
 
-                  // Legacy fallback is intentionally disabled: all research reads
-                  // must pass through the bridge above.
-                  if (false) {
-                    await fetchSemaphore.run(() async {
-                      try {
-                        final client = HttpClient()
-                          ..findProxy = ((uri) => "DIRECT")
-                          ..connectionTimeout = const Duration(seconds: 15);
-                        final request = await client
-                            .getUrl(Uri.parse(targetUrl))
-                            .timeout(const Duration(seconds: 60));
-                        request.headers.set(
-                          HttpHeaders.userAgentHeader,
-                          'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-                        );
-                        request.headers.set(
-                          HttpHeaders.acceptHeader,
-                          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        );
-                        final response = await request.close().timeout(
-                          const Duration(seconds: 60),
-                        );
-
-                        if (response.statusCode < 200 ||
-                            response.statusCode >= 300) {
-                          throw HttpException('HTTP ${response.statusCode}');
-                        }
-
-                        isPdfResponse =
-                            response.headers.contentType?.mimeType ==
-                            'application/pdf';
-                        if (isPdfResponse) {
-                          final skipMsg =
-                              'Skipped PDF URL (Content-Type): $targetUrl';
-                          phaseSkippedPdfs.add({
-                            'url': targetUrl,
-                            'reason':
-                                'PDF files are excluded (by Content-Type)',
-                          });
-                          runFetchedUrls.add(normUrl);
-                          runUrlSummaries[normUrl] = {
-                            'facts': [],
-                            'findings': [],
-                            'isPdf': true,
-                            'skipped': true,
-                          };
-
-                          await _updateDeepResearchPhase(
-                            stageId: stageId,
-                            phaseTitle: phaseTitle,
-                            facts: phaseFacts,
-                            findings: phaseFindings,
-                            skippedPdfs: phaseSkippedPdfs,
-                            failedFetches: phaseFailedFetches,
-                          );
-
-                          finishResearchEvent(
-                            eventId,
-                            status: 'done',
-                            stopwatch: eventWatch,
-                            details: {
-                              'url': targetUrl,
-                              'parse_format': 'skipped_pdf',
-                              'result_payload': {
-                                'summary': 'Skipped PDF URL (Content-Type)',
-                              },
-                            },
-                          );
-                          urlResults[idx] = skipMsg;
-                          fetchFailed = true;
-                          return;
-                        }
-
-                        final body = await response
-                            .transform(const Utf8Decoder(allowMalformed: true))
-                            .join()
-                            .timeout(const Duration(seconds: 60));
-                        var htmlBody = body;
-                        final bodyMatch = RegExp(
-                          r'<body[^>]*>(.*?)</body>',
-                          caseSensitive: false,
-                          dotAll: true,
-                        ).firstMatch(body);
-                        if (bodyMatch != null) {
-                          htmlBody = bodyMatch.group(1) ?? htmlBody;
-                        }
-                        htmlBody = htmlBody.replaceAll(
-                          RegExp(
-                            r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
-                            caseSensitive: false,
-                            dotAll: true,
-                          ),
-                          '',
-                        );
-                        htmlBody = htmlBody.replaceAll(
-                          RegExp(
-                            r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
-                            caseSensitive: false,
-                            dotAll: true,
-                          ),
-                          '',
-                        );
-                        htmlBody = htmlBody.replaceAll(
-                          RegExp(r'<img[^>]*>', caseSensitive: false),
-                          '',
-                        );
-                        htmlBody = htmlBody.replaceAll(
-                          RegExp(
-                            r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
-                            caseSensitive: false,
-                            dotAll: true,
-                          ),
-                          '',
-                        );
-                        htmlBody = htmlBody.replaceAll(
-                          RegExp(r'<!--.*?-->', dotAll: true),
-                          '',
-                        );
-                        text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
-                        text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-                      } catch (e) {
-                        fetchFailed = true;
-                        final errStr = 'Fetch failed: $e';
-                        phaseFailedFetches.add({
-                          'url': targetUrl,
-                          'error': errStr,
-                        });
-                        finishResearchEvent(
-                          eventId,
-                          status: 'error',
-                          stopwatch: eventWatch,
-                          details: {'url': targetUrl, 'parse_format': 'html'},
-                          error: errStr,
-                        );
-                        urlResults[idx] = errStr;
-                      }
-                    });
-                  }
-
                   if (fetchFailed) return;
                   if (fetchTimeBudgetExceeded ||
                       startTime
@@ -5239,69 +5181,133 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                     details: {'url': targetUrl, 'parse_format': 'html'},
                   );
 
-                  try {
-                    final summaries = await _summarizeSourceInline(
-                      sourceUrl: targetUrl,
-                      content: text,
-                      provider: provider,
-                      settings: settings,
-                      model: model,
-                    );
-                    final List<dynamic> facts = summaries['facts'] ?? [];
-                    final List<dynamic> findings = summaries['findings'] ?? [];
+                  // Store fetched text for batch summarization
+                  fetchedTexts[targetUrl] = text;
+                  fetchedEventIds[targetUrl] = eventId;
+                  fetchedStopwatches[targetUrl] = eventWatch;
+                  urlResults[idx] = 'Fetched: ${text.length} chars';
+                }),
+              );
 
-                    phaseFacts.addAll(List<Map<String, dynamic>>.from(facts));
-                    phaseFindings.addAll(
-                      List<Map<String, dynamic>>.from(findings),
-                    );
+              // ── BATCH SUMMARIZATION ──
+              // Summarize all fetched URLs in ONE LLM call to cut API usage by ~80%
+              if (fetchedTexts.isNotEmpty) {
+                try {
+                  final summaries = await _summarizeBatchInline(
+                    sources: fetchedTexts,
+                    query: queryText,
+                    provider: provider,
+                    settings: settings,
+                    model: model,
+                  );
+                  final List<dynamic> facts = summaries['facts'] ?? [];
+                  final List<dynamic> findings = summaries['findings'] ?? [];
 
+                  // Deduplicate facts (metric|subject|value)
+                  final existingKeys = phaseFacts.map(factDedupKey).toSet();
+                  for (final fact in facts) {
+                    if (existingKeys.add(factDedupKey(fact))) {
+                      phaseFacts.add(fact);
+                    }
+                  }
+                  // Deduplicate findings (text|source)
+                  final existingFindingKeys = phaseFindings
+                      .map((f) => '${f['text']}|${f['source']}')
+                      .toSet();
+                  for (final finding in findings) {
+                    final key = '${finding['text']}|${finding['source']}';
+                    if (existingFindingKeys.add(key)) {
+                      phaseFindings.add(finding);
+                    }
+                  }
+
+                  // Cap at 20 facts per phase, drop lowest confidence first
+                  if (phaseFacts.length > 20) {
+                    phaseFacts.sort((a, b) {
+                      final ra =
+                          a['confidence']?.toString().toLowerCase() ?? 'medium';
+                      final rb =
+                          b['confidence']?.toString().toLowerCase() ?? 'medium';
+                      const ranks = {'high': 0, 'medium': 1, 'low': 2};
+                      return (ranks[ra] ?? 1).compareTo(ranks[rb] ?? 1);
+                    });
+                    phaseFacts.removeRange(20, phaseFacts.length);
+                  }
+
+                  for (final entry in fetchedTexts.entries) {
+                    final url = entry.key;
+                    final normUrl = _normalizeQueryOrUrl(url);
                     runFetchedUrls.add(normUrl);
+                    final urlFacts = facts
+                        .where(
+                            (f) => f['source']?.toString() == url)
+                        .toList();
+                    final urlFindings = findings
+                        .where(
+                            (f) => f['source']?.toString() == url)
+                        .toList();
                     runUrlSummaries[normUrl] = {
-                      'facts': facts,
-                      'findings': findings,
+                      'facts': urlFacts,
+                      'findings': urlFindings,
                       'isPdf': false,
                       'skipped': false,
                     };
+                  }
 
-                    await _updateDeepResearchPhase(
-                      stageId: stageId,
-                      phaseTitle: phaseTitle,
-                      facts: phaseFacts,
-                      findings: phaseFindings,
-                      skippedPdfs: phaseSkippedPdfs,
-                      failedFetches: phaseFailedFetches,
-                    );
+                  await _updateDeepResearchPhase(
+                    stageId: stageId,
+                    phaseTitle: phaseTitle,
+                    facts: phaseFacts,
+                    findings: phaseFindings,
+                    skippedPdfs: phaseSkippedPdfs,
+                    failedFetches: phaseFailedFetches,
+                  );
 
+                  for (final entry in fetchedEventIds.entries) {
+                    final url = entry.key;
+                    final eventId = entry.value;
+                    final eventWatch = fetchedStopwatches[url]!;
+                    final urlFacts = facts
+                        .where(
+                            (f) => f['source']?.toString() == url)
+                        .length;
+                    final urlFindings = findings
+                        .where(
+                            (f) => f['source']?.toString() == url)
+                        .length;
                     finishResearchEvent(
                       eventId,
                       status: 'done',
                       stopwatch: eventWatch,
                       details: {
-                        'url': targetUrl,
+                        'url': url,
                         'parse_format': 'html',
-                        'facts_count': facts.length,
-                        'findings_count': findings.length,
+                        'facts_count': urlFacts,
+                        'findings_count': urlFindings,
                         'result_payload': {
-                          'summary':
-                              '${facts.length} facts, ${findings.length} findings extracted',
+                          'summary': 'Batch summarized',
                         },
                       },
                     );
-                    urlResults[idx] =
-                        'Successfully summarized: ${facts.length} facts, ${findings.length} findings.';
-                  } catch (e) {
-                    final errStr = 'Summarization failed: $e';
+                  }
+                } catch (e) {
+                  final errStr = 'Batch summarization failed: $e';
+                  for (final entry in fetchedEventIds.entries) {
                     finishResearchEvent(
-                      eventId,
+                      entry.value,
                       status: 'error',
-                      stopwatch: eventWatch,
-                      details: {'url': targetUrl, 'parse_format': 'html'},
+                      stopwatch: fetchedStopwatches[entry.key]!,
+                      details: {'url': entry.key, 'parse_format': 'html'},
                       error: errStr,
                     );
-                    urlResults[idx] = errStr;
                   }
-                }),
-              );
+                  for (var k = 0; k < urls.length; k++) {
+                    if (fetchedTexts.containsKey(urls[k])) {
+                      urlResults[k] = errStr;
+                    }
+                  }
+                }
+              }
 
               final StringBuffer combinedResults = StringBuffer();
               for (var k = 0; k < urls.length; k++) {
@@ -5399,6 +5405,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           steps[i]['error'] = stepFailure;
         }
         steps[i]['content'] = stepContent;
+
+        // Update cross-phase context for next phase (compact summary, ~200 tokens)
+        if (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty) {
+          crossPhaseContext.writeln(
+            '- Phase ${i + 1} ($phaseTitle): ${phaseFacts.length} facts, ${phaseFindings.length} findings. ' +
+            'Key: ${phaseFacts.take(2).map((f) => "${f['subject']} ${f['metric']}: ${f['value']}").join("; ")}',
+          );
+        }
+
         _publishResearchState(sessionIndex, messageIndex, stateMap);
         await _saveSessions();
       }
@@ -5449,6 +5464,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           maxEvidenceTokens,
         );
         tempJsonContent = writerExport['content']?.toString() ?? '[]';
+        // Use compact structured text if available (~40% fewer tokens than JSON)
+        final compactText = writerExport['compact_text']?.toString() ?? '';
         rawTempJson = await _deepResearchBridge.exportTemp();
         final rawPhases = jsonDecode(rawTempJson);
         final exportedPhases = jsonDecode(tempJsonContent);
@@ -5501,6 +5518,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             'No verified source URLs were persisted to temp.json, so a research artifact cannot be generated safely.';
       }
 
+      // Prefer compact structured text for the writer LLM (~40% fewer tokens than JSON)
+      final writerEvidence = compactText.isNotEmpty ? compactText : tempJsonContent;
       List<ChatMessage> writerMessages = [
         const ChatMessage(
           role: MessageRole.system,
@@ -5509,12 +5528,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         ChatMessage(
           role: MessageRole.user,
           text:
-              "Here is the retrieved facts and findings (temp.json):\n$tempJsonContent\n\n"
+              "Here is the retrieved evidence:\n$writerEvidence\n\n"
               "Execution issues that must be disclosed in the report:\n"
               "${jsonEncode(executionIssues)}\n\n"
               "Please write the final, comprehensive research report in Markdown format. "
               "Use clear headings, detailed paragraphs, and tables. Do not use SVG, HTML, Mermaid, "
-              "or image-based visuals. Use only the URLs provided in temp.json; do not invent, infer, or search for sources. "
+              "or image-based visuals. Use only the URLs provided in the evidence; do not invent, infer, or search for sources. "
               "The app will insert the verified source list directly into the final artifact.",
         ),
       ];
@@ -5632,6 +5651,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         stateMap['error'] = 'Writer agent failed: $writerFailure';
       }
       stateMap['plan_end_ms'] = DateTime.now().millisecondsSinceEpoch;
+
+      // Clean up temp.json after successful report generation to free storage
+      if (writerFailure == null) {
+        try {
+          await _deepResearchBridge.reset(keepCheckpoint: false);
+          debugPrint('Deep Research: temp.json cleaned up after successful report.');
+        } catch (e) {
+          debugPrint('Deep Research: temp.json cleanup failed: $e');
+        }
+      }
 
       if (mounted) {
         setState(() {
