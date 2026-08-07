@@ -5455,6 +5455,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       // Raw temp.json is the source of truth for verified URLs (budget export
       // may trim records and drop sources).
       String rawTempJson = '[]';
+      String compactText = '';
       String? writerInputFailure;
       try {
         final int userBudget = _writerContextBudget;
@@ -5465,7 +5466,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         );
         tempJsonContent = writerExport['content']?.toString() ?? '[]';
         // Use compact structured text if available (~40% fewer tokens than JSON)
-        final compactText = writerExport['compact_text']?.toString() ?? '';
+        compactText = writerExport['compact_text']?.toString() ?? '';
         rawTempJson = await _deepResearchBridge.exportTemp();
         final rawPhases = jsonDecode(rawTempJson);
         final exportedPhases = jsonDecode(tempJsonContent);
