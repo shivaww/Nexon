@@ -57,6 +57,9 @@ class DriveSyncService {
   // Matches the Google OAuth Web Client ID configured in Supabase Auth.
   static const _googleOAuthClientId =
       '324056833787-tvm3a99dvsnt9hhpfht8saub1hnegkkj.apps.googleusercontent.com';
+  // Web-type OAuth clients require the client secret for refresh grants.
+  // Value: Google Cloud Console > APIs & Services > Credentials > your Web client.
+  static const _googleOAuthClientSecret = '';
   static const _maxArtifactBytes = 2 * 1024 * 1024;
   static const _textExtensions = {
     '.md',
@@ -109,7 +112,7 @@ class DriveSyncService {
     final token = session.providerToken;
     final refresh = session.providerRefreshToken;
     final expiry = (token != null && token.isNotEmpty)
-        ? DateTime.now().toUtc().add(const Duration(minutes: 50))
+        ? DateTime.now().toUtc().add(const Duration(minutes: 55))
         : null;
     await _storeGoogleTokens(
       accessToken: token,
@@ -578,18 +581,23 @@ class DriveSyncService {
     final liveToken = session?.providerToken;
     final liveRefresh = session?.providerRefreshToken;
 
-    // Persist fresh tokens from Supabase OAuth sign-in without wiping stored refresh tokens
-    if (liveRefresh != null && liveRefresh.isNotEmpty) {
+    // Persist only genuinely new sign-in tokens. Never rewrite expiry for
+    // a stale session token — that resurrects dead tokens as "valid".
+    var stored = await _readGoogleTokens();
+    if (liveToken != null &&
+        liveToken.isNotEmpty &&
+        liveToken != stored.accessToken) {
       await _storeGoogleTokens(
         accessToken: liveToken,
         refreshToken: liveRefresh,
-        expiry: liveToken != null && liveToken.isNotEmpty
-            ? DateTime.now().toUtc().add(const Duration(minutes: 50))
-            : null,
+        expiry: DateTime.now().toUtc().add(const Duration(minutes: 55)),
       );
+      stored = await _readGoogleTokens();
+    } else if (liveRefresh != null &&
+        liveRefresh.isNotEmpty &&
+        stored.refreshToken?.isNotEmpty != true) {
+      await _storeGoogleTokens(refreshToken: liveRefresh);
     }
-
-    final stored = await _readGoogleTokens();
     final refreshToken = stored.refreshToken?.isNotEmpty == true
         ? stored.refreshToken
         : (liveRefresh?.isNotEmpty == true ? liveRefresh : null);
@@ -635,54 +643,55 @@ class DriveSyncService {
       );
     }
 
-    // Try Supabase session refresh first if available
+    // 1. Nexon backend (Render): server-side secret exchange. Only the
+    // refresh token travels — backup data never touches the backend.
+    final jwtToken = Supabase.instance.client.auth.currentSession?.accessToken;
+    Future<http.Response> renderCall(Duration t) => http.post(
+          Uri.parse(
+            'https://nexon-jyp1.onrender.com/api/refresh-google-drive-token',
+          ),
+          headers: {
+            'Content-Type': 'application/json',
+            if (jwtToken != null && jwtToken.isNotEmpty)
+              'Authorization': 'Bearer $jwtToken',
+          },
+          body: jsonEncode({'refresh_token': refreshToken}),
+        ).timeout(t);
     try {
-      final session = Supabase.instance.client.auth.currentSession;
-      if (session != null) {
-        final res = await Supabase.instance.client.auth.refreshSession();
-        final newLiveToken = res.session?.providerToken;
-        if (newLiveToken != null && newLiveToken.isNotEmpty) {
-          final expiry = DateTime.now().toUtc().add(const Duration(minutes: 50));
-          await _storeGoogleTokens(accessToken: newLiveToken, expiry: expiry);
-          diagnostics?.add('✅ Refreshed Google token via Supabase session');
-          return _RefreshResult(token: newLiveToken);
-        }
+      http.Response response;
+      try {
+        response = await renderCall(const Duration(seconds: 12));
+      } on TimeoutException {
+        diagnostics?.add('⏳ Backend waking (cold start), retrying…');
+        response = await renderCall(const Duration(seconds: 45));
       }
-    } catch (_) {}
-
-    // 1. Try Render Backend Endpoint (https://nexon-jyp1.onrender.com/api/refresh-google-drive-token)
-    try {
-      final jwtToken = Supabase.instance.client.auth.currentSession?.accessToken;
-      final response = await http.post(
-        Uri.parse('https://nexon-jyp1.onrender.com/api/refresh-google-drive-token'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (jwtToken != null && jwtToken.isNotEmpty) 'Authorization': 'Bearer $jwtToken',
-        },
-        body: jsonEncode({'refresh_token': refreshToken}),
-      ).timeout(const Duration(seconds: 30));
-
       if (response.statusCode == 200) {
         final payload = jsonDecode(response.body) as Map<String, dynamic>;
         final accessToken = payload['access_token'] as String?;
-        final updatedRefreshToken = payload['refresh_token'] as String?;
         if (accessToken != null && accessToken.isNotEmpty) {
           final expiresIn = payload['expires_in'];
           final expirySeconds = (expiresIn is num && expiresIn > 120)
               ? expiresIn.toInt() - 120
               : 3000;
-          final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
           await _storeGoogleTokens(
             accessToken: accessToken,
-            refreshToken: updatedRefreshToken,
-            expiry: expiry,
+            refreshToken: payload['refresh_token'] as String?,
+            expiry: DateTime.now().toUtc().add(Duration(seconds: expirySeconds)),
           );
-          diagnostics?.add('✅ Refreshed Google token via Render backend server');
+          diagnostics?.add('✅ Refreshed Google token via Nexon backend');
           return _RefreshResult(token: accessToken);
         }
       }
+      final body = response.body;
+      diagnostics?.add('⚠️ Backend refresh failed (${response.statusCode}): $body');
+      if (body.contains('invalid_grant')) {
+        return const _RefreshResult(
+          error: 'Google Drive authorization was revoked or expired. Please sign in again.',
+          needsRelogin: true,
+        );
+      }
     } catch (e) {
-      diagnostics?.add('⚠️ Render backend refresh attempt failed: $e');
+      diagnostics?.add('⚠️ Backend refresh attempt failed: $e');
     }
 
     // 2. Delegate token refresh to server-side Supabase Edge Function refresh-google-drive-token
@@ -728,7 +737,8 @@ class DriveSyncService {
       diagnostics?.add('⚠️ Edge Function refresh request failed: $e');
     }
 
-    // Direct fallback for public mobile client IDs (no client_secret passed)
+    // Direct Google refresh. Web-type OAuth clients require the client
+    // secret; without it Google rejects the refresh grant.
     if (_googleOAuthClientId.isNotEmpty) {
       try {
         final response = await http.post(
@@ -736,6 +746,8 @@ class DriveSyncService {
           headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
           body: {
             'client_id': _googleOAuthClientId,
+            if (_googleOAuthClientSecret.isNotEmpty)
+              'client_secret': _googleOAuthClientSecret,
             'grant_type': 'refresh_token',
             'refresh_token': refreshToken,
           },
@@ -750,7 +762,11 @@ class DriveSyncService {
                 ? expiresIn.toInt() - 120
                 : 3000;
             final expiry = DateTime.now().toUtc().add(Duration(seconds: expirySeconds));
-            await _storeGoogleTokens(accessToken: accessToken, expiry: expiry);
+            await _storeGoogleTokens(
+              accessToken: accessToken,
+              refreshToken: payload['refresh_token'] as String?,
+              expiry: expiry,
+            );
             diagnostics?.add('✅ Google Drive access token refreshed silently');
             return _RefreshResult(token: accessToken);
           }
