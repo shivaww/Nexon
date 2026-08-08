@@ -1450,15 +1450,172 @@ class _ChatHomePageState extends State<ChatHomePage> {
   @override
   void initState() {
     super.initState();
+    _messageController.addListener(_handleMessageTextChanged);
     _loadSettings();
   }
 
   @override
   void dispose() {
+    _messageController.removeListener(_handleMessageTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
     _mcpHttpClient.close();
     super.dispose();
+  }
+
+  // Large paste handling: very large pastes can be truncated by the IME,
+  // so we detect big single-insertion jumps on the message controller,
+  // revert them, and let the user insert the full clipboard text or
+  // attach it as a file instead.
+  static const int _largePasteThreshold = 1000;
+  String _lastMessageText = '';
+  bool _suppressPasteDetection = false;
+  bool _pasteChoiceDialogOpen = false;
+
+  void _handleMessageTextChanged() {
+    final newText = _messageController.text;
+    final oldText = _lastMessageText;
+    _lastMessageText = newText;
+    if (_suppressPasteDetection || _pasteChoiceDialogOpen) return;
+    if (newText.length - oldText.length < _largePasteThreshold) return;
+
+    // Locate the inserted span via common prefix/suffix comparison.
+    final minLen = oldText.length < newText.length
+        ? oldText.length
+        : newText.length;
+    var prefix = 0;
+    while (prefix < minLen &&
+        oldText.codeUnitAt(prefix) == newText.codeUnitAt(prefix)) {
+      prefix++;
+    }
+    var suffix = 0;
+    while (suffix < minLen - prefix &&
+        oldText.codeUnitAt(oldText.length - 1 - suffix) ==
+            newText.codeUnitAt(newText.length - 1 - suffix)) {
+      suffix++;
+    }
+    final inserted = newText.substring(prefix, newText.length - suffix);
+    if (inserted.length < _largePasteThreshold) return;
+
+    // Revert the field while the user decides how to handle the paste.
+    final before = oldText.substring(0, prefix);
+    final after = oldText.substring(oldText.length - suffix);
+    _suppressPasteDetection = true;
+    _messageController.text = oldText;
+    _suppressPasteDetection = false;
+    _showLargePasteChoiceDialog(before, after, inserted);
+  }
+
+  Future<void> _showLargePasteChoiceDialog(
+    String before,
+    String after,
+    String inserted,
+  ) async {
+    _pasteChoiceDialogOpen = true;
+    String clipboardText = '';
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      clipboardText = data?.text ?? '';
+    } catch (_) {
+      clipboardText = '';
+    }
+    // The IME may have truncated the paste; prefer the full clipboard
+    // content when it matches what actually reached the field.
+    final payload = (clipboardText.length > inserted.length &&
+            clipboardText.startsWith(inserted))
+        ? clipboardText
+        : inserted;
+    if (!mounted) {
+      _pasteChoiceDialogOpen = false;
+      return;
+    }
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFBF2),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Large Paste Detected',
+          style: TextStyle(
+            color: Color(0xFF7B4E2E),
+            fontWeight: FontWeight.bold,
+            fontFamily: 'serif',
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${payload.length} characters. Paste as text or attach as file?',
+              style: const TextStyle(color: Color(0xFF2D241C), fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              dense: true,
+              leading: const Icon(
+                Icons.text_fields_rounded,
+                color: Color(0xFF2D241C),
+              ),
+              title: const Text(
+                'Paste as Text',
+                style: TextStyle(color: Color(0xFF2D241C)),
+              ),
+              onTap: () => Navigator.of(ctx).pop('text'),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(
+                Icons.attach_file_rounded,
+                color: Color(0xFF2D241C),
+              ),
+              title: const Text(
+                'Attach as File',
+                style: TextStyle(color: Color(0xFF2D241C)),
+              ),
+              onTap: () => Navigator.of(ctx).pop('file'),
+            ),
+          ],
+        ),
+      ),
+    );
+    _pasteChoiceDialogOpen = false;
+    if (choice == 'text') {
+      final full = before + payload + after;
+      _suppressPasteDetection = true;
+      _messageController.value = TextEditingValue(
+        text: full,
+        selection: TextSelection.collapsed(offset: full.length),
+      );
+      _suppressPasteDetection = false;
+    } else if (choice == 'file') {
+      final file = AttachedFile(
+        name: 'pasted_${DateTime.now().millisecondsSinceEpoch}.txt',
+        content: payload,
+      );
+      setState(() {
+        final sessionIndex = _sessions.indexWhere(
+          (s) => s.id == _activeSessionId,
+        );
+        if (sessionIndex != -1) {
+          final list = List<AttachedFile>.from(
+            _sessions[sessionIndex].attachedFiles,
+          )..add(file);
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+            attachedFiles: list,
+          );
+        }
+      });
+      _saveSessions();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(
+          const SnackBar(content: Text('Pasted text attached as file')),
+        );
+      }
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -6276,7 +6433,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         final messages = List<ChatMessage>.from(session.messages);
         if (index >= 0 && index < messages.length) {
           final targetMessage = messages[index];
+          _suppressPasteDetection = true;
           _messageController.text = targetMessage.text;
+          _suppressPasteDetection = false;
           _editingMessageIndex = index;
         }
       }
