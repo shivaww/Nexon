@@ -568,6 +568,16 @@ class _ForgeChatAppState extends State<ForgeChatApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Nexon',
+      builder: (context, child) {
+        final data = MediaQuery.of(context);
+        final scale = data.textScaler.scale(1.0);
+        return MediaQuery(
+          data: scale > 1.2
+              ? data.copyWith(textScaler: const TextScaler.linear(1.2))
+              : data,
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -6498,7 +6508,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
-    final wide = width >= 840;
+    final wide = width >= 700;
     final activeSession = _activeSession;
 
     final chatHistoryPanel = ChatHistoryPanel(
@@ -6515,11 +6525,20 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     );
 
     return Scaffold(
-      drawer: wide ? null : Drawer(width: 330, child: chatHistoryPanel),
+      drawer: wide
+          ? null
+          : Drawer(
+              width: width < 400 ? width * 0.85 : 330,
+              child: chatHistoryPanel,
+            ),
       body: SafeArea(
         child: Row(
           children: [
-            if (wide) SizedBox(width: 330, child: chatHistoryPanel),
+            if (wide)
+              SizedBox(
+                width: (width * 0.36).clamp(280.0, 360.0),
+                child: chatHistoryPanel,
+              ),
             Expanded(
               child: ChatSurface(
                 provider: _provider,
@@ -6655,11 +6674,18 @@ class ChatHistoryPanel extends StatelessWidget {
         listItems.add(
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 4.0),
-            child: LiquidGlassSurface(
-              borderRadius: BorderRadius.circular(14),
-              backgroundColor: selected
-                  ? const Color(0xFFFFF6E5).withValues(alpha: 0.95)
-                  : const Color(0xFFFFFDF8).withValues(alpha: 0.65),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: selected
+                    ? const Color(0xFFFFF6E5).withValues(alpha: 0.95)
+                    : const Color(0xFFFFFDF8).withValues(alpha: 0.8),
+                border: Border.all(
+                  color: selected
+                      ? const Color(0xFFD8B98D)
+                      : const Color(0xFFE5DDD3),
+                ),
+              ),
               child: ListTile(
                 dense: true,
                 selected: selected,
@@ -6699,8 +6725,8 @@ class ChatHistoryPanel extends StatelessWidget {
                   ),
                 ),
                 trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  color: const Color(0xFF9B4D39),
+                  icon: const Icon(Icons.delete_outline, size: 16),
+                  color: const Color(0xFF8C7A6B),
                   onPressed: () => onSessionDelete(session.id),
                 ),
                 onTap: () => onSessionTap(session.id),
@@ -6739,8 +6765,8 @@ class ChatHistoryPanel extends StatelessWidget {
               : const Icon(Icons.history, size: 18, color: Color(0xFF7B4E2E)),
           label: Text(
             isLoadingMore
-                ? 'Loading previous chats…'
-                : 'Load More Previous Chats (+25)',
+                ? 'Loading…'
+                : 'Load earlier chats',
             style: const TextStyle(
               color: Color(0xFF7B4E2E),
               fontWeight: FontWeight.bold,
@@ -10514,7 +10540,7 @@ class _PulseDotState extends State<PulseDot>
 // ── Streaming cursor: the app sparkle, pulsing while the LLM streams ──
 
 class _StreamingCursor extends StatefulWidget {
-  const _StreamingCursor({this.size = 16, this.inline = false, super.key});
+  const _StreamingCursor({this.size = 22, this.inline = false, super.key});
 
   final double size;
   final bool inline;
@@ -10610,7 +10636,7 @@ class _StreamingCodeBlock extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              const _StreamingCursor(size: 14, inline: true),
+              const _StreamingCursor(size: 16, inline: true),
             ],
           ),
           const SizedBox(height: 8),
@@ -12004,6 +12030,39 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     );
   }
 
+  void _showAccountDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFFFFFBF2),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+        ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 40),
+        child: SizedBox(
+          height: MediaQuery.of(ctx).size.height * 0.72,
+          child: Column(
+            children: [
+              Align(
+                alignment: Alignment.topRight,
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Color(0xFF6C5946)),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  child: _buildAccountTab(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTabButton(int index, IconData icon, String label) {
     final active = _activeTab == index;
     return Expanded(
@@ -12011,10 +12070,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         onTap: () => setState(() => _activeTab = index),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
             color: active ? const Color(0xFF7B4E2E) : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
             boxShadow: active
                 ? [
                     BoxShadow(
@@ -12086,14 +12145,29 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             const SizedBox(height: 20),
 
             // Header Row
-            const Text(
-              'Input & Settings',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w900,
-                color: Color(0xFF2D241C),
-                letterSpacing: -0.5,
-              ),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Input & Settings',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF2D241C),
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Account & Sync',
+                  icon: const Icon(
+                    Icons.account_circle_outlined,
+                    color: Color(0xFF7B4E2E),
+                    size: 22,
+                  ),
+                  onPressed: _showAccountDialog,
+                ),
+              ],
             ),
 
             // Custom Tab Bar Selector (Liquid Glass style)
@@ -12104,9 +12178,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               child: Row(
                 children: [
                   _buildTabButton(0, Icons.smart_toy_outlined, 'Model'),
-                  _buildTabButton(1, Icons.explore_outlined, 'Capabilities'),
-                  _buildTabButton(2, Icons.account_circle_outlined, 'Account'),
-                  _buildTabButton(3, Icons.attachment_outlined, 'Attach'),
+                  _buildTabButton(1, Icons.explore_outlined, 'Features'),
+                  _buildTabButton(2, Icons.attachment_outlined, 'Attach'),
                 ],
               ),
             ),
@@ -12132,8 +12205,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       case 1:
         return _buildCapabilitiesTab();
       case 2:
-        return _buildAccountTab();
-      case 3:
         return _buildAttachTab(visionEnabled);
       default:
         return const SizedBox.shrink();

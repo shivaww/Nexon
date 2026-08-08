@@ -472,7 +472,7 @@ class _HomeScreenState extends State<HomeScreen>
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SizedBox(
-        height: 420,
+        height: (MediaQuery.sizeOf(ctx).height * 0.5).clamp(300.0, 460.0),
         child: Column(
           children: [
             Padding(

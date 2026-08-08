@@ -746,8 +746,12 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
       backgroundColor: AppColors.backgroundTertiary,
       title: const Text('Select Model'),
       content: SizedBox(
-        width: 520,
-        height: 420,
+        width: MediaQuery.sizeOf(context).width < 560
+            ? double.infinity
+            : 520,
+        height: MediaQuery.sizeOf(context).height < 700
+            ? MediaQuery.sizeOf(context).height * 0.55
+            : 420,
         child: Column(
           children: [
             TextField(
