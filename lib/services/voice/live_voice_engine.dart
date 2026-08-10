@@ -5,12 +5,15 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter/services.dart';
 
 enum LiveVoiceState { idle, listening, thinking, speaking, error }
 
 /// Hands-free speech recognition and reply playback.
 /// Uses the device's native TTS engine (flutter_tts) for all voice output.
 class LiveVoiceEngine extends ChangeNotifier {
+  static const MethodChannel _audioChannel =
+      MethodChannel('termux_forge/audio');
   final SpeechToText _speechToText = SpeechToText();
   FlutterTts? _flutterTts;
   bool _speechInitialized = false;
@@ -18,6 +21,7 @@ class LiveVoiceEngine extends ChangeNotifier {
   int _silentRestartCount = 0;
   bool _continuous = false;
   bool _muted = false;
+  bool _headsetConnected = false;
   ValueChanged<String>? _onFinalSpeechResult;
 
   LiveVoiceState _state = LiveVoiceState.idle;
@@ -118,6 +122,22 @@ class LiveVoiceEngine extends ChangeNotifier {
     }
   }
 
+  /// True only when a wired/Bluetooth headset is connected. The system
+  /// speech recognizer owns its own mic session that we cannot attach an
+  /// echo canceller to, so simultaneous listen-while-speaking (barge-in)
+  /// is only safe when the mic can't physically pick up our own TTS
+  /// output — i.e. audio isn't coming out of the phone's speaker.
+  Future<bool> _checkHeadsetConnected() async {
+    try {
+      final result =
+          await _audioChannel.invokeMethod<bool>('isHeadsetConnected');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('LiveVoice headset check failed: $e');
+      return false;
+    }
+  }
+
   // ── Listening ─────────────────────────────────────────────────────────────
 
   Future<void> startListening({
@@ -130,6 +150,7 @@ class LiveVoiceEngine extends ChangeNotifier {
     _silentRestartCount = 0;
     _continuous = true;
     _muted = false;
+    _headsetConnected = await _checkHeadsetConnected();
     _onFinalSpeechResult = onFinalResult;
     await stopTts();
     _stopRequested =
@@ -144,13 +165,20 @@ class LiveVoiceEngine extends ChangeNotifier {
     await _speechToText.listen(
       onResult: (SpeechRecognitionResult result) {
         final words = result.recognizedWords;
-        // Barge-in: user speaks while TTS is playing
-        if (_state == LiveVoiceState.speaking && _isBargeIn(words)) {
-          _muted = true;
-          unawaited(stopTts());
-          _setState(LiveVoiceState.listening);
-          _recognizedText = words;
-          notifyListeners();
+        if (_state == LiveVoiceState.speaking) {
+          // Only reachable when a headset is connected (mic stays fully
+          // closed while speaking otherwise). Anything heard here is
+          // either a genuine barge-in or an echo of our own TTS output —
+          // never treat it as a new user turn unless it passes the
+          // barge-in check. This is the fix for the AI "hearing" and
+          // replying to its own voice.
+          if (_isBargeIn(words)) {
+            _muted = true;
+            unawaited(stopTts());
+            _setState(LiveVoiceState.listening);
+            _recognizedText = words;
+            notifyListeners();
+          }
           return;
         }
         _recognizedText = result.recognizedWords;
@@ -193,8 +221,10 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   void _handleSpeechStatus(String status) {
-    // While speaking in continuous mode, restart listening so user can barge in
-    if (_state == LiveVoiceState.speaking && _continuous) {
+    // While speaking in continuous mode, restart listening so user can barge
+    // in — only when a headset is connected, since otherwise the mic would
+    // pick up our own TTS output through the speaker (see _headsetConnected).
+    if (_state == LiveVoiceState.speaking && _continuous && _headsetConnected) {
       Future.delayed(const Duration(milliseconds: 200), () {
         if (_continuous && _state == LiveVoiceState.speaking) {
           unawaited(_ensureBargeInListening());
@@ -305,7 +335,15 @@ class LiveVoiceEngine extends ChangeNotifier {
     }
     _isTtsSpeaking = true;
     _setState(LiveVoiceState.speaking);
-    if (_continuous) unawaited(_ensureBargeInListening());
+    if (_continuous) {
+      if (_headsetConnected) {
+        unawaited(_ensureBargeInListening());
+      } else {
+        // No headset: keep the mic fully closed while we're talking so it
+        // can never pick up our own voice from the speaker.
+        await _speechToText.stop();
+      }
+    }
     var sentence = _sentenceQueue.removeAt(0);
     sentence = sanitizeForNaturalTts(sentence);
     _currentSentenceCompleter = Completer<void>();
@@ -354,7 +392,7 @@ class LiveVoiceEngine extends ChangeNotifier {
   }
 
   Future<void> _ensureBargeInListening() async {
-    if (!_continuous || _speechToText.isListening) return;
+    if (!_continuous || !_headsetConnected || _speechToText.isListening) return;
     if (!await initSpeech()) return;
     final onFinalResult = _onFinalSpeechResult;
     if (onFinalResult != null) {
