@@ -18,7 +18,7 @@ from typing import List, Dict, Any, Optional
 # Workspace configuration and mobile limits
 WORKSPACE_DIR = os.path.expanduser(os.getenv("NEXON_WORKSPACE_DIR", "~/nexon_workspace"))
 MAX_WORKSPACE_MB = 150    # Total workspace disk limit (MB)
-MAX_FILE_SIZE_MB = 25     # Max single upload file size (MB)
+MAX_FILE_SIZE_MB = 150    # Max single upload file size (MB)
 CHUNK_SIZE_CHARS = 1200   # ~250-300 words per chunk
 CHUNK_OVERLAP = 150       # Overlap between consecutive chunks
 
@@ -74,7 +74,7 @@ class WorkspaceManager:
             "free_disk_mb": round(free_mb, 2)
         }
 
-    def ingest_file(self, file_path: str) -> Dict[str, Any]:
+    def ingest_file(self, file_path: str, rebuild: bool = True) -> Dict[str, Any]:
         """Ingests a file or unzips archives safely, discarding prohibited binaries."""
         path = Path(file_path)
         if not path.exists():
@@ -114,7 +114,7 @@ class WorkspaceManager:
                 if path.exists() and str(path.parent.resolve()) == str(self.workspace_path.resolve()):
                     os.remove(path)
 
-                index_res = self.rebuild_index()
+                index_res = self.rebuild_index() if rebuild else {"total_files": 0, "total_chunks": 0}
                 return {
                     "status": "success",
                     "action": "unzipped",
@@ -134,7 +134,7 @@ class WorkspaceManager:
             if path.resolve() != dest.resolve():
                 shutil.copy(path, dest)
 
-            index_res = self.rebuild_index()
+            index_res = self.rebuild_index() if rebuild else {"total_files": 0, "total_chunks": 0}
             return {
                 "status": "success",
                 "action": "ingested",
@@ -199,6 +199,104 @@ class WorkspaceManager:
 
         return ""
 
+    def _chunk_text(self, text: str, file_name: str, rel_path: str) -> List[Dict[str, Any]]:
+        """Structure-aware chunking: splits by paragraphs/headers, merges small ones."""
+        chunks = []
+        lines = text.split('\n')
+        current_chunk = []
+        current_len = 0
+        
+        def flush_chunk():
+            nonlocal current_chunk, current_len
+            if current_chunk:
+                chunk_text = '\n'.join(current_chunk).strip()
+                if chunk_text:
+                    chunks.append({
+                        "file": file_name,
+                        "relative_path": rel_path,
+                        "chunk_id": len(chunks),
+                        "content": chunk_text
+                    })
+                current_chunk = []
+                current_len = 0
+
+        for line in lines:
+            stripped = line.strip()
+            # Structural boundaries
+            is_header = stripped.startswith('#') or stripped.startswith('--- [Page')
+            is_table_row = stripped.startswith('|')
+            
+            # If we hit a structural boundary and current chunk is big enough, flush
+            if (is_header or is_table_row) and current_len > CHUNK_SIZE_CHARS * 0.5:
+                flush_chunk()
+            
+            current_chunk.append(line)
+            current_len += len(line) + 1  # +1 for newline
+            
+            # If chunk exceeds max size, flush
+            if current_len >= CHUNK_SIZE_CHARS:
+                flush_chunk()
+                
+        flush_chunk() # Flush any remaining
+        
+        # Post-processing: if any chunk is STILL too big (e.g., a single massive line),
+        # split it manually by characters.
+        final_chunks = []
+        for c in chunks:
+            if len(c["content"]) > CHUNK_SIZE_CHARS * 2:
+                text_content = c["content"]
+                step = CHUNK_SIZE_CHARS - CHUNK_OVERLAP
+                for i in range(0, len(text_content), step):
+                    chunk_text = text_content[i : i + CHUNK_SIZE_CHARS]
+                    final_chunks.append({
+                        "file": file_name,
+                        "relative_path": rel_path,
+                        "chunk_id": len(final_chunks),
+                        "content": chunk_text
+                    })
+            else:
+                c["chunk_id"] = len(final_chunks) # Reindex
+                final_chunks.append(c)
+                
+        return final_chunks
+
+    def check_dependencies(self) -> Dict[str, Any]:
+        """Checks for required system and python dependencies for text extraction."""
+        deps = {
+            "pypdf": False,
+            "python-docx": False,
+            "pdftotext": False
+        }
+        try:
+            import pypdf
+            deps["pypdf"] = True
+        except ImportError:
+            pass
+        try:
+            import docx
+            deps["python-docx"] = True
+        except ImportError:
+            pass
+        
+        if shutil.which("pdftotext"):
+            deps["pdftotext"] = True
+            
+        missing = [k for k, v in deps.items() if not v]
+        commands = []
+        if "pypdf" in missing:
+            commands.append("pip install pypdf")
+        if "python-docx" in missing:
+            commands.append("pip install python-docx")
+        if "pdftotext" in missing:
+            commands.append("pkg install poppler")
+            
+        return {
+            "dependencies": deps,
+            "missing": missing,
+            "commands": commands,
+            "all_present": len(missing) == 0
+        }
+
     def rebuild_index(self) -> Dict[str, Any]:
         """Chunk workspace documents and save chunk index to disk."""
         chunks = []
@@ -209,16 +307,7 @@ class WorkspaceManager:
                 text = self.extract_text_content(f)
                 if not text.strip():
                     continue
-
-                step = CHUNK_SIZE_CHARS - CHUNK_OVERLAP
-                for i in range(0, len(text), step):
-                    chunk_text = text[i : i + CHUNK_SIZE_CHARS]
-                    chunks.append({
-                        "file": f.name,
-                        "relative_path": str(f.relative_to(self.workspace_path)),
-                        "chunk_id": len(chunks),
-                        "content": chunk_text
-                    })
+                chunks.extend(self._chunk_text(text, f.name, str(f.relative_to(self.workspace_path))))
 
         with open(self.index_file, "w", encoding="utf-8") as idx_f:
             json.dump(chunks, idx_f)
@@ -398,7 +487,7 @@ class WorkspaceManager:
                 "outline": outline
             }
 
-    def search_chunks(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search_chunks(self, query, top_k: int = 5) -> List[Dict[str, Any]]:
         """Search indexed chunks from disk using keyword scoring."""
         if not self.index_file.exists():
             self.rebuild_index()
@@ -408,6 +497,10 @@ class WorkspaceManager:
                 chunks = json.load(idx_f)
         except Exception:
             return []
+
+        # Support array of queries for batch RAG
+        if isinstance(query, list):
+            query = " ".join(str(q) for q in query)
 
         keywords = [k.lower() for k in re.findall(r'\w+', query) if len(k) > 2]
         if not keywords:

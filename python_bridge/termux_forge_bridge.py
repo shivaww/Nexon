@@ -239,6 +239,7 @@ class TermuxForgeBridge:
         r.register("workspace_ingest", self._workspace_ingest)
         r.register("workspace_read_page", self._workspace_read_page)
         r.register("workspace_get_outline", self._workspace_get_outline)
+        r.register("workspace_check_deps", self._workspace_check_deps)
 
         # ── MCP ───────────────────────────────────────────────────────
         r.register("mcp_server_manage", self._mcp_server_manage)
@@ -898,8 +899,10 @@ class TermuxForgeBridge:
         from workspace import WorkspaceManager
         return WorkspaceManager().list_files()
 
-    async def _workspace_search(self, query: str = "", top_k: int = 5) -> list:
+    async def _workspace_search(self, query: str = "", queries: list = None, top_k: int = 5) -> list:
         from workspace import WorkspaceManager
+        if queries:
+            return WorkspaceManager().search_chunks(queries, top_k=top_k)
         return WorkspaceManager().search_chunks(query, top_k=top_k)
 
     async def _workspace_ingest(self, file_path: str = "") -> dict:
@@ -913,6 +916,10 @@ class TermuxForgeBridge:
     async def _workspace_get_outline(self, file_path: str = "") -> dict:
         from workspace import WorkspaceManager
         return WorkspaceManager().get_outline(file_path)
+
+    async def _workspace_check_deps(self) -> dict:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().check_dependencies()
 
     # ── MCP ───────────────────────────────────────────────────────────
 
@@ -2500,17 +2507,18 @@ class TermuxForgeBridge:
                     if not chunk:
                         break
                     size_written += len(chunk)
-                    if size_written > 25 * 1024 * 1024:  # 25 MB hard cap
+                    if size_written > 150 * 1024 * 1024:  # 150 MB hard cap
                         out_f.close()
                         dest.unlink(missing_ok=True)
                         return web.json_response(
-                            {"status": "error", "message": "File exceeds 25 MB upload limit"},
+                            {"status": "error", "message": "File exceeds 150 MB upload limit"},
                             status=413,
                         )
                     out_f.write(chunk)
 
-            # Ingest (chunk + index) via WorkspaceManager
-            result = mgr.ingest_file(str(dest))
+            # Ingest via WorkspaceManager. Skip indexing if ?ingest=false (for batch uploads).
+            ingest_now = request.query.get("ingest", "true").lower() != "false"
+            result = mgr.ingest_file(str(dest), rebuild=ingest_now)
             if result.get("status") == "error":
                 return web.json_response(result, status=422)
 
@@ -2525,6 +2533,31 @@ class TermuxForgeBridge:
         except Exception as exc:
             logger.error("Workspace upload failed: %s", exc)
             return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    async def _handle_workspace_reindex(self, request: web.Request) -> web.Response:
+        """Trigger a full workspace re-index (chunking) after batch uploads."""
+        try:
+            from workspace import WorkspaceManager
+            mgr = WorkspaceManager()
+            summary = mgr.rebuild_index()
+            return web.json_response({
+                "status": "success",
+                "index_summary": summary,
+            })
+        except Exception as exc:
+            logger.error("Workspace reindex failed: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    async def _handle_workspace_deps(self, request: web.Request) -> web.Response:
+        """Return dependency status for workspace document extraction."""
+        try:
+            from workspace import WorkspaceManager
+            mgr = WorkspaceManager()
+            deps = mgr.check_dependencies()
+            return web.json_response(deps)
+        except Exception as exc:
+            logger.error("Workspace dep check failed: %s", exc)
+            return web.json_response({"error": str(exc)}, status=500)
 
     async def _handle_http_post(self, request: web.Request) -> web.Response:
         """Handle HTTP POST requests to /mcp from the legacy Dart client."""
@@ -2657,9 +2690,11 @@ class TermuxForgeBridge:
         )
         
         # Start HTTP server
-        self._http_app = web.Application(client_max_size=30 * 1024 * 1024)  # 30 MB upload limit
+        self._http_app = web.Application(client_max_size=200 * 1024 * 1024)  # 200 MB upload limit (allows 150MB files)
         self._http_app.router.add_post('/mcp', self._handle_http_post)
         self._http_app.router.add_post('/workspace/upload', self._handle_workspace_upload)
+        self._http_app.router.add_post('/workspace/reindex', self._handle_workspace_reindex)
+        self._http_app.router.add_get('/workspace/deps', self._handle_workspace_deps)
         
         # Also support OPTIONS for CORS if needed
         async def handle_options(request):

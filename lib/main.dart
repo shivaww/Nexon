@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show ImageFilter;
 
@@ -2145,8 +2146,8 @@ jobs:
                 "AVAILABLE WORKSPACE TOOLS (emit ONE per turn, then wait for result):\n"
                 "- workspace_list: List uploaded files, sizes, and quota.\n"
                 "  <mcp_request>{\"method\":\"workspace_list\",\"params\":{}}</mcp_request>\n"
-                "- workspace_search: Search across all documents for relevant text chunks (lightweight RAG).\n"
-                "  <mcp_request>{\"method\":\"workspace_search\",\"params\":{\"query\":\"search terms\",\"top_k\":5}}</mcp_request>\n"
+                "- workspace_search: Search across all documents for relevant text chunks (lightweight RAG). Supports batch queries.\n"
+                "  <mcp_request>{\"method\":\"workspace_search\",\"params\":{\"queries\":[\"search terms 1\",\"search terms 2\"],\"top_k\":5}}</mcp_request>\n"
                 "- workspace_ingest: Index a new file from the workspace directory.\n"
                 "  <mcp_request>{\"method\":\"workspace_ingest\",\"params\":{\"file_path\":\"/path/to/file\"}}</mcp_request>\n"
                 "- workspace_read_page: Read a specific page of a document (text only, images skipped).\n"
@@ -2159,7 +2160,7 @@ jobs:
                 "3. SYNTHESIS & COMPARISON: Cross-reference facts across documents. Highlight consensus and contradictions.\n"
                 "4. CITATIONS: Include direct citations for derived claims (e.g., `[Source: textbook_ch1.pdf, Page 4]`).\n"
                 "5. TABLES & DIAGRAMS: Retain markdown tables and flowcharts when explaining concepts.\n"
-                "6. ONE TOOL PER TURN: Emit one <mcp_request> per turn, then STOP and wait for results.\n\n";
+                "6. ONE TOOL PER TURN: Emit EXACTLY ONE <mcp_request> block per turn, then STOP and wait for results. Do NOT emit multiple tool calls in the same turn.\n\n";
           }
 
           if (_svgVisualsEnabled) {
@@ -6569,6 +6570,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 onStartResearch: _startResearchLoop,
                 fileName: _getResearchFileName(activeSession.title),
                 onOpenLiveVoice: _openLiveVoiceMode,
+                activeFeaturePills: [
+                  if (_deepResearchEnabled) const _FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
+                  if (_agenticEnabled) const _FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
+                  if (_studyModeEnabled) const _FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
+                  if (_artifactsEnabled) const _FeaturePill(icon: Icons.extension, label: 'Artifacts'),
+                ],
               ),
             ),
           ],
@@ -6976,6 +6983,7 @@ class ChatSurface extends StatelessWidget {
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
   final ValueChanged<int>? onBranchChanged;
+  final List<Widget> activeFeaturePills;
 
   @override
   Widget build(BuildContext context) {
@@ -7218,6 +7226,7 @@ class ChatSurface extends StatelessWidget {
                   deepResearchEnabled: deepResearchEnabled,
                   isEditing: isEditing,
                   onCancelEdit: onCancelEdit,
+                  activeFeaturePills: activeFeaturePills,
                 ),
               ],
             ),
@@ -7857,6 +7866,50 @@ class _McpToolBlockState extends State<McpToolBlock> {
           Icons.difference_outlined,
           const Color(0xFFF05032),
           'Git diff',
+          null,
+        );
+      case 'workspace_list':
+        return (
+          Icons.folder_open_outlined,
+          const Color(0xFFD97706),
+          'List workspace files',
+          null,
+        );
+      case 'workspace_search':
+        {
+          final queries = params['queries'];
+          String? querySub;
+          if (queries is List && queries.isNotEmpty) {
+            querySub = queries.map((q) => '"$q"').join(', ');
+          } else if (p('query').isNotEmpty) {
+            querySub = '"${p('query')}"';
+          }
+          return (
+            Icons.search,
+            const Color(0xFF0369A1),
+            'Search workspace',
+            querySub,
+          );
+        }
+      case 'workspace_ingest':
+        return (
+          Icons.upload_file,
+          const Color(0xFF059669),
+          'Ingest  ${shortPath(p('file_path'))}',
+          null,
+        );
+      case 'workspace_read_page':
+        return (
+          Icons.menu_book_outlined,
+          const Color(0xFF0369A1),
+          'Read page  ${p('page')}',
+          shortPath(p('file_path')),
+        );
+      case 'workspace_get_outline':
+        return (
+          Icons.account_tree_outlined,
+          const Color(0xFF0369A1),
+          'Outline  ${shortPath(p('file_path'))}',
           null,
         );
       default:
@@ -10655,6 +10708,38 @@ class _StreamingCodeBlock extends StatelessWidget {
   }
 }
 
+class _FeaturePill extends StatelessWidget {
+  const _FeaturePill({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF7B4E2E).withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: const Color(0xFF7B4E2E).withOpacity(0.8)),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF7B4E2E).withOpacity(0.8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class Composer extends StatelessWidget {
   const Composer({
     required this.controller,
@@ -10670,6 +10755,7 @@ class Composer extends StatelessWidget {
     required this.onCancelEdit,
     this.onStop,
     this.onOpenLiveVoice,
+    this.activeFeaturePills = const [],
     super.key,
   });
 
@@ -10686,6 +10772,7 @@ class Composer extends StatelessWidget {
   final bool deepResearchEnabled;
   final bool isEditing;
   final VoidCallback onCancelEdit;
+  final List<Widget> activeFeaturePills;
 
   @override
   Widget build(BuildContext context) {
@@ -10883,6 +10970,22 @@ class Composer extends StatelessWidget {
               );
             },
           ),
+          if (activeFeaturePills.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6.0, left: 4.0),
+              child: SizedBox(
+                height: 24,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: activeFeaturePills
+                      .map((pill) => Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: pill,
+                          ))
+                      .toList(),
+                ),
+              ),
+            ),
           // Target #5: Bottom message input -> full-width pill glass container
           LiquidGlassSurface(
             borderRadius: BorderRadius.circular(30),
@@ -11820,8 +11923,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 
   Future<void> _pickFile() async {
-    const maxFileSizeBytes = 5 * 1024 * 1024; // 5 MB
-    const maxContentChars = 50000; // 50K chars — keeps SharedPreferences under limit
+    const maxFileSizeBytes = 5 * 1024 * 1024; // 5 MB (normal mode)
+    const maxContentChars = 50000; // 50K chars
 
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -11839,109 +11942,150 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           'yaml',
           'yml',
         ],
-        allowMultiple: false,
+        allowMultiple: true,
       );
-      if (result != null && result.files.single.path != null) {
-        final path = result.files.single.path!;
-        final file = File(path);
 
-        // Reject oversized files before they hit memory.
+      if (result == null || result.files.isEmpty) return;
+
+      // Validate files and filter by size limits
+      final validFiles = <PlatformFile>[];
+      for (final pickedFile in result.files) {
+        if (pickedFile.path == null) continue;
+        final file = File(pickedFile.path!);
         final stat = await file.stat();
-        if (stat.size > maxFileSizeBytes) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'File too large (${(stat.size / 1024 / 1024).toStringAsFixed(1)} MB). Max: 5 MB.',
-                ),
-              ),
-            );
-          }
-          return;
-        }
-
-        final ext = result.files.single.extension?.toLowerCase();
 
         if (_studyModeEnabled) {
-          // ── Study mode: stream-upload to Termux workspace via bridge HTTP ──
-          // Memory-efficient: file is streamed in chunks, NOT read entirely into RAM.
-          final fileName = result.files.single.name;
-          final fileSize = await file.length();
-          final progressNotifier = ValueNotifier<double>(0.0);
-          bool dialogShown = false;
-
-          if (mounted) {
-            showDialog(
-              context: context,
-              barrierDismissible: false,
-              builder: (ctx) => AlertDialog(
-                title: Text('Uploading $fileName…'),
-                content: ValueListenableBuilder<double>(
-                  valueListenable: progressNotifier,
-                  builder: (ctx, value, _) {
-                    final uploadedKb = (value * fileSize / 1024).round();
-                    final totalKb = (fileSize / 1024).round();
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        LinearProgressIndicator(
-                          value: value > 0 ? value : null,
-                          backgroundColor: Colors.white24,
-                          valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF7B4E2E)),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          value > 0
-                              ? '${(value * 100).round()}%  ($uploadedKb KB / $totalKb KB)'
-                              : 'Connecting…',
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            );
-            dialogShown = true;
+          if (stat.size > 150 * 1024 * 1024) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('${pickedFile.name} too large (${(stat.size / 1024 / 1024).toStringAsFixed(1)} MB). Max: 150 MB.')),
+              );
+            }
+            continue;
           }
+        } else {
+          if (stat.size > maxFileSizeBytes) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    '${pickedFile.name} too large (${(stat.size / 1024 / 1024).toStringAsFixed(1)} MB). Max: 5 MB for normal mode. Use Study Mode for up to 150MB.',
+                  ),
+                ),
+              );
+            }
+            continue;
+          }
+        }
+        validFiles.add(pickedFile);
+      }
 
-          try {
-            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload');
-            final httpClient = HttpClient();
+      if (validFiles.isEmpty) return;
+
+      if (_studyModeEnabled) {
+        // ── Study mode: batch stream-upload to Termux workspace ──
+        final totalFiles = validFiles.length;
+        final progressNotifier = ValueNotifier<double>(0.0);
+        final statusNotifier = ValueNotifier<String>('Preparing upload…');
+        final fileNotifier = ValueNotifier<String>('');
+        bool dialogShown = false;
+
+        if (mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Uploading to Workspace'),
+              content: ValueListenableBuilder<String>(
+                valueListenable: statusNotifier,
+                builder: (ctx, status, _) {
+                  return ValueListenableBuilder<double>(
+                    valueListenable: progressNotifier,
+                    builder: (ctx, value, _) {
+                      return ValueListenableBuilder<String>(
+                        valueListenable: fileNotifier,
+                        builder: (ctx, fileName, _) {
+                          final percent = (value * 100).round();
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              LinearProgressIndicator(
+                                value: value > 0 ? value : null,
+                                backgroundColor: Colors.white24,
+                                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF7B4E2E)),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                status,
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                              ),
+                              if (fileName.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  fileName,
+                                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              Text(
+                                value > 0 ? '$percent%' : '',
+                                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          );
+          dialogShown = true;
+        }
+
+        try {
+          int uploadedCount = 0;
+          final httpClient = HttpClient();
+
+          for (final pickedFile in validFiles) {
+            final path = pickedFile.path!;
+            final file = File(path);
+            final fileName = pickedFile.name;
+            final fileSize = await file.length();
+
+            fileNotifier.value = fileName;
+            statusNotifier.value = 'Uploading ${uploadedCount + 1}/$totalFiles';
+            progressNotifier.value = 0.0;
+
+            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload?ingest=false');
             final httpReq = await httpClient.postUrl(uploadUri);
 
             final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
             httpReq.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
 
-            // Write multipart header
             final header = '--$boundary\r\n'
                 'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n'
                 'Content-Type: application/octet-stream\r\n\r\n';
             httpReq.add(utf8.encode(header));
 
-            // Stream file in 64 KB chunks with progress tracking
             int bytesUploaded = 0;
             final stream = file.openRead();
             await for (final chunk in stream) {
               httpReq.add(chunk);
               bytesUploaded += chunk.length;
-              progressNotifier.value = bytesUploaded / fileSize;
+              final fileProgress = bytesUploaded / fileSize;
+              progressNotifier.value = (uploadedCount + fileProgress) / totalFiles;
             }
 
-            // Write multipart footer
             httpReq.add(utf8.encode('\r\n--$boundary--\r\n'));
-
             final httpResp = await httpReq.close();
             final respBody = await httpResp.transform(utf8.decoder).join();
-            httpClient.close();
-
-            if (mounted && dialogShown) {
-              Navigator.of(context, rootNavigator: true).pop();
-              dialogShown = false;
-            }
 
             if (httpResp.statusCode != 200) {
-              throw Exception('Upload failed (${httpResp.statusCode}): $respBody');
+              throw Exception('Upload failed for $fileName (${httpResp.statusCode}): $respBody');
             }
 
             final respJson = jsonDecode(respBody) as Map<String, dynamic>;
@@ -11954,52 +12098,89 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 workspacePath: workspacePath,
               ),
             );
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('$fileName indexed in workspace')),
-              );
-            }
-          } catch (e) {
-            if (mounted && dialogShown) {
-              Navigator.of(context, rootNavigator: true).pop();
-            }
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Workspace upload failed: $e')),
-              );
-            }
+            uploadedCount++;
           }
-          return;
-        }
 
-        // ── Normal mode: read file into memory for inline attachment ──
-        String text = '';
-        if (ext == 'pdf') {
-          final bytes = await file.readAsBytes();
-          final PdfDocument document = PdfDocument(inputBytes: bytes);
-          try {
-            text = PdfTextExtractor(document).extractText();
-          } finally {
-            document.dispose();
+          httpClient.close();
+
+          // ── Chunking / Indexing phase ──
+          fileNotifier.value = '';
+          statusNotifier.value = 'Indexing & chunking documents…';
+          progressNotifier.value = null;
+
+          final reindexUri = Uri.parse('http://127.0.0.1:8390/workspace/reindex');
+          final reindexClient = HttpClient();
+          final reindexReq = await reindexClient.postUrl(reindexUri);
+          reindexReq.headers.set('Content-Type', 'application/json');
+          final reindexResp = await reindexReq.close();
+          final reindexBody = await reindexResp.transform(utf8.decoder).join();
+          reindexClient.close();
+
+          if (reindexResp.statusCode != 200) {
+            throw Exception('Reindex failed (${reindexResp.statusCode}): $reindexBody');
           }
-        } else {
-          text = await file.readAsString();
-        }
 
-        // ── Normal mode: inline attachment ──
-        // Truncate so SharedPreferences (and the LLM context) don't blow up.
-        if (text.length > maxContentChars) {
-          text =
-              '${text.substring(0, maxContentChars)}\n\n[Content truncated — file exceeds size limit for full analysis]';
-        }
+          final reindexJson = jsonDecode(reindexBody) as Map<String, dynamic>;
+          final summary = reindexJson['index_summary'] as Map<String, dynamic>? ?? {};
+          final totalChunks = summary['total_chunks'] ?? 0;
 
-        widget.onFileAttached(
-          AttachedFile(name: result.files.single.name, content: text),
-        );
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Document attached successfully')),
+          progressNotifier.value = 1.0;
+          statusNotifier.value = 'Done! $totalChunks chunks indexed.';
+
+          await Future.delayed(const Duration(milliseconds: 800));
+
+          if (mounted && dialogShown) {
+            Navigator.of(context, rootNavigator: true).pop();
+            dialogShown = false;
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('$uploadedCount file(s) uploaded & indexed ($totalChunks chunks)')),
+            );
+          }
+        } catch (e) {
+          if (mounted && dialogShown) {
+            Navigator.of(context, rootNavigator: true).pop();
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Workspace upload failed: $e')),
+            );
+          }
+        }
+      } else {
+        // ── Normal mode: read files into memory for inline attachment ──
+        for (final pickedFile in validFiles) {
+          final file = File(pickedFile.path!);
+          final ext = pickedFile.extension?.toLowerCase();
+          String text = '';
+
+          if (ext == 'pdf') {
+            final bytes = await file.readAsBytes();
+            final PdfDocument document = PdfDocument(inputBytes: bytes);
+            try {
+              text = PdfTextExtractor(document).extractText();
+            } finally {
+              document.dispose();
+            }
+          } else {
+            text = await file.readAsString();
+          }
+
+          if (text.length > maxContentChars) {
+            text =
+                '${text.substring(0, maxContentChars)}\n\n[Content truncated — file exceeds size limit for full analysis]';
+          }
+
+          widget.onFileAttached(
+            AttachedFile(name: pickedFile.name, content: text),
           );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${pickedFile.name} attached')),
+            );
+          }
         }
       }
     } catch (e) {
@@ -12944,6 +13125,64 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   await _saveStudyMode(val);
                   widget.onStudyModeEnabledChanged(val);
                   if (val) widget.onAgenticEnabledChanged(false);
+
+                  if (val) {
+                    // Check backend dependencies for document extraction
+                    try {
+                      final client = HttpClient();
+                      client.connectionTimeout = const Duration(seconds: 4);
+                      final req = await client.getUrl(Uri.parse('http://127.0.0.1:8390/workspace/deps'));
+                      final resp = await req.close();
+                      final body = await resp.transform(utf8.decoder).join();
+                      client.close();
+
+                      if (resp.statusCode == 200) {
+                        final deps = jsonDecode(body) as Map<String, dynamic>;
+                        final allPresent = deps['all_present'] == true;
+                        if (!allPresent && mounted) {
+                          final missing = (deps['missing'] as List).cast<String>();
+                          final commands = (deps['commands'] as List).cast<String>();
+                          showDialog(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Missing Document Extractors'),
+                              content: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Study mode is enabled, but some document extractors are missing. You may not be able to index PDFs or DOCX files until they are installed in Termux.',
+                                    style: TextStyle(fontSize: 13),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text('Missing: ${missing.join(', ')}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                  const SizedBox(height: 8),
+                                  const Text('Run in Termux:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                  const SizedBox(height: 4),
+                                  ...commands.map((c) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 4),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(color: const Color(0xFF1E1E2E), borderRadius: BorderRadius.circular(6)),
+                                      child: SelectableText(c, style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.greenAccent)),
+                                    ),
+                                  )),
+                                ],
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('Got it'),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                      }
+                    } catch (_) {
+                      // Silently fail if bridge isn't running yet — user can toggle later
+                    }
+                  }
                 },
               ),
             ],
@@ -16940,10 +17179,9 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                 Expanded(
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.science,
-                        size: 18,
-                        color: Color(0xFF2C5282),
+                      _ResearchAgentAvatars(
+                        status: status,
+                        isSending: widget.isSending,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -19097,5 +19335,244 @@ class SimpleSemaphore {
     } finally {
       release();
     }
+  }
+class _ResearchAgentAvatars extends StatefulWidget {
+  const _ResearchAgentAvatars({required this.status, required this.isSending});
+  final String status;
+  final bool isSending;
+
+  @override
+  State<_ResearchAgentAvatars> createState() => _ResearchAgentAvatarsState();
+}
+
+class _ResearchAgentAvatarsState extends State<_ResearchAgentAvatars>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _maybeStart();
+  }
+
+  void _maybeStart() {
+    if (widget.isSending &&
+        (widget.status == 'planning' ||
+            widget.status == 'running' ||
+            widget.status == 'generating_report')) {
+      _controller.repeat();
+    } else {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_ResearchAgentAvatars oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _maybeStart();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  int? get _activeAgent {
+    if (!widget.isSending) return null;
+    switch (widget.status) {
+      case 'planning':
+        return 0;
+      case 'running':
+        return 1;
+      case 'generating_report':
+        return 2;
+      default:
+        return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _activeAgent;
+    return SizedBox(
+      width: 60,
+      height: 32,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          return CustomPaint(
+            painter: _ResearchAgentsPainter(
+              t: _controller.value,
+              activeAgent: active,
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ResearchAgentsPainter extends CustomPainter {
+  final double t;
+  final int? activeAgent;
+
+  _ResearchAgentsPainter({required this.t, required this.activeAgent});
+
+  static const double bed0X = 8.0;
+  static const double bed1X = 22.0;
+  static const double bed2X = 36.0;
+  static const double computerX = 52.0;
+  static const double baseY = 18.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    _drawBed(canvas, bed0X);
+    _drawBed(canvas, bed1X);
+    _drawBed(canvas, bed2X);
+    _drawComputer(canvas, computerX);
+
+    final labels = ['Planner', 'Researcher', 'Writer'];
+    for (int i = 0; i < 3; i++) {
+      final isActive = activeAgent == i;
+      final x = isActive ? computerX : [bed0X, bed1X, bed2X][i];
+      _drawAgent(canvas, x, baseY, i, isActive);
+      if (isActive) {
+        _drawLabel(canvas, labels[i], x, baseY - 12);
+      }
+    }
+  }
+
+  void _drawLabel(Canvas canvas, String text, double cx, double cy) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: const TextStyle(
+          fontSize: 7,
+          color: Color(0xFF2C5282),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(cx - tp.width / 2, cy));
+  }
+
+  void _drawBed(Canvas canvas, double x) {
+    final paint = Paint()
+      ..color = Colors.brown.shade300
+      ..style = PaintingStyle.fill;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, baseY + 4), width: 10, height: 4),
+        const Radius.circular(2),
+      ),
+      paint,
+    );
+    final pillowPaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x - 3, baseY + 4), width: 4, height: 3),
+        const Radius.circular(1.5),
+      ),
+      pillowPaint,
+    );
+  }
+
+  void _drawComputer(Canvas canvas, double x) {
+    final deskPaint = Paint()..color = Colors.grey.shade400..style = PaintingStyle.fill;
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, baseY + 6), width: 12, height: 2), deskPaint);
+    final monitorPaint = Paint()..color = const Color(0xFF2C5282)..style = PaintingStyle.fill;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, baseY), width: 8, height: 6),
+        const Radius.circular(1),
+      ),
+      monitorPaint,
+    );
+    final screenPaint = Paint()..color = const Color(0xFF4299E1)..style = PaintingStyle.fill;
+    canvas.drawRect(Rect.fromCenter(center: Offset(x, baseY), width: 6, height: 4), screenPaint);
+  }
+
+  void _drawAgent(Canvas canvas, double x, double y, int type, bool isActive) {
+    final colors = [
+      const Color(0xFF2B6CB0),
+      const Color(0xFF38A169),
+      const Color(0xFFDD6B20),
+    ];
+    final paint = Paint()..color = colors[type]..style = PaintingStyle.fill;
+
+    double yOffset = 0;
+    if (isActive) {
+      yOffset = math.sin(t * math.pi * 2) * 1.5;
+    }
+    final cy = y + yOffset;
+
+    canvas.drawCircle(Offset(x, cy), 4, paint);
+    _drawFace(canvas, x, cy, type, isActive);
+  }
+
+  void _drawFace(Canvas canvas, double cx, double cy, int type, bool isActive) {
+    final whitePaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
+    final blackPaint = Paint()..color = Colors.black87..style = PaintingStyle.fill;
+
+    if (isActive) {
+      canvas.drawCircle(Offset(cx - 1.2, cy - 0.5), 1.0, whitePaint);
+      canvas.drawCircle(Offset(cx + 1.2, cy - 0.5), 1.0, whitePaint);
+      canvas.drawCircle(Offset(cx - 1.2, cy - 0.5), 0.5, blackPaint);
+      canvas.drawCircle(Offset(cx + 1.2, cy - 0.5), 0.5, blackPaint);
+    } else {
+      final linePaint = Paint()
+        ..color = Colors.black87
+        ..strokeWidth = 0.8
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(Offset(cx - 2.0, cy - 0.5), Offset(cx - 0.4, cy - 0.5), linePaint);
+      canvas.drawLine(Offset(cx + 0.4, cy - 0.5), Offset(cx + 2.0, cy - 0.5), linePaint);
+      final zTp = TextPainter(
+        text: TextSpan(
+          text: 'z',
+          style: TextStyle(fontSize: 6, color: Colors.black54, fontWeight: FontWeight.bold),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      zTp.paint(canvas, Offset(cx + 3, cy - 4));
+    }
+
+    if (isActive) {
+      if (type == 0) {
+        final capPaint = Paint()..color = Colors.black87..style = PaintingStyle.fill;
+        final path = Path();
+        path.moveTo(cx - 3, cy - 4);
+        path.lineTo(cx + 3, cy - 4);
+        path.lineTo(cx + 4, cy - 3);
+        path.lineTo(cx, cy - 2);
+        path.lineTo(cx - 4, cy - 3);
+        path.close();
+        canvas.drawPath(path, capPaint);
+      } else if (type == 1) {
+        final glassPaint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.8;
+        canvas.drawCircle(Offset(cx + 1.5, cy), 2.0, glassPaint);
+        canvas.drawLine(Offset(cx + 2.5, cy + 1.5), Offset(cx + 4, cy + 3), glassPaint);
+      } else if (type == 2) {
+        final penPaint = Paint()
+          ..color = Colors.yellow.shade700
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0;
+        canvas.drawLine(Offset(cx - 1, cy + 3), Offset(cx + 3, cy - 1), penPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ResearchAgentsPainter oldDelegate) {
+    return oldDelegate.t != t || oldDelegate.activeAgent != activeAgent;
   }
 }
