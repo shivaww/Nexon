@@ -12000,18 +12000,18 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               content: ValueListenableBuilder<String>(
                 valueListenable: statusNotifier,
                 builder: (ctx, status, _) {
-                  return ValueListenableBuilder<double>(
+                  return ValueListenableBuilder<double?>(
                     valueListenable: progressNotifier,
                     builder: (ctx, value, _) {
                       return ValueListenableBuilder<String>(
                         valueListenable: fileNotifier,
                         builder: (ctx, fileName, _) {
-                          final percent = (value * 100).round();
+                          final percent = value != null ? (value * 100).round() : 0;
                           return Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               LinearProgressIndicator(
-                                value: value > 0 ? value : null,
+                                value: (value != null && value > 0) ? value : null,
                                 backgroundColor: Colors.white24,
                                 valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF7B4E2E)),
                               ),
@@ -12031,7 +12031,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                               ],
                               const SizedBox(height: 8),
                               Text(
-                                value > 0 ? '$percent%' : '',
+                                (value != null && value > 0) ? '$percent%' : '',
                                 style: const TextStyle(fontSize: 12, color: Colors.grey),
                               ),
                             ],
