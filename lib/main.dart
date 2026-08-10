@@ -6951,6 +6951,7 @@ class ChatSurface extends StatelessWidget {
     this.onBranchChanged,
     this.onStop,
     this.onOpenLiveVoice,
+    this.activeFeaturePills = const [],
     super.key,
   });
 
@@ -11985,7 +11986,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       if (_studyModeEnabled) {
         // ── Study mode: batch stream-upload to Termux workspace ──
         final totalFiles = validFiles.length;
-        final progressNotifier = ValueNotifier<double>(0.0);
+        final progressNotifier = ValueNotifier<double?>(0.0);
         final statusNotifier = ValueNotifier<String>('Preparing upload…');
         final fileNotifier = ValueNotifier<String>('');
         bool dialogShown = false;
@@ -12106,7 +12107,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           // ── Chunking / Indexing phase ──
           fileNotifier.value = '';
           statusNotifier.value = 'Indexing & chunking documents…';
-          progressNotifier.value = null;
+          progressNotifier.value = null; // Indeterminate spinner during indexing
 
           final reindexUri = Uri.parse('http://127.0.0.1:8390/workspace/reindex');
           final reindexClient = HttpClient();
@@ -19336,6 +19337,8 @@ class SimpleSemaphore {
       release();
     }
   }
+}
+
 class _ResearchAgentAvatars extends StatefulWidget {
   const _ResearchAgentAvatars({required this.status, required this.isSending});
   final String status;
