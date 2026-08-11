@@ -1112,12 +1112,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
       ),
     ];
     try {
-      final responseText = await _chatClient.sendChat(
+      final responseText = await _retryLlmCall(
+        messages: summarizerMessages,
         provider: provider,
         settings: settings,
         model: model,
-        messages: summarizerMessages,
-        studyModeEnabled: _studyModeEnabled,
       );
       final cleanResp = responseText
           .replaceAll(RegExp(r"```json"), "")
@@ -1139,6 +1138,86 @@ class _ChatHomePageState extends State<ChatHomePage> {
       'facts': <Map<String, dynamic>>[],
       'findings': <Map<String, dynamic>>[],
     };
+  }
+
+  /// Normalize batch evidence with per-source attribution.
+  /// Unlike single-source normalization, this preserves the source field from
+  /// each fact/finding record instead of overwriting with a single URL.
+  Map<String, dynamic> _normalizeBatchEvidence(
+    Map<String, dynamic>? parsed,
+    List<String> expectedSources,
+  ) {
+    final facts = <Map<String, dynamic>>[];
+    final findings = <Map<String, dynamic>>[];
+    if (parsed == null) {
+      return {'facts': facts, 'findings': findings};
+    }
+    final rawFacts = parsed['facts'] is List ? parsed['facts'] as List : const [];
+    final rawFindings =
+        parsed['findings'] is List ? parsed['findings'] as List : const [];
+    
+    for (final item in rawFacts) {
+      if (item is! Map) continue;
+      final sourceUrl = item['source']?.toString() ?? '';
+      // Validate source is one of the expected URLs to catch hallucinations
+      final normalizedSource = expectedSources.contains(sourceUrl)
+          ? sourceUrl
+          : expectedSources.first; // Fallback to first if LLM hallucinated
+      facts.add({
+        'metric': item['metric']?.toString() ?? '',
+        'subject': item['subject']?.toString() ?? '',
+        'value': item['value']?.toString() ?? '',
+        'date': item['date']?.toString() ?? '',
+        'source': normalizedSource,
+        'confidence': item['confidence']?.toString() ?? 'high',
+      });
+    }
+    for (final item in rawFindings) {
+      if (item is! Map) continue;
+      final sourceUrl = item['source']?.toString() ?? '';
+      final normalizedSource = expectedSources.contains(sourceUrl)
+          ? sourceUrl
+          : expectedSources.first;
+      findings.add({
+        'text': item['text']?.toString() ?? '',
+        'source': normalizedSource,
+        'confidence': item['confidence']?.toString() ?? 'high',
+      });
+    }
+    return {'facts': facts, 'findings': findings};
+  }
+
+  /// IMPROVEMENT: LLM retry wrapper with exponential backoff.
+  /// Retries failed LLM calls up to [maxRetries] times with increasing delay.
+  /// Prevents silent evidence loss when the API rate-limits or times out.
+  Future<String> _retryLlmCall({
+    required List<ChatMessage> messages,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+    int maxRetries = 2,
+  }) async {
+    for (var attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        final response = await _chatClient.sendChat(
+          provider: provider,
+          settings: settings,
+          model: model,
+          messages: messages,
+          studyModeEnabled: _studyModeEnabled,
+        );
+        if (response.trim().isNotEmpty) return response;
+      } catch (e) {
+        if (attempt == maxRetries) rethrow;
+        final delay = Duration(seconds: (attempt + 1) * 2);
+        debugPrint(
+          'LLM call failed (attempt ${attempt + 1}/${maxRetries + 1}), '
+          'retrying in ${delay.inSeconds}s: $e',
+        );
+        await Future.delayed(delay);
+      }
+    }
+    return '';
   }
 
   /// Batch summarizer: extract facts/findings from multiple sources in ONE LLM call.
@@ -1200,10 +1279,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
       final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(cleanResp);
       if (jsonMatch != null) {
         final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-        return DeepResearchHelpers.normalizeEvidence(
-          parsed,
-          sourceUrl: sources.keys.first,
-        );
+        // Parse evidence with per-source attribution instead of tagging all
+        // records with the first source URL.
+        return _normalizeBatchEvidence(parsed, sources.keys.toList());
       }
     } catch (e) {
       debugPrint('Batch summarization failed: $e');
@@ -4365,6 +4443,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     _runUrlCache.clear();
     final Set<String> runFetchedUrls = {};
     final Map<String, Map<String, dynamic>> runUrlSummaries = {};
+    // IMPROVEMENT: Search dedup across phases + stable run ID for checkpointing
+    final Set<String> executedQueries = {};
+    final String runId = 'run_${DateTime.now().millisecondsSinceEpoch}';
 
     try {
       await _resetDeepResearch();
@@ -4523,6 +4604,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         steps[i]['status'] = 'running';
         _publishResearchState(sessionIndex, messageIndex, stateMap);
 
+        // IMPROVEMENT: Per-phase timeout (4 minutes max per phase)
+        final phaseStartTime = DateTime.now();
+        const phaseTimeout = Duration(minutes: 4);
+
         final String Function({
           required String kind,
           required String tool,
@@ -4644,10 +4729,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
                 "${crossPhaseContext.length > 0 ? 'Previous phases context (do NOT re-search these topics):\n$crossPhaseContext\n\n' : ''}"
-                "Current date and time: $phaseCurrentTime. You MUST use the latest information available as of this timestamp. "
-                "For time-sensitive claims, search with a suitable recency filter, verify dates on the fetched source, and never rely on model memory.\n\n"
+                "━━ RECENCY MANDATE ━━\n"
+                "Current date and time: $phaseCurrentTime.\n"
+                "You are researching for a reader who needs CURRENT information. "
+                "For ANY time-sensitive claim (versions, prices, scores, releases, statistics):\n"
+                "1. Search with time_range=\"month\" or time_range=\"week\" to find the latest data.\n"
+                "2. Check the publication date on every source you read.\n"
+                "3. If the newest source you find is >6 months old, explicitly note this.\n"
+                "4. NEVER state a fact from your training data. If you haven't found it via search/fetch, you don't know it.\n\n"
                 "Please formulate search queries or read specific URLs to gather evidence. "
-                "Citing specific metrics, comparisons, and sources in your final response. "
+                "Cite specific metrics, comparisons, and sources in your final response. "
                 "When you are finished, write a concise summary of your findings and emit <step_complete/>.",
           ),
         ];
@@ -4668,6 +4759,14 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             stepFailed = true;
             stepFailure =
                 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
+            break;
+          }
+          // IMPROVEMENT: Per-phase timeout — prevents a single phase from hanging
+          // the entire run. Partial results are still passed to the writer.
+          if (phaseStartTime.add(phaseTimeout).isBefore(DateTime.now())) {
+            stepDone = true;
+            stepFailure =
+                'Phase exceeded ${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
             break;
           }
           if (!mounted) return;
@@ -4875,6 +4974,23 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 final query = queries[k];
                 final attrs = searchAttrsList[k];
                 final normQuery = _normalizeQueryOrUrl(query);
+
+                // IMPROVEMENT: Skip duplicate queries already executed in this run
+                if (executedQueries.contains(normQuery)) {
+                  searchFutures.add(Future.value(
+                    'This exact query was already executed earlier in this research run. '
+                    'Refer to the previous search results instead of repeating this search. '
+                    'If you need different information, reformulate your query with different terms.',
+                  ));
+                  finishResearchEvent(
+                    eventIds[k],
+                    status: 'done',
+                    stopwatch: stopwatches[k],
+                    details: {'query': query, 'deduplicated': true},
+                  );
+                  continue;
+                }
+                executedQueries.add(normQuery);
 
                 // TOOL LIMITS PER PHASE:
                 // Capped at 20 web_search calls per research phase to focus the agent on high-relevance
@@ -5505,14 +5621,25 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 const ChatMessage(
                   role: MessageRole.system,
                   text:
-                      "You are a reflection assistant. Read the current facts and findings of the research run and decide if the researcher should do further search or read other URLs, or if the current step is complete. Answer in structured JSON format with keys 'should_continue' (bool) and 'reason' (string).",
+                      "You are a research sufficiency judger. Analyze the current facts and findings "
+                      "and decide if the phase goal is fully addressed.\n"
+                      "Respond with JSON:\n"
+                      "{\n"
+                      "  \"should_continue\": true | false,\n"
+                      "  \"reason\": \"<brief explanation>\",\n"
+                      "  \"gaps\": [\"specific gap 1\", \"specific gap 2\", ...]\n"
+                      "}\n"
+                      "If should_continue is false, gaps should be [].\n"
+                      "If should_continue is true, list 2-4 specific, searchable questions that would fill missing information. "
+                      "These gaps will guide the next search queries.",
                 ),
                 ChatMessage(
                   role: MessageRole.user,
                   text:
-                      "Current facts extracted: ${jsonEncode(phaseFacts)}\n"
-                      "Current findings extracted: ${jsonEncode(phaseFindings)}\n"
-                      "Does this sufficiently answer the query \"$queryText\"? If yes, answer should_continue: false.",
+                      "Phase goal: $queryText\n\n"
+                      "Current facts: ${jsonEncode(phaseFacts)}\n\n"
+                      "Current findings: ${jsonEncode(phaseFindings)}\n\n"
+                      "Based on what we have, is the phase goal fully addressed?",
                 ),
               ];
               try {
@@ -5526,15 +5653,42 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   ),
                   studyModeEnabled: _studyModeEnabled,
                 );
+                // Use regex fallback for robust JSON extraction
                 final cleanReflectResp = reflectResp
-                    .replaceAll(RegExp(r"```json\s*|\s*```"), "")
+                    .replaceAll(RegExp(r"```json"), '')
+                    .replaceAll('```', '')
                     .trim();
-                final reflectJson =
-                    jsonDecode(cleanReflectResp) as Map<String, dynamic>;
-                if (reflectJson['should_continue'] == false) {
-                  stepDone = true;
+                final reflectJsonMatch =
+                    RegExp(r'\{[\s\S]*\}').firstMatch(cleanReflectResp);
+                if (reflectJsonMatch != null) {
+                  final reflectJson =
+                      jsonDecode(reflectJsonMatch.group(0)!) as Map<String, dynamic>;
+                  if (reflectJson['should_continue'] == false) {
+                    stepDone = true;
+                  } else {
+                    // Extract gaps and append as guidance for next search
+                    final gaps = reflectJson['gaps'];
+                    if (gaps is List && gaps.isNotEmpty) {
+                      final gapText = gaps
+                          .whereType<String>()
+                          .take(3)
+                          .map((g) => '- $g')
+                          .join('\n');
+                      stepMessages.add(
+                        ChatMessage(
+                          role: MessageRole.user,
+                          text: 'Reflection identified gaps. Focus next searches on:\n$gapText',
+                        ),
+                      );
+                    }
+                  }
+                } else {
+                  debugPrint('Reflection JSON parse failed: $cleanReflectResp');
                 }
-              } catch (_) {}
+              } catch (e) {
+                debugPrint('Reflection error: $e');
+                // Don't silently swallow — log but continue
+              }
             }
           } catch (e) {
             stepDone = true;
@@ -5574,16 +5728,41 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         }
         steps[i]['content'] = stepContent;
 
-        // Update cross-phase context for next phase (compact summary, ~200 tokens)
+        // Update cross-phase context for next phase (compact summary, ~300 tokens)
         if (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty) {
+          final topFacts = phaseFacts
+              .take(4)
+              .map((f) => "${f['subject']} ${f['metric']}: ${f['value']}")
+              .join('; ');
+          final topFinding = phaseFindings.isNotEmpty
+              ? ' | Top: ${phaseFindings.first['text']}'
+              : '';
           crossPhaseContext.writeln(
             '- Phase ${i + 1} ($phaseTitle): ${phaseFacts.length} facts, ${phaseFindings.length} findings. ' +
-            'Key: ${phaseFacts.take(2).map((f) => "${f['subject']} ${f['metric']}: ${f['value']}").join("; ")}',
+            'Key: $topFacts$topFinding',
           );
         }
 
         _publishResearchState(sessionIndex, messageIndex, stateMap);
         await _saveSessions();
+
+        // IMPROVEMENT: Incremental checkpoint after each phase for crash recovery
+        try {
+          await _deepResearchBridge.saveCheckpoint(
+            runId: runId,
+            status: stepFailed ? 'running_with_errors' : 'running',
+            currentPhaseIndex: i + 1,
+            steps: steps.map((s) => Map<String, dynamic>.from(s)).toList(),
+            stats: {
+              'phases_completed': i + 1,
+              'phases_total': steps.length,
+              'facts_collected': phaseFacts.length,
+              'findings_collected': phaseFindings.length,
+            },
+          );
+        } catch (e) {
+          debugPrint('Checkpoint save failed after phase ${i + 1}: $e');
+        }
       }
 
       // ── STAGE 3: WRITING THE REPORT ──
@@ -5627,7 +5806,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       String? writerInputFailure;
       try {
         final int userBudget = _writerContextBudget;
-        final int reserve = (userBudget * 0.18).round();
+        // IMPROVEMENT: Reasoning models have larger context windows — reduce
+        // the prompt reserve so more evidence reaches the writer.
+        final double reserveRatio = settings.reasoningEnabled ? 0.10 : 0.18;
+        final int reserve = (userBudget * reserveRatio).round();
         final int maxEvidenceTokens = userBudget - reserve;
         final writerExport = await _exportDeepResearchForWriter(
           maxEvidenceTokens,
@@ -5689,6 +5871,26 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
       // Prefer compact structured text for the writer LLM (~40% fewer tokens than JSON)
       final writerEvidence = compactText.isNotEmpty ? compactText : tempJsonContent;
+
+      // IMPROVEMENT: Build evidence summary so the writer knows the scope of research
+      int totalFacts = 0;
+      int totalFindings = 0;
+      int totalSources = 0;
+      try {
+        final phases = jsonDecode(tempJsonContent);
+        if (phases is List) {
+          for (final phase in phases.whereType<Map>()) {
+            totalFacts += (phase['facts'] is List) ? (phase['facts'] as List).length : 0;
+            totalFindings += (phase['findings'] is List) ? (phase['findings'] as List).length : 0;
+          }
+          totalSources = verifiedSourceUrls.length;
+        }
+      } catch (_) {}
+      final evidenceSummary =
+          'Research scope: ${steps.length} phases completed, '
+          '$totalFacts facts and $totalFindings findings extracted from '
+          '$totalSources verified sources.';
+
       List<ChatMessage> writerMessages = [
         const ChatMessage(
           role: MessageRole.system,
@@ -5697,12 +5899,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         ChatMessage(
           role: MessageRole.user,
           text:
+              "$evidenceSummary\n\n"
               "Here is the retrieved evidence:\n$writerEvidence\n\n"
               "Execution issues that must be disclosed in the report:\n"
               "${jsonEncode(executionIssues)}\n\n"
-              "Please write the final, comprehensive research report in Markdown format. "
-              "Use clear headings, detailed paragraphs, and tables. Do not use SVG, HTML, Mermaid, "
-              "or image-based visuals. Use only the URLs provided in the evidence; do not invent, infer, or search for sources. "
+              "Write the final, comprehensive research report following the DOCUMENT STRUCTURE in your system prompt exactly. "
+              "Start with the Executive Summary, then Key Findings, then Detailed Analysis chapters, "
+              "then Confidence Assessment, then Suggested Follow-Up Research. "
+              "Use clear headings, detailed paragraphs, and tables where data supports it. "
+              "Do not use SVG, HTML, Mermaid, or image-based visuals. "
+              "Use only the URLs provided in the evidence; do not invent, infer, or search for sources. "
               "The app will insert the verified source list directly into the final artifact.",
         ),
       ];
@@ -10073,6 +10279,11 @@ class MessageBubble extends StatelessWidget {
       (tag: '<mcp_request>', isXml: false),
       (tag: '<tool_request>', isXml: true),
       (tag: '<command>', isXml: true),
+      (tag: '<workspace_list>', isXml: false),
+      (tag: '<workspace_search>', isXml: false),
+      (tag: '<workspace_read_page>', isXml: false),
+      (tag: '<workspace_get_outline>', isXml: false),
+      (tag: '<workspace_ingest>', isXml: false),
     ];
 
     while (currentIndex < text.length) {
@@ -10220,6 +10431,12 @@ class MessageBubble extends StatelessWidget {
           final contentStr =
               '<method>run_command</method><command>$content</command>';
           return McpToolBlock(mcpJson: contentStr, isXml: true);
+        case '<workspace_list>':
+        case '<workspace_search>':
+        case '<workspace_read_page>':
+        case '<workspace_get_outline>':
+        case '<workspace_ingest>':
+          return _buildWorkspaceResultBlock(openTag, content);
         default: // <mcp_request>, <tool_request>
           return McpToolBlock(mcpJson: content, isXml: isXml);
       }
@@ -10229,6 +10446,158 @@ class MessageBubble extends StatelessWidget {
         style: const TextStyle(color: Colors.red),
       );
     }
+  }
+
+  /// IMPROVEMENT: Renders workspace tool results (<workspace_list>,
+  /// <workspace_search>, etc.) as collapsible blocks instead of raw JSON text.
+  Widget _buildWorkspaceResultBlock(String openTag, String content) {
+    final method = openTag.replaceAll(RegExp('[<>/]'), '');
+    String header;
+    IconData icon;
+    Color accent;
+    final List<Widget> detailChildren = [];
+
+    const monoStyle = TextStyle(
+      fontFamily: 'monospace',
+      fontSize: 11,
+      color: Color(0xFF52606D),
+    );
+
+    try {
+      final decoded = jsonDecode(content);
+      if (method == 'workspace_list' && decoded is Map) {
+        final files = (decoded['files'] as List?) ?? [];
+        final usedMb = decoded['used_quota_mb']?.toString() ?? '';
+        final totalMb = decoded['quota_mb']?.toString() ?? '';
+        header = 'Workspace files (${files.length})' +
+            (usedMb.isNotEmpty ? ' · $usedMb/$totalMb MB used' : '');
+        icon = Icons.folder_open_outlined;
+        accent = const Color(0xFFD97706);
+        for (final f in files.whereType<Map>()) {
+          final name = f['path']?.toString() ?? 'file';
+          final sizeKb =
+              ((f['size_bytes'] as num? ?? 0) / 1024).toStringAsFixed(1);
+          detailChildren.add(
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.insert_drive_file,
+                    size: 14,
+                    color: Color(0xFF8B7355),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2D241C),
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '$sizeKb KB',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF8B7355),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+      } else if (method == 'workspace_search' && decoded is Map) {
+        final matches = (decoded['matches'] as List?) ?? [];
+        header = 'Workspace search (${matches.length} matches)';
+        icon = Icons.manage_search_outlined;
+        accent = const Color(0xFF0369A1);
+        for (final m in matches.whereType<Map>().take(8)) {
+          final file = m['file_path']?.toString() ?? '';
+          final section = m['section']?.toString() ?? '';
+          final excerpt = m['excerpt']?.toString() ?? '';
+          detailChildren.add(
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFBF2),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFE7D8C4)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    file + (section.isNotEmpty ? ' — $section' : ''),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF2D241C),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    excerpt,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF52606D),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+      } else {
+        header = 'Workspace result';
+        icon = Icons.work_outline;
+        accent = const Color(0xFF059669);
+        detailChildren.add(SelectableText(content, style: monoStyle));
+      }
+    } catch (_) {
+      header = 'Workspace result';
+      icon = Icons.work_outline;
+      accent = const Color(0xFF059669);
+      detailChildren.add(SelectableText(content, style: monoStyle));
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBF2),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: accent.withOpacity(0.35)),
+      ),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        collapsedBackgroundColor: Colors.transparent,
+        backgroundColor: Colors.transparent,
+        leading: Icon(icon, color: accent, size: 18),
+        title: Text(
+          header,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            color: accent,
+          ),
+        ),
+        children: detailChildren.isEmpty
+            ? [const SizedBox.shrink()]
+            : detailChildren,
+      ),
+    );
   }
 
   List<Widget> _buildToolResultDetails(BuildContext context, String text) {
@@ -15593,9 +15962,9 @@ class ChatClient {
               'temperature': 1.0,
               'top_p': 0.95,
               'stream': false,
-              if (provider.id == 'openrouter')
-                'include_reasoning': settings.reasoningEnabled,
             };
+            // IMPROVEMENT: Enable thinking/reasoning for all capable models/providers
+            _applyReasoningParams(payload, provider, settings, model);
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
@@ -15743,9 +16112,9 @@ class ChatClient {
               'temperature': 1.0,
               'top_p': 0.95,
               'stream': true,
-              if (provider.id == 'openrouter')
-                'include_reasoning': settings.reasoningEnabled,
             };
+            // IMPROVEMENT: Enable thinking/reasoning for all capable models/providers
+            _applyReasoningParams(payload, provider, settings, model);
 
             final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
@@ -16082,6 +16451,63 @@ class ChatClient {
       return 'Web search failed: $e';
     } finally {
       client.close(force: true);
+    }
+  }
+
+  /// IMPROVEMENT: Applies provider/model-specific reasoning parameters.
+  /// Detects thinking-capable models by name pattern and adds the correct
+  /// API parameters for each provider's reasoning format.
+  void _applyReasoningParams(
+    Map<String, dynamic> payload,
+    ProviderDefinition provider,
+    ProviderSettings settings,
+    String model,
+  ) {
+    if (!settings.reasoningEnabled) return;
+    final modelLower = model.toLowerCase();
+
+    // OpenAI o-series reasoning models: no temperature, use reasoning_effort
+    if (modelLower.contains('o1') ||
+        modelLower.contains('o3') ||
+        modelLower.contains('o4')) {
+      payload.remove('temperature');
+      payload.remove('top_p');
+      payload['reasoning_effort'] = 'high';
+      return;
+    }
+
+    // DeepSeek reasoning models
+    if (modelLower.contains('deepseek-r1') ||
+        modelLower.contains('deepseek-reasoner') ||
+        modelLower.contains('r1-')) {
+      payload['enable_thinking'] = true;
+      return;
+    }
+
+    // Anthropic Claude with extended thinking (via OpenAI-compatible proxy)
+    if (modelLower.contains('claude') &&
+        (modelLower.contains('thinking') || provider.id == 'anthropic')) {
+      payload['thinking'] = {
+        'type': 'enabled',
+        'budget_tokens': (settings.maxTokens * 0.6).round().clamp(1024, 32768),
+      };
+      payload.remove('temperature');
+      return;
+    }
+
+    // OpenRouter: include_reasoning flag
+    if (provider.id == 'openrouter') {
+      payload['include_reasoning'] = true;
+      return;
+    }
+
+    // Generic OpenAI-compatible endpoints that support enable_thinking
+    // (e.g., Together AI, Groq with reasoning models, local llama.cpp)
+    if (modelLower.contains('think') ||
+        modelLower.contains('reason') ||
+        modelLower.contains('qwq') ||
+        modelLower.contains('qwen3')) {
+      payload['enable_thinking'] = true;
     }
   }
 
@@ -17566,9 +17992,9 @@ class _ResearchEventRow extends StatefulWidget {
   State<_ResearchEventRow> createState() => _ResearchEventRowState();
 }
 
-class _ResearchEventRowState extends State<_ResearchEventRow> {
-  Timer? _pulseTimer;
-  var _dimmed = false;
+class _ResearchEventRowState extends State<_ResearchEventRow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _breathCtrl;
   var _expanded = false;
 
   bool get _isRunning => widget.event['status'] == 'running';
@@ -17585,31 +18011,35 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
   @override
   void initState() {
     super.initState();
-    _syncPulse();
+    _breathCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    );
+    _breathCtrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+    _syncBreathing();
   }
 
   @override
   void didUpdateWidget(covariant _ResearchEventRow oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _syncPulse();
+    _syncBreathing();
     if (_isRunning && _expanded) _expanded = false;
   }
 
-  void _syncPulse() {
-    if (_isPulsing && _pulseTimer == null) {
-      _pulseTimer = Timer.periodic(const Duration(milliseconds: 700), (_) {
-        if (mounted) setState(() => _dimmed = !_dimmed);
-      });
-    } else if (!_isPulsing && _pulseTimer != null) {
-      _pulseTimer!.cancel();
-      _pulseTimer = null;
-      _dimmed = false;
+  void _syncBreathing() {
+    if (_isPulsing && !_breathCtrl.isAnimating) {
+      _breathCtrl.repeat(reverse: true);
+    } else if (!_isPulsing && _breathCtrl.isAnimating) {
+      _breathCtrl.stop();
+      _breathCtrl.reset();
     }
   }
 
   @override
   void dispose() {
-    _pulseTimer?.cancel();
+    _breathCtrl.dispose();
     super.dispose();
   }
 
@@ -17899,7 +18329,7 @@ class _ResearchEventRowState extends State<_ResearchEventRow> {
       borderRadius: BorderRadius.circular(6),
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 450),
-        opacity: _isPulsing && _dimmed ? 0.58 : 1,
+        opacity: _isPulsing ? 0.72 + 0.28 * _breathCtrl.value : 1.0,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           margin: const EdgeInsets.only(bottom: 8),
@@ -19350,43 +19780,47 @@ class _ResearchAgentAvatars extends StatefulWidget {
 
 class _ResearchAgentAvatarsState extends State<_ResearchAgentAvatars>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
+  late final AnimationController _scanCtrl;
+  late final Animation<double> _scanAnim;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
+    _scanCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 1800),
     );
-    _maybeStart();
+    _scanAnim = CurvedAnimation(parent: _scanCtrl, curve: Curves.easeInOut);
+    _syncAnimation();
   }
 
-  void _maybeStart() {
-    if (widget.isSending &&
+  void _syncAnimation() {
+    final shouldAnimate = widget.isSending &&
         (widget.status == 'planning' ||
             widget.status == 'running' ||
-            widget.status == 'generating_report')) {
-      _controller.repeat();
-    } else {
-      _controller.stop();
+            widget.status == 'generating_report');
+    if (shouldAnimate && !_scanCtrl.isAnimating) {
+      _scanCtrl.repeat();
+    } else if (!shouldAnimate && _scanCtrl.isAnimating) {
+      _scanCtrl.stop();
+      _scanCtrl.reset();
     }
   }
 
   @override
   void didUpdateWidget(_ResearchAgentAvatars oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _maybeStart();
+    _syncAnimation();
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _scanCtrl.dispose();
     super.dispose();
   }
 
-  int? get _activeAgent {
-    if (!widget.isSending) return null;
+  int get _activePhase {
+    if (!widget.isSending) return -1;
     switch (widget.status) {
       case 'planning':
         return 0;
@@ -19395,23 +19829,23 @@ class _ResearchAgentAvatarsState extends State<_ResearchAgentAvatars>
       case 'generating_report':
         return 2;
       default:
-        return null;
+        return -1;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final active = _activeAgent;
+    final active = _activePhase;
     return SizedBox(
-      width: 60,
-      height: 32,
+      width: 140,
+      height: 28,
       child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
+        animation: _scanAnim,
+        builder: (context, _) {
           return CustomPaint(
-            painter: _ResearchAgentsPainter(
-              t: _controller.value,
-              activeAgent: active,
+            painter: _PipelinePainter(
+              activePhase: active,
+              scan: _scanAnim.value,
             ),
           );
         },
@@ -19420,162 +19854,159 @@ class _ResearchAgentAvatarsState extends State<_ResearchAgentAvatars>
   }
 }
 
-class _ResearchAgentsPainter extends CustomPainter {
-  final double t;
-  final int? activeAgent;
+class _PipelinePainter extends CustomPainter {
+  _PipelinePainter({required this.activePhase, required this.scan});
+  final int activePhase;
+  final double scan;
 
-  _ResearchAgentsPainter({required this.t, required this.activeAgent});
+  static const _labels = ['PLAN', 'RESEARCH', 'WRITE'];
+  static const _accents = <Color>[
+    Color(0xFF2C5282),
+    Color(0xFF7B4E2E),
+    Color(0xFF38A169),
+  ];
 
-  static const double bed0X = 8.0;
-  static const double bed1X = 22.0;
-  static const double bed2X = 36.0;
-  static const double computerX = 52.0;
-  static const double baseY = 18.0;
+  static const _muted = Color(0xFF94A3B8);
+  static const _bg = Color(0xFFF8FAFC);
+  static const _connector = Color(0xFFCBD5E1);
+  static const _ink = Color(0xFF1E293B);
 
   @override
   void paint(Canvas canvas, Size size) {
-    _drawBed(canvas, bed0X);
-    _drawBed(canvas, bed1X);
-    _drawBed(canvas, bed2X);
-    _drawComputer(canvas, computerX);
+    const cellW = 42.0;
+    const cellH = 22.0;
+    const topY = 3.0;
+    const cellsX = <double>[1.0, 48.0, 95.0];
+    const connectorY = topY + cellH / 2;
 
-    final labels = ['Planner', 'Researcher', 'Writer'];
+    final connectorPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < 2; i++) {
+      final x1 = cellsX[i] + cellW;
+      final x2 = cellsX[i + 1];
+      final isPassed = activePhase > i;
+      connectorPaint.color =
+          isPassed ? _accents[i].withOpacity(0.55) : _connector;
+      canvas.drawLine(
+        Offset(x1 + 1, connectorY),
+        Offset(x2 - 1, connectorY),
+        connectorPaint,
+      );
+    }
+
     for (int i = 0; i < 3; i++) {
-      final isActive = activeAgent == i;
-      final x = isActive ? computerX : [bed0X, bed1X, bed2X][i];
-      _drawAgent(canvas, x, baseY, i, isActive);
-      if (isActive) {
-        _drawLabel(canvas, labels[i], x, baseY - 12);
-      }
-    }
-  }
+      final x = cellsX[i];
+      final isActive = activePhase == i;
+      final isDone = activePhase > i;
+      final accent = _accents[i];
 
-  void _drawLabel(Canvas canvas, String text, double cx, double cy) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: const TextStyle(
-          fontSize: 7,
-          color: Color(0xFF2C5282),
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset(cx - tp.width / 2, cy));
-  }
+      final rect = Rect.fromLTWH(x, topY, cellW, cellH);
+      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(4));
 
-  void _drawBed(Canvas canvas, double x) {
-    final paint = Paint()
-      ..color = Colors.brown.shade300
-      ..style = PaintingStyle.fill;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(x, baseY + 4), width: 10, height: 4),
-        const Radius.circular(2),
-      ),
-      paint,
-    );
-    final pillowPaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(x - 3, baseY + 4), width: 4, height: 3),
-        const Radius.circular(1.5),
-      ),
-      pillowPaint,
-    );
-  }
+      final bgPaint = Paint()
+        ..style = PaintingStyle.fill
+        ..color = isActive
+            ? accent.withOpacity(0.14)
+            : isDone
+                ? accent.withOpacity(0.06)
+                : _bg;
+      canvas.drawRRect(rrect, bgPaint);
 
-  void _drawComputer(Canvas canvas, double x) {
-    final deskPaint = Paint()..color = Colors.grey.shade400..style = PaintingStyle.fill;
-    canvas.drawRect(Rect.fromCenter(center: Offset(x, baseY + 6), width: 12, height: 2), deskPaint);
-    final monitorPaint = Paint()..color = const Color(0xFF2C5282)..style = PaintingStyle.fill;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(x, baseY), width: 8, height: 6),
-        const Radius.circular(1),
-      ),
-      monitorPaint,
-    );
-    final screenPaint = Paint()..color = const Color(0xFF4299E1)..style = PaintingStyle.fill;
-    canvas.drawRect(Rect.fromCenter(center: Offset(x, baseY), width: 6, height: 4), screenPaint);
-  }
-
-  void _drawAgent(Canvas canvas, double x, double y, int type, bool isActive) {
-    final colors = [
-      const Color(0xFF2B6CB0),
-      const Color(0xFF38A169),
-      const Color(0xFFDD6B20),
-    ];
-    final paint = Paint()..color = colors[type]..style = PaintingStyle.fill;
-
-    double yOffset = 0;
-    if (isActive) {
-      yOffset = math.sin(t * math.pi * 2) * 1.5;
-    }
-    final cy = y + yOffset;
-
-    canvas.drawCircle(Offset(x, cy), 4, paint);
-    _drawFace(canvas, x, cy, type, isActive);
-  }
-
-  void _drawFace(Canvas canvas, double cx, double cy, int type, bool isActive) {
-    final whitePaint = Paint()..color = Colors.white..style = PaintingStyle.fill;
-    final blackPaint = Paint()..color = Colors.black87..style = PaintingStyle.fill;
-
-    if (isActive) {
-      canvas.drawCircle(Offset(cx - 1.2, cy - 0.5), 1.0, whitePaint);
-      canvas.drawCircle(Offset(cx + 1.2, cy - 0.5), 1.0, whitePaint);
-      canvas.drawCircle(Offset(cx - 1.2, cy - 0.5), 0.5, blackPaint);
-      canvas.drawCircle(Offset(cx + 1.2, cy - 0.5), 0.5, blackPaint);
-    } else {
-      final linePaint = Paint()
-        ..color = Colors.black87
-        ..strokeWidth = 0.8
+      final borderPaint = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round;
-      canvas.drawLine(Offset(cx - 2.0, cy - 0.5), Offset(cx - 0.4, cy - 0.5), linePaint);
-      canvas.drawLine(Offset(cx + 0.4, cy - 0.5), Offset(cx + 2.0, cy - 0.5), linePaint);
-      final zTp = TextPainter(
+        ..strokeWidth = isActive ? 1.2 : 0.8
+        ..color = isActive
+            ? accent
+            : isDone
+                ? accent.withOpacity(0.4)
+                : _connector;
+      canvas.drawRRect(rrect, borderPaint);
+
+      if (isActive) {
+        canvas.save();
+        canvas.clipRRect(rrect);
+        final scanX = x + scan * cellW;
+        final glowPaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = accent.withOpacity(0.18);
+        canvas.drawRect(
+          Rect.fromLTWH(scanX - 10, topY, 20, cellH),
+          glowPaint,
+        );
+        final linePaint = Paint()
+          ..style = PaintingStyle.fill
+          ..color = accent.withOpacity(0.55);
+        canvas.drawRect(
+          Rect.fromLTWH(scanX - 0.5, topY + 2, 1, cellH - 4),
+          linePaint,
+        );
+        canvas.restore();
+      }
+
+      final dotX = x + 6.5;
+      final dotY = topY + cellH / 2;
+      if (isDone) {
+        canvas.drawCircle(
+          Offset(dotX, dotY),
+          2.2,
+          Paint()..color = accent,
+        );
+        final checkPaint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.1
+          ..strokeCap = StrokeCap.round;
+        final path = Path()
+          ..moveTo(dotX - 1.2, dotY + 0.1)
+          ..lineTo(dotX - 0.2, dotY + 1.1)
+          ..lineTo(dotX + 1.4, dotY - 1.1);
+        canvas.drawPath(path, checkPaint);
+      } else if (isActive) {
+        canvas.drawCircle(
+          Offset(dotX, dotY),
+          2.0,
+          Paint()..color = accent,
+        );
+      } else {
+        canvas.drawCircle(
+          Offset(dotX, dotY),
+          1.8,
+          Paint()
+            ..color = _muted
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 0.9,
+        );
+      }
+
+      final labelColor = isActive
+          ? accent
+          : isDone
+              ? _ink.withOpacity(0.72)
+              : _muted;
+      final tp = TextPainter(
         text: TextSpan(
-          text: 'z',
-          style: TextStyle(fontSize: 6, color: Colors.black54, fontWeight: FontWeight.bold),
+          text: _labels[i],
+          style: TextStyle(
+            fontSize: 8.4,
+            color: labelColor,
+            fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+            letterSpacing: 0.35,
+            fontFamily: 'monospace',
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      zTp.paint(canvas, Offset(cx + 3, cy - 4));
-    }
-
-    if (isActive) {
-      if (type == 0) {
-        final capPaint = Paint()..color = Colors.black87..style = PaintingStyle.fill;
-        final path = Path();
-        path.moveTo(cx - 3, cy - 4);
-        path.lineTo(cx + 3, cy - 4);
-        path.lineTo(cx + 4, cy - 3);
-        path.lineTo(cx, cy - 2);
-        path.lineTo(cx - 4, cy - 3);
-        path.close();
-        canvas.drawPath(path, capPaint);
-      } else if (type == 1) {
-        final glassPaint = Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.8;
-        canvas.drawCircle(Offset(cx + 1.5, cy), 2.0, glassPaint);
-        canvas.drawLine(Offset(cx + 2.5, cy + 1.5), Offset(cx + 4, cy + 3), glassPaint);
-      } else if (type == 2) {
-        final penPaint = Paint()
-          ..color = Colors.yellow.shade700
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0;
-        canvas.drawLine(Offset(cx - 1, cy + 3), Offset(cx + 3, cy - 1), penPaint);
-      }
+      tp.paint(
+        canvas,
+        Offset(dotX + 4.5, dotY - tp.height / 2),
+      );
     }
   }
 
   @override
-  bool shouldRepaint(covariant _ResearchAgentsPainter oldDelegate) {
-    return oldDelegate.t != t || oldDelegate.activeAgent != activeAgent;
+  bool shouldRepaint(covariant _PipelinePainter oldDelegate) {
+    return oldDelegate.activePhase != activePhase || oldDelegate.scan != scan;
   }
 }

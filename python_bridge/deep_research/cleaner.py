@@ -118,7 +118,9 @@ class TextCleaner:
         kept = []
         total_len = 0
         for score, orig_idx, para in scored:
-            if score == 0 and total_len > max_chars * 0.5:
+            # Keep low-score paragraphs if they're early in the document
+            # (lede/intro usually has key info) or if we haven't filled 80% of budget
+            if score == 0 and orig_idx > 2 and total_len > max_chars * 0.8:
                 continue
             if total_len + len(para) > max_chars:
                 break

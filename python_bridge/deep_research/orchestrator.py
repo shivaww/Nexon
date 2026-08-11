@@ -59,7 +59,11 @@ class DeepResearchOrchestrator:
         failed_fetches: list[dict[str, str]] | None = None,
         status: str = "running",
     ) -> dict[str, str]:
-        """Update or insert a phase record in temp.json."""
+        """Update or insert a phase record in temp.json.
+
+        Tracks ingested source URLs to prevent duplicate evidence from the
+        same URL contributing to multiple phases.
+        """
         payload = self._read_temp()
 
         phase_idx = -1
@@ -68,18 +72,55 @@ class DeepResearchOrchestrator:
                 phase_idx = idx
                 break
 
+        # Deduplicate facts by source URL: skip if this URL was already
+        # ingested in a previous phase (prevents same source dominating output)
+        deduped_facts: list[dict[str, str]] = []
+        deduped_findings: list[dict[str, str]] = []
+        for fact in facts or []:
+            source = str(fact.get("source") or "")
+            norm = self._normalize_url(source)
+            if norm and norm in self.run_ingested_urls:
+                continue
+            deduped_facts.append(fact)
+        for finding in findings or []:
+            source = str(finding.get("source") or "")
+            norm = self._normalize_url(source)
+            if norm and norm in self.run_ingested_urls:
+                continue
+            deduped_findings.append(finding)
+
+        # Mark new sources as ingested
+        for fact in deduped_facts:
+            source = str(fact.get("source") or "")
+            norm = self._normalize_url(source)
+            if norm:
+                self.run_ingested_urls.add(norm)
+        for finding in deduped_findings:
+            source = str(finding.get("source") or "")
+            norm = self._normalize_url(source)
+            if norm:
+                self.run_ingested_urls.add(norm)
+
         new_phase = {
             "stage_id": stage_id,
             "phase_title": phase_title,
             "summary": summary or "",
-            "facts": facts or [],
-            "findings": findings or [],
+            "facts": deduped_facts,
+            "findings": deduped_findings,
             "skipped_pdfs": skipped_pdfs or [],
             "failed_fetches": failed_fetches or [],
             "status": status or "running",
         }
 
         if phase_idx != -1:
+            # Merge with existing phase: keep old evidence, add new deduped evidence
+            existing = payload[phase_idx]
+            merged_facts = list(existing.get("facts") or []) + deduped_facts
+            merged_findings = list(existing.get("findings") or []) + deduped_findings
+            new_phase["facts"] = merged_facts
+            new_phase["findings"] = merged_findings
+            if not summary:
+                new_phase["summary"] = existing.get("summary") or ""
             payload[phase_idx] = new_phase
         else:
             payload.append(new_phase)
@@ -87,6 +128,22 @@ class DeepResearchOrchestrator:
         await self._write_temp(payload)
         logger.info("Updated phase record for %s in temp.json.", stage_id)
         return {"status": "ok"}
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        """Normalize a URL for dedup: strip scheme, www, trailing slash, query params."""
+        if not url:
+            return ""
+        from urllib.parse import urlparse
+        try:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if host.startswith("www."):
+                host = host[4:]
+            path = parsed.path.rstrip("/")
+            return f"{host}{path}"
+        except Exception:
+            return ""
 
     def export_temp(self) -> str:
         """Return the raw JSON content of temp.json."""

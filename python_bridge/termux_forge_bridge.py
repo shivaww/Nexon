@@ -1202,37 +1202,74 @@ class TermuxForgeBridge:
                 "Upgrade-Insecure-Requests": "1",
             }
             async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(
-                    target_url, allow_redirects=True, max_redirects=10, timeout=aiohttp.ClientTimeout(total=45)
-                ) as resp:
-                    if resp.status < 200 or resp.status >= 300:
-                        return {"error": f"Fetch failed: HTTP {resp.status}", "url": target_url}
-
-                    content_type = (resp.headers.get("content-type") or "").lower()
-                    is_pdf = looks_like_pdf or "application/pdf" in content_type
-
-                    if is_pdf:
-                        return {
-                            "status": "skipped_pdf",
-                            "reason": "PDF files are excluded from Deep Research to protect memory and context budget",
-                            "url": target_url,
-                            "parse_format": "skipped_pdf",
-                        }
-
-                    try:
-                        body = await resp.text(errors="replace")
-                        from deep_research.cleaner import TextCleaner
-                        text = TextCleaner().clean(body, query=query)
-                        return {
-                            "status": "success",
-                            "content": text,
-                            "url": target_url,
-                            "parse_format": "html",
-                        }
-                    except Exception as e:
-                        return {"error": f"Extraction failed: {e}", "url": target_url}
+                # Termux often lacks proper CA certificates — try with SSL first,
+                # fallback to no verification if SSL error occurs.
+                try:
+                    import ssl
+                    ssl_context = ssl.create_default_context()
+                except Exception:
+                    ssl_context = False
+                
+                try:
+                    async with session.get(
+                        target_url, allow_redirects=True, max_redirects=10, 
+                        timeout=aiohttp.ClientTimeout(total=45),
+                        ssl=ssl_context
+                    ) as resp:
+                        return await self._process_read_url_response(resp, target_url, query)
+                except (aiohttp.ClientSSLError, ssl.SSLError) as ssl_err:
+                    logger.warning(
+                        "read_url: SSL verification failed for %s, retrying without verification: %s",
+                        target_url, ssl_err
+                    )
+                    # Retry without SSL verification (insecure but functional on Termux)
+                    async with session.get(
+                        target_url, allow_redirects=True, max_redirects=10,
+                        timeout=aiohttp.ClientTimeout(total=45),
+                        ssl=False
+                    ) as resp:
+                        return await self._process_read_url_response(resp, target_url, query)
         except Exception as e:
+            logger.error("read_url: Fetch failed completely. URL=%s, error=%s", target_url, e)
             return {"error": f"Fetch failed: {e}", "url": target_url}
+
+    async def _process_read_url_response(self, resp, target_url: str, query: str) -> dict:
+        """Process HTTP response for read_url (extracted to allow SSL retry logic)."""
+        if resp.status < 200 or resp.status >= 300:
+            return {"error": f"Fetch failed: HTTP {resp.status}", "url": target_url}
+
+        content_type = (resp.headers.get("content-type") or "").lower()
+        looks_like_pdf = target_url.lower().split("?", 1)[0].endswith(".pdf")
+        is_pdf = looks_like_pdf or "application/pdf" in content_type
+
+        if is_pdf:
+            return {
+                "status": "skipped_pdf",
+                "reason": "PDF files are excluded from Deep Research to protect memory and context budget",
+                "url": target_url,
+                "parse_format": "skipped_pdf",
+            }
+
+        try:
+            body = await resp.text(errors="replace")
+            from deep_research.cleaner import TextCleaner
+            text = TextCleaner().clean(body, query=query)
+            # Defensive: log if cleaning stripped too much content
+            if len(text) < 500 and len(body) > 5000:
+                logger.warning(
+                    "read_url: TextCleaner stripped aggressively. "
+                    "URL=%s, original=%d chars, cleaned=%d chars, query=%s",
+                    target_url, len(body), len(text), query or "(none)"
+                )
+            return {
+                "status": "success",
+                "content": text,
+                "url": target_url,
+                "parse_format": "html",
+            }
+        except Exception as e:
+            logger.error("read_url extraction_failed: URL=%s, error=%s", target_url, e)
+            return {"error": f"Extraction failed: {e}", "url": target_url}
 
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,
