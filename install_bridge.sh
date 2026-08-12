@@ -14,7 +14,6 @@ echo "[2/2] Setting up Nexon Bridge..."
 TARGET_DIR="$HOME/nexon_bridge"
 mkdir -p "$TARGET_DIR"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMP_CLONE="$(mktemp -d)"
 trap 'rm -rf "$TMP_CLONE"' EXIT
 
