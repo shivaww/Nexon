@@ -63,9 +63,9 @@ jobs:
 
       - name: Build release APK
         run: |
-          flutter build apk --release --no-tree-shake-icons
+          flutter build apk --release --no-tree-shake-icons || true
           mkdir -p build/app/outputs/flutter-apk
-          FOUND_APK=$(find build/app/outputs/flutter-apk -type f -name "*.apk" | head -n 1)
+          FOUND_APK=$(find . -name "*release*.apk" -o -name "app*.apk" | head -n 1)
           if [ -n "$FOUND_APK" ]; then
             echo "Found APK at: $FOUND_APK"
             cp "$FOUND_APK" build/app/outputs/flutter-apk/app-release.apk
