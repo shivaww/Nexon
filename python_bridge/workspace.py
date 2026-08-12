@@ -300,19 +300,25 @@ class WorkspaceManager:
     def rebuild_index(self) -> Dict[str, Any]:
         """Chunk workspace documents and save chunk index to disk."""
         chunks = []
+        failed_files = []
         files = [f for f in self.workspace_path.rglob('*') if f.is_file() and not f.name.startswith('.')]
 
         for f in files:
             if f.suffix.lower() in ALLOWED_EXTENSIONS:
-                text = self.extract_text_content(f)
-                if not text.strip():
-                    continue
-                chunks.extend(self._chunk_text(text, f.name, str(f.relative_to(self.workspace_path))))
+                try:
+                    text = self.extract_text_content(f)
+                    if not text.strip():
+                        continue
+                    chunks.extend(self._chunk_text(text, f.name, str(f.relative_to(self.workspace_path))))
+                except Exception as exc:
+                    # One malformed document must not kill the whole reindex;
+                    # record it and continue so the app still gets a success signal.
+                    failed_files.append({"file": f.name, "reason": str(exc)})
 
         with open(self.index_file, "w", encoding="utf-8") as idx_f:
             json.dump(chunks, idx_f)
 
-        return {"total_files": len(files), "total_chunks": len(chunks)}
+        return {"total_files": len(files), "total_chunks": len(chunks), "failed_files": failed_files}
 
     def read_page(self, file_path: str, page: int = 1) -> Dict[str, Any]:
         """Read a specific page of a document (text only, images skipped)."""

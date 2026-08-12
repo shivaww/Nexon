@@ -2728,7 +2728,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               .substring(planStart + 15, planEnd)
               .trim();
           final phaseRegex = RegExp(
-            r'<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>',
+            r'<phase\s*(\d+)\s*>(.*?)</phase\s*\d+\s*>',
             caseSensitive: false,
             dotAll: true,
           );
@@ -4516,7 +4516,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
         final plannedSteps = <Map<String, dynamic>>[];
         final stepMatches = RegExp(
-          r"<phase\s*(\d+)\s*>(.*?)</phase\s*\1\s*>",
+          r"<phase\s*(\d+)\s*>(.*?)</phase\s*\d+\s*>",
           caseSensitive: false,
           dotAll: true,
         ).allMatches(planText);
@@ -12479,11 +12479,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           progressNotifier.value = null; // Indeterminate spinner during indexing
 
           final reindexUri = Uri.parse('http://127.0.0.1:8390/workspace/reindex');
-          final reindexClient = HttpClient();
+          final reindexClient = HttpClient()
+            ..connectionTimeout = const Duration(seconds: 5);
           final reindexReq = await reindexClient.postUrl(reindexUri);
           reindexReq.headers.set('Content-Type', 'application/json');
-          final reindexResp = await reindexReq.close();
-          final reindexBody = await reindexResp.transform(utf8.decoder).join();
+          final reindexResp = await reindexReq
+              .close()
+              .timeout(const Duration(minutes: 5));
+          final reindexBody = await reindexResp
+              .transform(utf8.decoder)
+              .join()
+              .timeout(const Duration(seconds: 30));
           reindexClient.close();
 
           if (reindexResp.statusCode != 200) {
@@ -12505,8 +12511,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           }
 
           if (mounted) {
+            final failedCount = (summary['failed_files'] as List?)?.length ?? 0;
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('$uploadedCount file(s) uploaded & indexed ($totalChunks chunks)')),
+              SnackBar(content: Text(
+                failedCount > 0
+                    ? '$uploadedCount file(s) uploaded, $totalChunks chunks indexed. $failedCount file(s) failed to process.'
+                    : '$uploadedCount file(s) uploaded & indexed ($totalChunks chunks)',
+              )),
             );
           }
         } catch (e) {

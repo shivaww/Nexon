@@ -2572,11 +2572,27 @@ class TermuxForgeBridge:
             return web.json_response({"status": "error", "message": str(exc)}, status=500)
 
     async def _handle_workspace_reindex(self, request: web.Request) -> web.Response:
-        """Trigger a full workspace re-index (chunking) after batch uploads."""
+        """Trigger a full workspace re-index (chunking) after batch uploads.
+
+        Runs the CPU-bound rebuild in a thread so the event loop stays
+        responsive, and enforces an overall timeout so the app always
+        receives a response instead of hanging forever.
+        """
         try:
             from workspace import WorkspaceManager
             mgr = WorkspaceManager()
-            summary = mgr.rebuild_index()
+            loop = asyncio.get_running_loop()
+            try:
+                summary = await asyncio.wait_for(
+                    loop.run_in_executor(None, mgr.rebuild_index),
+                    timeout=240,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Workspace reindex timed out after 240s")
+                return web.json_response({
+                    "status": "error",
+                    "message": "Reindex timed out after 240s (oversized file or hung extractor)",
+                }, status=504)
             return web.json_response({
                 "status": "success",
                 "index_summary": summary,
