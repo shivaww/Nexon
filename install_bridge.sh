@@ -2,64 +2,78 @@
 # ============================================================================
 # Nexon Deep Research & Python Bridge Setup Script
 # ============================================================================
-set -e
+set -euo pipefail
 
 echo "=== Nexon Environment Setup ==="
 echo "[1/2] Checking and installing system packages..."
 
-# Install essential system packages & Termux python binary modules
-pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl poppler python-aiohttp python-psutil 2>/dev/null || apt-get install -y curl python git wget jq tar clang make ripgrep poppler-utils 2>/dev/null || true
+# Install essential system packages required by the bridge and document/PDF tooling.
+pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl poppler python-aiohttp python-psutil
 
 echo "[2/2] Setting up Nexon Bridge..."
 TARGET_DIR="$HOME/nexon_bridge"
 mkdir -p "$TARGET_DIR"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "$PWD")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TMP_CLONE="$(mktemp -d)"
+trap 'rm -rf "$TMP_CLONE"' EXIT
 
-echo "  -> Fetching bridge source..."
-if [ -d "$SCRIPT_DIR/python_bridge" ]; then
-    cp -r "$SCRIPT_DIR/python_bridge/"* "$TARGET_DIR/" || true
-elif [ -d "$HOME/projects/termux_forge/python_bridge" ]; then
-    cp -r "$HOME/projects/termux_forge/python_bridge/"* "$TARGET_DIR/" || true
-elif [ -d "$HOME/Nexon/python_bridge" ]; then
-    cp -r "$HOME/Nexon/python_bridge/"* "$TARGET_DIR/" || true
-else
-    echo "  -> Downloading python_bridge components from GitHub..."
-    TMP_CLONE=$(mktemp -d)
-    git clone --depth 1 https://github.com/shivaww/Nexon.git "$TMP_CLONE" 2>/dev/null || true
-    if [ -d "$TMP_CLONE/python_bridge" ]; then
-        cp -r "$TMP_CLONE/python_bridge/"* "$TARGET_DIR/"
-        rm -rf "$TMP_CLONE"
-    fi
+# Always fetch the latest bridge source from the canonical repository so a
+# stale local python_bridge directory cannot silently install an old version.
+echo "  -> Fetching latest python_bridge from GitHub..."
+git clone --depth 1 --filter=blob:none --sparse https://github.com/shivaww/Nexon.git "$TMP_CLONE"
+git -C "$TMP_CLONE" sparse-checkout set python_bridge
+
+if [ ! -f "$TMP_CLONE/python_bridge/requirements.txt" ]; then
+    echo "Error: Latest repository does not contain python_bridge/requirements.txt"
+    exit 1
 fi
+
+# Replace the installed bridge with the latest repository version.
+rm -rf "$TARGET_DIR"
+mkdir -p "$TARGET_DIR"
+cp -a "$TMP_CLONE/python_bridge/." "$TARGET_DIR/"
 
 cd "$TARGET_DIR"
 
-echo "  -> Installing Python dependencies..."
+echo "  -> Checking Python version..."
+python3 - <<'PY'
+import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        f"Error: Python 3.10+ is required, found {sys.version_info.major}.{sys.version_info.minor}"
+    )
+print(f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} OK")
+PY
 
-cat <<EOF > requirements.txt
-websockets>=12.0,<14.0
-aiohttp>=3.9,<4.0
-aiofiles>=23.0,<25.0
-psutil>=5.9.0
-requests>=2.31.0
-python-docx
-pypdf
-EOF
+echo "  -> Installing Python dependencies from the latest requirements.txt..."
+python3 -m pip install --break-system-packages -q -r requirements.txt
 
-# Install python requirements with fallbacks and binary wheels
-MATHLIB="m" pip install --break-system-packages -q -r requirements.txt 2>/dev/null || \
-pip install --break-system-packages -q -r requirements.txt 2>/dev/null || \
-pip install -q -r requirements.txt 2>/dev/null || \
-pkg install -y python-aiohttp python-psutil || true
+echo "  -> Verifying all required Python modules..."
+python3 - <<'PY'
+import importlib.util
 
-# Verify critical modules and auto-fix if missing
-echo "  -> Verifying Python modules..."
-python3 -c "import aiohttp, websockets, psutil, requests; print('✅ All core Python modules verified successfully!')" 2>/dev/null || {
-    echo "  -> Installing pre-compiled binary modules fallback..."
-    pkg install -y python-aiohttp python-psutil || true
-    pip install --break-system-packages websockets aiofiles requests python-docx pypdf || true
+modules = {
+    "websockets": "websockets",
+    "aiohttp": "aiohttp",
+    "aiofiles": "aiofiles",
+    "psutil": "psutil",
+    "requests": "requests",
+    "python-docx": "docx",
+    "pypdf": "pypdf",
 }
+
+missing = [name for name, module in modules.items()
+           if importlib.util.find_spec(module) is None]
+if missing:
+    raise SystemExit("Error: Missing Python modules after installation: " + ", ".join(missing))
+
+print("All required Python modules verified successfully!")
+PY
+
+# Verify that installed package versions satisfy their declared dependencies.
+echo "  -> Running Python dependency consistency check..."
+python3 -m pip check
 
 echo "=== Nexon Python Bridge environment ready! ==="
 echo "All components have been successfully configured."

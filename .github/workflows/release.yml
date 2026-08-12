@@ -51,11 +51,21 @@ jobs:
 
 
 
+      - name: Verify tag matches app version
+        run: |
+          EXPECTED_VERSION="${{ steps.version.outputs.version }}"
+          APP_VERSION=$(sed -n "s/^version: \([^+]*\).*/\1/p" pubspec.yaml | head -n 1)
+          if [ "$APP_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Error: tag version $EXPECTED_VERSION does not match pubspec version $APP_VERSION"
+            exit 1
+          fi
+          echo "Version verified: $APP_VERSION"
+
       - name: Build release APK
         run: |
-          flutter build apk --release --no-tree-shake-icons || true
+          flutter build apk --release --no-tree-shake-icons
           mkdir -p build/app/outputs/flutter-apk
-          FOUND_APK=$(find . -name "*release*.apk" -o -name "app*.apk" | head -n 1)
+          FOUND_APK=$(find build/app/outputs/flutter-apk -type f -name "*.apk" | head -n 1)
           if [ -n "$FOUND_APK" ]; then
             echo "Found APK at: $FOUND_APK"
             cp "$FOUND_APK" build/app/outputs/flutter-apk/app-release.apk
@@ -75,9 +85,6 @@ jobs:
           name: "Nexon v${{ steps.version.outputs.version }}"
           body: |
             ## Nexon v${{ steps.version.outputs.version }}
-
-            ### Changes
-            See [CHANGELOG.md](CHANGELOG.md) for details.
 
             ### Installation
             1. Download `nexon-${{ steps.version.outputs.version }}.apk`
