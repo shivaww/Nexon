@@ -8,7 +8,7 @@ echo "=== Nexon Environment Setup ==="
 echo "[1/2] Checking and installing system packages..."
 
 # Install essential system packages required by the bridge and document/PDF tooling.
-pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl poppler python-aiohttp python-psutil
+pkg install -y curl python git wget jq tar clang make ripgrep libffi openssl poppler
 
 echo "[2/2] Setting up Nexon Bridge..."
 TARGET_DIR="$HOME/nexon_bridge"
