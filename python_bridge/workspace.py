@@ -49,7 +49,10 @@ class WorkspaceManager:
 
     def check_storage_quota(self, incoming_bytes: int = 0) -> Dict[str, Any]:
         """Ensures mobile device storage and workspace quota limits are respected."""
-        total_used = sum(f.stat().st_size for f in self.workspace_path.rglob('*') if f.is_file())
+        total_used = sum(
+            f.stat().st_size for f in self.workspace_path.rglob('*')
+            if f.is_file() and not f.is_symlink()
+        )
         total_used_mb = total_used / (1024 * 1024)
         incoming_mb = incoming_bytes / (1024 * 1024)
 

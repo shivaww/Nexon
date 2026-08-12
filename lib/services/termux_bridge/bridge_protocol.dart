@@ -181,8 +181,8 @@ class BridgeError {
 
   factory BridgeError.fromJson(Map<String, dynamic> json) {
     return BridgeError(
-      code: json['code'] as int,
-      message: json['message'] as String,
+      code: json['code'] as int? ?? BridgeErrorCodes.internalError,
+      message: json['message'] as String? ?? 'Unknown error',
       data: json['data'],
     );
   }

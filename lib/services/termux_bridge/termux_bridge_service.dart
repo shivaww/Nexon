@@ -231,7 +231,16 @@ class TermuxBridgeService {
     }
 
     if (!isConnected) {
-      // Queue the command for later.
+      // Queue the command for later (cap at 50 to prevent unbounded growth).
+      if (_commandQueue.length >= 50) {
+        return BridgeResponse(
+          id: request.id,
+          error: const BridgeError(
+            code: BridgeErrorCodes.internalError,
+            message: 'Command queue full. Bridge is disconnected.',
+          ),
+        );
+      }
       final completer = Completer<BridgeResponse>();
       _commandQueue.add(_QueuedRequest(request: request, completer: completer));
       return completer.future;
@@ -326,7 +335,7 @@ class TermuxBridgeService {
     }
 
     // Apply timeout.
-    final timeoutDuration = request.timeout != null
+    final timeoutDuration = (request.timeout != null && request.timeout! > 0)
         ? Duration(seconds: request.timeout!)
         : defaultTimeout;
 
@@ -344,7 +353,8 @@ class TermuxBridgeService {
 
   void _onMessage(dynamic data) {
     try {
-      final json = jsonDecode(data as String) as Map<String, dynamic>;
+      if (data is! String) return;
+      final json = jsonDecode(data) as Map<String, dynamic>;
 
       // Handle streaming output broadcasts from Python bridge.
       if (json['type'] == 'output') {
@@ -412,6 +422,7 @@ class TermuxBridgeService {
     _reconnectAttempts++;
 
     final delay = reconnectDelay * _reconnectAttempts; // linear backoff
+    _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () async {
       try {
         await connect();

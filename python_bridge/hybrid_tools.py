@@ -173,7 +173,7 @@ def _is_safe(path: str, workspace_dir: str = "") -> bool:
     it; symlink targets that escape the jail are rejected.
     """
     if not path:
-        return True
+        return False
     base = workspace_dir or _workspace()
     try:
         work = os.path.realpath(base)
@@ -841,7 +841,7 @@ async def shell_exec(
             duration_ms = int((time.monotonic() - start) * 1000)
             return ShellResult(
                 command=command, cwd=cwd,
-                exit_code=proc.returncode or -1,
+                exit_code=proc.returncode if proc.returncode is not None else -1,
                 stdout="".join(stdout_lines),
                 stderr="".join(stderr_lines),
                 duration_ms=duration_ms,
@@ -1305,17 +1305,6 @@ def write_file_rich(
         lines_before=lines_before, lines_after=lines_after,
         size_bytes=size_bytes, backup_path=backup_path, block=block,
     )
-    parts = [header]
-    if backup_path:
-        parts.append(f"  Backup: {_rel_path(backup_path)}")
-    parts.append(f"  ✓ Write successful. Verify with: dart_diagnostics or read_file_rich path={path}")
-    block = "\n".join(parts)
-
-    return WriteResult(
-        path=str(p), action="WRITTEN",
-        lines_before=lines_before, lines_after=lines_after,
-        size_bytes=size_bytes, backup_path=backup_path, block=block,
-    )
 
 
 # ── Patch file (multi search-replace) ────────────────────────────────
@@ -1393,10 +1382,16 @@ def patch_file_rich(
 
     p = Path(path).expanduser()
     if not p.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+        return {
+            "stdout": f"ERROR: File not found: {path}",
+            "error": "File not found",
+            "path": str(p),
+            "exitCode": 1,
+            "success": False,
+        }
 
     original = p.read_text(encoding=encoding)
-    lines_before = original.count("\n") + 1
+    lines_before = original.count("\n") + (1 if original and not original.endswith("\n") else 0)
 
     content = original
     applied = 0
@@ -1502,7 +1497,7 @@ def patch_file_rich(
         _release_lock(path)
 
     size_bytes = p.stat().st_size
-    lines_after = content.count("\n") + 1
+    lines_after = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
 
     _audit_log("patch", str(p), size_bytes, _sha256_file(p))
 
@@ -1560,7 +1555,13 @@ def replace_lines_rich(
         return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+        return {
+            "stdout": f"ERROR: File not found: {path}",
+            "error": "File not found",
+            "path": str(p),
+            "exitCode": 1,
+            "success": False,
+        }
 
     original = p.read_text(encoding=encoding)
     lines = original.splitlines(keepends=True)
@@ -1606,7 +1607,13 @@ def insert_lines_rich(
         return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+        return {
+            "stdout": f"ERROR: File not found: {path}",
+            "error": "File not found",
+            "path": str(p),
+            "exitCode": 1,
+            "success": False,
+        }
 
     lines = _read_lines_safe(p, encoding)
     new_lines = content.splitlines(keepends=True)
@@ -1630,7 +1637,13 @@ def delete_lines_rich(
         return _unsafe_error(path)
     p = Path(path).expanduser()
     if not p.exists():
-        raise FileNotFoundError(f"File not found: {path}")
+        return {
+            "stdout": f"ERROR: File not found: {path}",
+            "error": "File not found",
+            "path": str(p),
+            "exitCode": 1,
+            "success": False,
+        }
 
     lines = _read_lines_safe(p, encoding)
     start_idx = max(0, start_line - 1)
@@ -1830,7 +1843,7 @@ async def search_files_rich(
     backend = "ripgrep" if rg else "grep"
 
     if rg:
-        cmd_parts = [rg, "--line-number", "--no-heading", "--color=never", "--ig"]
+        cmd_parts = [rg, "--line-number", "--no-heading", "--color=never"]
         if not case_sensitive:
             cmd_parts.append("--ignore-case")
         if context_lines > 0:
@@ -2212,7 +2225,6 @@ def delete_path_rich(
                 size_bytes = 0
                 detail = f"  Permanently removed: {_rel_path(str(p))}\n  Items removed: {count}"
             else:
-                _release_lock(path)
                 return {
                     "stdout": f"ERROR: Cannot delete special file type: {path}",
                     "exitCode": 1,
@@ -2428,7 +2440,15 @@ def move_path_rich(
             pd.unlink()
 
     # shutil.move handles cross-filesystem moves
-    shutil.move(str(ps), str(pd))
+    try:
+        shutil.move(str(ps), str(pd))
+    except (OSError, shutil.Error) as exc:
+        return {
+            "stdout": f"ERROR: Move failed: {exc}",
+            "exitCode": 1,
+            "success": False,
+            "error": str(exc),
+        }
     resolved_dest = Path(dest).expanduser().resolve()
 
     kind = "directory" if resolved_dest.is_dir() else "file"
@@ -2494,14 +2514,22 @@ def copy_path_rich(
 
     pd.parent.mkdir(parents=True, exist_ok=True)
 
-    if ps.is_dir():
-        if pd.exists() and overwrite:
-            shutil.rmtree(str(pd))
-        shutil.copytree(str(ps), str(pd))
-        kind = "directory"
-    else:
-        shutil.copy2(str(ps), str(pd))
-        kind = "file"
+    try:
+        if ps.is_dir():
+            if pd.exists() and overwrite:
+                shutil.rmtree(str(pd))
+            shutil.copytree(str(ps), str(pd))
+            kind = "directory"
+        else:
+            shutil.copy2(str(ps), str(pd))
+            kind = "file"
+    except (OSError, shutil.Error) as exc:
+        return {
+            "stdout": f"ERROR: Copy failed: {exc}",
+            "exitCode": 1,
+            "success": False,
+            "error": str(exc),
+        }
 
     resolved_dest = Path(dest).expanduser().resolve()
     size = resolved_dest.stat().st_size if resolved_dest.is_file() else 0

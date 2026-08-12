@@ -12,7 +12,7 @@ class TextCleaner:
     _JS_BLOCK_RE = re.compile(r"<script[^>]*>.*?</script>", re.DOTALL | re.IGNORECASE)
     _SVG_BLOCK_RE = re.compile(r"<svg[^>]*>.*?</svg>", re.DOTALL | re.IGNORECASE)
     _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-    _STYLE_ATTR_RE = re.compile(r"\bstyle=(['\"])[^\1]*?\1", re.IGNORECASE)
+    _STYLE_ATTR_RE = re.compile(r'\bstyle=(["\']).*?\1', re.IGNORECASE | re.DOTALL)
     _HTML_TAG_RE = re.compile(r"<[^>]+>")
     _BOILERPLATE_RE = re.compile(
         r"<(nav|header|footer|aside|form|noscript)\b[^>]*>.*?</\1>",
@@ -86,7 +86,9 @@ class TextCleaner:
         # Keyword relevance filtering: if a query is provided, score paragraphs
         # and keep only the most relevant ones to reduce LLM input by ~90%.
         if query and len(reconstructed) > 6000:
-            reconstructed = self._filter_by_relevance(reconstructed, query, max_chars=6000)
+            # Respect caller's max_chars but cap relevance filter at 6000
+            relevance_budget = min(max_chars, 6000) if max_chars > 0 else 6000
+            reconstructed = self._filter_by_relevance(reconstructed, query, max_chars=relevance_budget)
 
         if max_chars > 0 and len(reconstructed) > max_chars:
             # Truncate at sentence boundary to avoid cutting mid-sentence
@@ -100,7 +102,7 @@ class TextCleaner:
     def _filter_by_relevance(self, text: str, query: str, max_chars: int = 6000) -> str:
         """Score paragraphs by keyword overlap with the query; keep top matches."""
         import re as _re
-        keywords = set(k.lower() for k in _re.findall(r'\w+', query) if len(k) > 2)
+        keywords = set(k.lower() for k in _re.findall(r'\w+', query) if len(k) >= 2)
         if not keywords:
             return text[:max_chars]
 

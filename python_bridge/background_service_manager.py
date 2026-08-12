@@ -681,6 +681,8 @@ class BackgroundServiceManager:
                 alive_str = "✓ PROCESS EXISTS (not tracked by service manager)"
             except ProcessLookupError:
                 alive_str = "✗ PROCESS NOT FOUND"
+            except PermissionError:
+                alive_str = "? PROCESS EXISTS (no permission to inspect)"
             return {
                 "stdout": f"PID {pid}: {alive_str}\nUse list_services to see all tracked services.",
                 "found": False,

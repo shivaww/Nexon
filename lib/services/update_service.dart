@@ -153,7 +153,9 @@ class UpdateService {
         if (l > c) return true;
         if (l < c) return false;
       }
-    } catch (_) {}
+    } catch (_) {
+      // Version string malformed; treat as not newer.
+    }
     return false;
   }
 

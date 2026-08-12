@@ -15713,6 +15713,28 @@ class ChatClient {
   static final liveSubscriptionCredits = ValueNotifier<int?>(null);
   static final liveTopupCredits = ValueNotifier<int?>(null);
 
+  /// Translates raw HTTP status codes into user-friendly error messages.
+  static String _friendlyLlmError(int statusCode, String body) {
+    switch (statusCode) {
+      case 401:
+      case 403:
+        return 'Authentication failed. Check your API key for this provider.';
+      case 404:
+        return 'Model not found. This model may not be available on the selected provider. Try another model.';
+      case 402:
+        return 'Insufficient credits or quota exceeded for this provider.';
+      case 429:
+        return 'Rate limited. The provider is temporarily busy — try again in a moment.';
+      case 500:
+      case 502:
+      case 503:
+      case 529:
+        return 'Temporarily unavailable from provider. Try another model or wait a moment.';
+      default:
+        return 'Provider error (HTTP $statusCode). Try another model or check your connection.';
+    }
+  }
+
   static Future<void> fetchLiveWallet() async {
     final session = Supabase.instance.client.auth.currentSession;
     if (session == null) return;
@@ -15747,7 +15769,7 @@ class ChatClient {
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException('HTTP ${response.statusCode}: $body');
+        throw HttpException(_friendlyLlmError(response.statusCode, body));
       }
       final decoded = jsonDecode(body);
 
@@ -16134,7 +16156,7 @@ class ChatClient {
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
               final body = await response.transform(utf8.decoder).join();
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException(_friendlyLlmError(response.statusCode, body));
             }
             success = true;
             break;

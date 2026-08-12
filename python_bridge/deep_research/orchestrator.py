@@ -129,18 +129,40 @@ class DeepResearchOrchestrator:
         logger.info("Updated phase record for %s in temp.json.", stage_id)
         return {"status": "ok"}
 
+    def _rebuild_ingested_cache(self) -> None:
+        """Rebuild run_ingested_urls from temp.json so dedup survives restarts."""
+        try:
+            for phase in self._read_temp():
+                for fact in phase.get("facts") or []:
+                    norm = self._normalize_url(str(fact.get("source") or ""))
+                    if norm:
+                        self.run_ingested_urls.add(norm)
+                for finding in phase.get("findings") or []:
+                    norm = self._normalize_url(str(finding.get("source") or ""))
+                    if norm:
+                        self.run_ingested_urls.add(norm)
+        except Exception as e:
+            logger.warning("Failed to rebuild ingested cache: %s", e)
+
     @staticmethod
     def _normalize_url(url: str) -> str:
-        """Normalize a URL for dedup: strip scheme, www, trailing slash, query params."""
+        """Normalize a URL for dedup: strip scheme, www, trailing slash, query, and fragment."""
         if not url:
             return ""
+
         from urllib.parse import urlparse
+
         try:
-            parsed = urlparse(url)
+            raw = url.strip()
+            parsed = urlparse(raw)
+            if not parsed.netloc:
+                parsed = urlparse("http://" + raw)
             host = (parsed.hostname or "").lower()
-            if host.startswith("www."):
-                host = host[4:]
-            path = parsed.path.rstrip("/")
+            if not host:
+                path_like = raw.lower().split("?", 1)[0].split("#", 1)[0].rstrip("/")
+                return path_like.removeprefix("www.").removeprefix("http://").removeprefix("https://")
+            host = host.removeprefix("www.")
+            path = (parsed.path or "").rstrip("/").lower()
             return f"{host}{path}"
         except Exception:
             return ""

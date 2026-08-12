@@ -78,6 +78,19 @@ BLOCKED_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\binit\s+0\b"), "system init 0"),
     (re.compile(r"\bkillall\s+-9\s+-1\b"), "kill all processes"),
     (re.compile(r"\bkill\s+-9\s+-1\b"), "kill all processes"),
+    # Split-flag variants of recursive rm on root
+    (re.compile(r"\brm\s+-\w*r\w*\s+-\w*f\w*\s+/\b"), "recursive rm on root (split flags)"),
+    (re.compile(r"\brm\s+-\w*f\w*\s+-\w*r\w*\s+/\b"), "recursive rm on root (split flags)"),
+    # Pipe to interpreters beyond sh/bash
+    (re.compile(r"\bcurl\s+.*\|\s*(python3?|perl|ruby|node)\b"), "pipe curl to interpreter"),
+    (re.compile(r"\bwget\s+.*\|\s*(python3?|perl|ruby|node)\b"), "pipe wget to interpreter"),
+    # Recursive rm on home / cwd / $HOME
+    (re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+~\s*$"), "recursive rm on home"),
+    (re.compile(r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+~\s*$"), "recursive rm on home"),
+    (re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+\$HOME\b"), "recursive rm on $HOME"),
+    (re.compile(r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+\$HOME\b"), "recursive rm on $HOME"),
+    (re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+\.\s*$"), "recursive rm on cwd"),
+    (re.compile(r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+\.\s*$"), "recursive rm on cwd"),
 ]
 
 # ── High-risk patterns (allowed but flagged) ──────────────────────────
@@ -240,7 +253,8 @@ class SecurityManager:
         expanded = os.path.expanduser(path)
         resolved = os.path.realpath(expanded)
         for approved in self.approved_paths:
-            if resolved.startswith(os.path.realpath(approved)):
+            approved_real = os.path.realpath(approved)
+            if resolved == approved_real or resolved.startswith(approved_real + os.sep):
                 return True
         return False
 

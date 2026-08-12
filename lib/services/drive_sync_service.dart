@@ -700,7 +700,7 @@ class DriveSyncService {
       final res = await Supabase.instance.client.functions.invoke(
         'refresh-google-drive-token',
         body: {'refresh_token': refreshToken},
-      );
+      ).timeout(const Duration(seconds: 30));
       final data = res.data;
       if (res.status == 200 && data != null) {
         final payload = data is Map<String, dynamic>
@@ -1081,7 +1081,9 @@ class DriveSyncService {
       try {
         final decoded = jsonDecode(rawLocal) as List<dynamic>;
         localSessions = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      } catch (_) {}
+      } catch (_) {
+        // Local sessions JSON is corrupted; proceed with empty local set.
+      }
     }
 
     final mergedMap = <String, Map<String, dynamic>>{};
@@ -1107,8 +1109,8 @@ class DriveSyncService {
         addedFromRemote++;
       } else {
         final local = mergedMap[id]!;
-        final localMsgs = (local['messages'] as List?)?.length ?? 0;
-        final remoteMsgs = (remote['messages'] as List?)?.length ?? 0;
+        final localMsgs = (local['messages'] is List) ? (local['messages'] as List).length : 0;
+        final remoteMsgs = (remote['messages'] is List) ? (remote['messages'] as List).length : 0;
 
         final localUpdated = DateTime.tryParse(local['updatedAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
         final remoteUpdated = DateTime.tryParse(remote['updatedAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);

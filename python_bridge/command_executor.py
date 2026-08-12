@@ -282,6 +282,10 @@ class CommandExecutor:
             raise ValueError(f"Command blocked: {safety.reason}")
 
         full_env = dict(os.environ)
+        termux_bin = "/data/data/com.termux/files/usr/bin"
+        current_path = full_env.get("PATH", "")
+        if termux_bin not in current_path:
+            full_env["PATH"] = f"{termux_bin}:{current_path}" if current_path else termux_bin
         if env:
             full_env.update(env)
 
@@ -341,7 +345,7 @@ class CommandExecutor:
 
         duration = time.monotonic() - start
         result = CommandResult(
-            exit_code=process.returncode or -1,
+            exit_code=process.returncode if process.returncode is not None else -1,
             stdout="".join(stdout_lines),
             stderr="".join(stderr_lines),
             duration=duration,

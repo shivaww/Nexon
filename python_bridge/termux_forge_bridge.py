@@ -1170,7 +1170,12 @@ class TermuxForgeBridge:
             if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 return {"error": "Fetch failed: only public HTTP(S) URLs are allowed."}
             host = parsed.hostname.lower()
-            if host in {"localhost", "metadata.google.internal"}:
+            _blocked_hosts = {
+                "localhost", "metadata.google.internal",
+                "127.0.0.1", "0.0.0.0", "::1", "[::1]",
+                "169.254.169.254",
+            }
+            if host in _blocked_hosts or host.endswith(".local") or host.endswith(".internal"):
                 return {"error": "Fetch failed: local/private URLs are not allowed."}
             try:
                 address = ipaddress.ip_address(host)
@@ -2702,7 +2707,12 @@ class TermuxForgeBridge:
 
         if request.is_notification():
             # Notifications don't get responses
-            asyncio.create_task(self.router.dispatch(request))
+            async def _run_notification():
+                try:
+                    await self.router.dispatch(request)
+                except Exception:
+                    logger.exception("Notification handler error: %s", request.method)
+            asyncio.create_task(_run_notification())
             return None
 
         response = await self.router.dispatch(request)

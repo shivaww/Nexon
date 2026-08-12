@@ -319,8 +319,14 @@ class CheckpointManager:
             backup_dir = os.path.join(
                 CHECKPOINT_DIR, checkpoint_id, "files",
             )
+            workspace_real = os.path.realpath(self.workspace)
             for file_data in checkpoint.get("files", []):
                 path = file_data["path"]
+                # Jail check: never restore outside the workspace
+                resolved = os.path.realpath(os.path.expanduser(path))
+                if not (resolved == workspace_real or resolved.startswith(workspace_real + os.sep)):
+                    logger.warning("Rollback blocked path outside workspace: %s", path)
+                    continue
                 backup = os.path.join(
                     backup_dir,
                     hashlib.md5(path.encode()).hexdigest(),
@@ -341,10 +347,17 @@ class CheckpointManager:
             commit = git.get("commitHash", "")
             branch = git.get("branch", "")
             if commit:
-                result = await self._run_git(
-                    f"git checkout {branch} && git reset --hard {commit}",
-                    cwd,
-                )
+                # Sanitize branch and commit to prevent shell injection
+                import re as _re
+                safe_branch = _re.sub(r'[^\w.\-/]', '', branch)[:200]
+                safe_commit = _re.sub(r'[^0-9a-fA-F]', '', commit)[:40]
+                if not safe_branch or not safe_commit:
+                    actions.append("Git restore skipped: invalid branch/commit in checkpoint")
+                else:
+                    result = await self._run_git(
+                        f"git checkout {safe_branch} && git reset --hard {safe_commit}",
+                        cwd,
+                    )
                 if result:
                     actions.append(f"Git restored to {commit[:8]} on {branch}")
 

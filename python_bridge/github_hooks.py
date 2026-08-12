@@ -242,11 +242,12 @@ class GitHubHooks:
         output_dir : str, optional
             Directory to save artifacts to.
         """
-        cmd = f"gh run download {run_id}"
+        import shlex
+        cmd = f"gh run download {shlex.quote(str(run_id))}"
         if name:
-            cmd += f" -n {name}"
+            cmd += f" -n {shlex.quote(str(name))}"
         if output_dir:
-            cmd += f" -D {output_dir}"
+            cmd += f" -D {shlex.quote(str(output_dir))}"
         return await self._run(cmd, cwd)
 
     # ── Releases ──────────────────────────────────────────────────────
@@ -279,13 +280,12 @@ class GitHubHooks:
         prerelease : bool
             Mark as pre-release.
         """
+        import shlex
         title = title or tag
-        safe_title = title.replace("'", "'\\''")
-        cmd = f"gh release create {tag} --title '{safe_title}'"
+        cmd = f"gh release create {shlex.quote(tag)} --title {shlex.quote(title)}"
 
         if notes:
-            safe_notes = notes.replace("'", "'\\''")
-            cmd += f" --notes '{safe_notes}'"
+            cmd += f" --notes {shlex.quote(notes)}"
         else:
             cmd += " --generate-notes"
 
@@ -294,7 +294,7 @@ class GitHubHooks:
         if prerelease:
             cmd += " --prerelease"
         if files:
-            cmd += " " + " ".join(files)
+            cmd += " " + " ".join(shlex.quote(f) for f in files)
 
         return await self._run(cmd, cwd)
 

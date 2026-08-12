@@ -378,9 +378,12 @@ class McpManager:
         if state.status != ServerStatus.RUNNING:
             return {"error": f"Server not running: {server_name}"}
 
+        if not hasattr(self, '_request_counter'):
+            self._request_counter = 0
+        self._request_counter += 1
         request = {
             "jsonrpc": "2.0",
-            "id": int(time.time() * 1000),
+            "id": self._request_counter,
             "method": method,
             "params": params or {},
         }

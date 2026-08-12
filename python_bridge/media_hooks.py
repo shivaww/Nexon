@@ -368,9 +368,17 @@ class MediaHooks:
                     )
 
                 import base64
-                image_data = base64.b64decode(
-                    data["data"][0]["b64_json"]
-                )
+                try:
+                    image_data = base64.b64decode(
+                        data["data"][0]["b64_json"]
+                    )
+                except (KeyError, IndexError, TypeError) as exc:
+                    return MediaResult(
+                        success=False, provider="openai", model=model,
+                        media_type="image",
+                        error=f"Unexpected API response structure: {exc}",
+                        duration=time.monotonic() - start,
+                    )
                 path = self._save_artifact(image_data, "png", output_name)
 
                 return MediaResult(
@@ -392,7 +400,16 @@ class MediaHooks:
         import aiohttp
 
         start = time.monotonic()
-        width, height = (int(x) for x in size.split("x"))
+        try:
+            parts = size.split("x")
+            width, height = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError, AttributeError):
+            return MediaResult(
+                success=False, provider="stability", model=model,
+                media_type="image",
+                error=f"Invalid size format: {size}. Expected WxH (e.g. 1024x1024).",
+                duration=0.0,
+            )
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -423,9 +440,17 @@ class MediaHooks:
                     )
 
                 import base64
-                image_data = base64.b64decode(
-                    data["artifacts"][0]["base64"]
-                )
+                try:
+                    image_data = base64.b64decode(
+                        data["artifacts"][0]["base64"]
+                    )
+                except (KeyError, IndexError, TypeError) as exc:
+                    return MediaResult(
+                        success=False, provider="stability", model=model,
+                        media_type="image",
+                        error=f"Unexpected API response structure: {exc}",
+                        duration=time.monotonic() - start,
+                    )
                 path = self._save_artifact(image_data, "png", output_name)
 
                 return MediaResult(
