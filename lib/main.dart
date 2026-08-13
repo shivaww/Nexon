@@ -6500,7 +6500,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       builder: (context) {
         return MediaAndModelSheet(
           sessions: _sessions,
-          sessionId: _activeSessionId,
+          sessionId: _activeSessionId ?? '',
           onRestoreCompleted: _loadSessions,
           provider: provider,
           settings: settings,
