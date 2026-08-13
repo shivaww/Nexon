@@ -6500,6 +6500,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       builder: (context) {
         return MediaAndModelSheet(
           sessions: _sessions,
+          sessionId: _activeSessionId,
           onRestoreCompleted: _loadSessions,
           provider: provider,
           settings: settings,
@@ -12073,6 +12074,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onReasoningEnabledChanged,
     required this.onFetchModels,
     required this.onConfigureKey,
+    required this.sessionId,
   });
 
   final ProviderDefinition provider;
@@ -12107,6 +12109,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<bool> onReasoningEnabledChanged;
   final Future<List<String>> Function() onFetchModels;
   final ValueChanged<String> onConfigureKey;
+  final String sessionId;
 
   @override
   State<MediaAndModelSheet> createState() => _MediaAndModelSheetState();
@@ -12788,7 +12791,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             statusNotifier.value = 'Uploading ${uploadedCount + 1}/$totalFiles';
             progressNotifier.value = 0.0;
 
-            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload?ingest=false&session=$_activeSessionId');
+            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload?ingest=false&session=${widget.sessionId}');
             final httpReq = await httpClient.postUrl(uploadUri);
 
             final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
