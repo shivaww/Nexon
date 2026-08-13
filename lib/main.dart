@@ -6875,6 +6875,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   if (_agenticEnabled) const _FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
                   if (_studyModeEnabled) const _FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
                   if (_artifactsEnabled) const _FeaturePill(icon: Icons.extension, label: 'Artifacts'),
+                  if (_svgVisualsEnabled) const _FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
                 ],
               ),
             ),
