@@ -77,6 +77,35 @@ class WorkspaceManager:
             "free_disk_mb": round(free_mb, 2)
         }
 
+    def clear_session_documents(self) -> Dict[str, Any]:
+        """Remove all documents left by the previous session, freeing the 150MB quota."""
+        removed, freed = 0, 0
+        for entry in list(self.workspace_path.iterdir()):
+            try:
+                if entry.is_dir() and not entry.is_symlink():
+                    freed += sum(f.stat().st_size for f in entry.rglob('*') if f.is_file())
+                    shutil.rmtree(entry)
+                else:
+                    if entry.is_file():
+                        freed += entry.stat().st_size
+                    os.remove(entry)
+                removed += 1
+            except OSError:
+                continue
+        return {
+            "status": "success",
+            "removed_items": removed,
+            "freed_mb": round(freed / (1024 * 1024), 2),
+        }
+
+    def ensure_session(self, session_id: str) -> None:
+        """First upload from a different session clears the previous session's docs."""
+        marker = self.workspace_path / ".workspace_session"
+        prev = marker.read_text().strip() if marker.exists() else ""
+        if prev and prev != session_id:
+            self.clear_session_documents()
+        marker.write_text(session_id)
+
     def ingest_file(self, file_path: str, rebuild: bool = True) -> Dict[str, Any]:
         """Ingests a file or unzips archives safely, discarding prohibited binaries."""
         path = Path(file_path)
@@ -524,6 +553,48 @@ class WorkspaceManager:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [item[1] for item in scored[:top_k]]
+
+    def cross_compare(self, query: str, max_per_doc: int = 2) -> Dict[str, Any]:
+        """Like search_chunks, but guarantees EVERY matching document contributes
+        its own top chunks — needed for timeline / cross-year comparisons where
+        a global top-k would let one verbose document dominate."""
+        if not self.index_file.exists():
+            self.rebuild_index()
+        try:
+            with open(self.index_file, "r", encoding="utf-8") as idx_f:
+                chunks = json.load(idx_f)
+        except Exception:
+            return {"status": "error", "message": "Workspace index unavailable.", "per_document": []}
+
+        keywords = [k.lower() for k in re.findall(r'\w+', query) if len(k) > 2]
+        if not keywords:
+            return {"status": "error", "message": "Query too short. Use specific terms (e.g. 'crude oil price').", "per_document": []}
+
+        max_per_doc = max(1, min(int(max_per_doc), 4))
+        by_file: Dict[str, list] = {}
+        for chunk in chunks:
+            text_lower = chunk["content"].lower()
+            score = sum(text_lower.count(kw) for kw in keywords)
+            if score > 0:
+                by_file.setdefault(chunk["file"], []).append((score, chunk))
+
+        per_document = []
+        for fname in sorted(by_file):
+            items = sorted(by_file[fname], key=lambda x: x[0], reverse=True)
+            per_document.append({
+                "file": fname,
+                "matches": [
+                    {"content": c["content"][:900], "score": s}
+                    for s, c in items[:max_per_doc]
+                ],
+            })
+
+        return {
+            "status": "success",
+            "query": query,
+            "documents_matched": len(per_document),
+            "per_document": per_document,
+        }
 
     def list_files(self) -> Dict[str, Any]:
         """Returns workspace file inventory and quota details."""

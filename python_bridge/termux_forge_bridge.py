@@ -240,6 +240,7 @@ class TermuxForgeBridge:
         r.register("workspace_read_page", self._workspace_read_page)
         r.register("workspace_get_outline", self._workspace_get_outline)
         r.register("workspace_check_deps", self._workspace_check_deps)
+        r.register("workspace_cross_compare", self._workspace_cross_compare)
 
         # ── MCP ───────────────────────────────────────────────────────
         r.register("mcp_server_manage", self._mcp_server_manage)
@@ -920,6 +921,10 @@ class TermuxForgeBridge:
     async def _workspace_check_deps(self) -> dict:
         from workspace import WorkspaceManager
         return WorkspaceManager().check_dependencies()
+
+    async def _workspace_cross_compare(self, query: str = "", max_per_doc: int = 2) -> dict:
+        from workspace import WorkspaceManager
+        return WorkspaceManager().cross_compare(query, max_per_doc=max_per_doc)
 
     # ── MCP ───────────────────────────────────────────────────────────
 
@@ -2532,6 +2537,11 @@ class TermuxForgeBridge:
             from workspace import WorkspaceManager
             mgr = WorkspaceManager()
 
+            # New session owns the bucket: clear stale docs from previous sessions
+            session_id = request.query.get("session", "")
+            if session_id:
+                mgr.ensure_session(session_id)
+
             # Quota pre-check before writing
             quota = mgr.check_storage_quota()
             if not quota.get("allowed", False):
@@ -2604,6 +2614,15 @@ class TermuxForgeBridge:
             })
         except Exception as exc:
             logger.error("Workspace reindex failed: %s", exc)
+            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+
+    async def _handle_workspace_clear(self, request: web.Request) -> web.Response:
+        """Clear previous-session documents so a new session gets a clean quota."""
+        try:
+            from workspace import WorkspaceManager
+            return web.json_response(WorkspaceManager().clear_session_documents())
+        except Exception as exc:
+            logger.error("Workspace clear failed: %s", exc)
             return web.json_response({"status": "error", "message": str(exc)}, status=500)
 
     async def _handle_workspace_deps(self, request: web.Request) -> web.Response:
@@ -2757,6 +2776,7 @@ class TermuxForgeBridge:
         self._http_app.router.add_post('/mcp', self._handle_http_post)
         self._http_app.router.add_post('/workspace/upload', self._handle_workspace_upload)
         self._http_app.router.add_post('/workspace/reindex', self._handle_workspace_reindex)
+        self._http_app.router.add_post('/workspace/clear', self._handle_workspace_clear)
         self._http_app.router.add_get('/workspace/deps', self._handle_workspace_deps)
         
         # Also support OPTIONS for CORS if needed

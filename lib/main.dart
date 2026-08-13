@@ -901,6 +901,23 @@ class _ChatHomePageState extends State<ChatHomePage> {
     _agenticEnabled = false; // Default off for new chat
     _deepResearchEnabled = false; // Default off for new chat
     _studyModeEnabled = false; // Default off for new chat
+    _clearWorkspaceBucket();
+  }
+
+  Future<void> _clearWorkspaceBucket() async {
+    try {
+      final client = HttpClient();
+      final req = await client
+          .postUrl(Uri.parse('http://127.0.0.1:8390/workspace/clear'))
+          .timeout(const Duration(seconds: 5));
+      req.headers.contentType = ContentType.json;
+      req.add(utf8.encode('{}'));
+      final resp = await req.close().timeout(const Duration(seconds: 5));
+      await resp.drain<void>();
+      client.close(force: true);
+    } catch (_) {
+      // Bridge offline at startup — upload-time session check clears instead.
+    }
   }
 
   Future<void> _loadSessions() async {
@@ -928,6 +945,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
               _agenticEnabled = false; // Default off for new chat
               _deepResearchEnabled = false; // Default off for new chat
               _studyModeEnabled = false; // Default off for new chat
+              _clearWorkspaceBucket();
               hasEmptySession = true;
             }
           }
@@ -953,6 +971,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
             _agenticEnabled = false; // Default off for new chat
             _deepResearchEnabled = false; // Default off for new chat
             _studyModeEnabled = false; // Default off for new chat
+            _clearWorkspaceBucket();
           }
           _editingMessageIndex = null;
         });
@@ -2219,26 +2238,56 @@ jobs:
 
           if (_studyModeEnabled) {
             systemPromptText +=
-                "\n\n[MODE: STUDY / CROSS-DOCUMENT ANALYSIS ACTIVE]\n"
-                "You have access to a document workspace via XML tool calls. Use <mcp_request> tags to query documents.\n\n"
-                "AVAILABLE WORKSPACE TOOLS (emit ONE per turn, then wait for result):\n"
-                "- workspace_list: List uploaded files, sizes, and quota.\n"
-                "  <mcp_request>{\"method\":\"workspace_list\",\"params\":{}}</mcp_request>\n"
-                "- workspace_search: Search across all documents for relevant text chunks (lightweight RAG). Supports batch queries.\n"
-                "  <mcp_request>{\"method\":\"workspace_search\",\"params\":{\"queries\":[\"search terms 1\",\"search terms 2\"],\"top_k\":5}}</mcp_request>\n"
-                "- workspace_ingest: Index a new file from the workspace directory.\n"
-                "  <mcp_request>{\"method\":\"workspace_ingest\",\"params\":{\"file_path\":\"/path/to/file\"}}</mcp_request>\n"
-                "- workspace_read_page: Read a specific page of a document (text only, images skipped).\n"
-                "  <mcp_request>{\"method\":\"workspace_read_page\",\"params\":{\"file_path\":\"file.pdf\",\"page\":1}}</mcp_request>\n"
-                "- workspace_get_outline: Get document structure (headings, chapters, outline).\n"
-                "  <mcp_request>{\"method\":\"workspace_get_outline\",\"params\":{\"file_path\":\"file.pdf\"}}</mcp_request>\n\n"
-                "PROTOCOL:\n"
-                "1. WORKSPACE AUDIT: Call workspace_list before formulating answers for multi-file contexts.\n"
-                "2. CONTEXT RETRIEVAL: Do NOT load entire large files. Use workspace_search for relevant text chunks.\n"
-                "3. SYNTHESIS & COMPARISON: Cross-reference facts across documents. Highlight consensus and contradictions.\n"
-                "4. CITATIONS: Include direct citations for derived claims (e.g., `[Source: textbook_ch1.pdf, Page 4]`).\n"
-                "5. TABLES & DIAGRAMS: Retain markdown tables and flowcharts when explaining concepts.\n"
-                "6. ONE TOOL PER TURN: Emit EXACTLY ONE <mcp_request> block per turn, then STOP and wait for results. Do NOT emit multiple tool calls in the same turn.\n\n";
+                "\n\n[MODE: STUDY / CROSS-DOCUMENT ANALYSIS]\n"
+                "You are a patient tutor and a document analyst. You answer from the user's uploaded documents when they exist, and teach concepts step by step.\n\n"
+                "SOURCE RULE (check first):\n"
+                "- Workspace HAS documents → every fact must come from workspace tools. Do NOT answer from memory.\n"
+                "- Workspace is EMPTY → teach from your own knowledge. Do NOT call workspace tools.\n"
+                "- Not sure? Call workspace_list once.\n\n"
+                "TOOLBOX — emit EXACTLY ONE tool per turn, then STOP and wait:\n"
+                "1. workspace_list = SEE the file list.\n"
+                "   USE WHEN: first document question of the session; user asks what files exist.\n"
+                "   <mcp_request>{\"method\":\"workspace_list\",\"params\":{}}</mcp_request>\n"
+                "2. workspace_search = FIND a fact (best chunks overall).\n"
+                "   USE WHEN: question about one topic, e.g. 'what does the report say about diesel?'.\n"
+                "   <mcp_request>{\"method\":\"workspace_search\",\"params\":{\"queries\":[\"diesel price\"],\"top_k\":5}}</mcp_request>\n"
+                "3. workspace_cross_compare = COMPARE the same topic across ALL documents (one result group per file).\n"
+                "   USE WHEN: change over time or differences between documents, e.g. 'how did crude oil price change 2020 to 2026?', 'compare fuel prices across all reports'.\n"
+                "   <mcp_request>{\"method\":\"workspace_cross_compare\",\"params\":{\"query\":\"crude oil price\",\"max_per_doc\":2}}</mcp_request>\n"
+                "4. workspace_read_page = READ one full page of one file.\n"
+                "   USE WHEN: a search chunk is cut off or unclear and you need the whole page.\n"
+                "   <mcp_request>{\"method\":\"workspace_read_page\",\"params\":{\"file_path\":\"file.pdf\",\"page\":1}}</mcp_request>\n"
+                "5. workspace_get_outline = SEE headings/chapters of one file.\n"
+                "   USE WHEN: you don't know which page or section to read.\n"
+                "   <mcp_request>{\"method\":\"workspace_get_outline\",\"params\":{\"file_path\":\"file.pdf\"}}</mcp_request>\n"
+                "6. workspace_ingest = INDEX a file that is in the workspace but returns nothing in searches.\n"
+                "   USE WHEN: workspace_list shows a file, but workspace_search finds nothing inside it.\n"
+                "   <mcp_request>{\"method\":\"workspace_ingest\",\"params\":{\"file_path\":\"/path/to/file\"}}</mcp_request>\n"
+                "7. quiz_request = TEST the user (TUTOR RULES below).\n"
+                "   USE WHEN: the user replied yes to the understanding check.\n\n"
+                "CHEAT-SHEET (pick the tool by the question shape):\n"
+                "- 'what files do I have?' → workspace_list\n"
+                "- 'what does the document say about X?' → workspace_search\n"
+                "- 'how did X change over the years / across documents?' → workspace_cross_compare\n"
+                "- 'which chapter covers Y?' → workspace_get_outline\n"
+                "- 'give me the full page about Z' → workspace_read_page\n"
+                "- 'teach me T' → explain ONE concept, understanding check, then quiz_request\n\n"
+                "ANSWER RULES:\n"
+                "1. Cite every fact: [Source: file.pdf, Page N] when the tool result provides it.\n"
+                "2. For workspace_cross_compare results: build ONE markdown table with one row per document (ordered by year or file name), then 2-3 sentences of trend (rising / falling / stable).\n"
+                "3. Documents disagree → show both values and say they disagree. Never pick one silently.\n"
+                "4. No document mentions the topic → say so plainly; do not invent numbers.\n\n"
+                "TUTOR RULES (when the user wants to learn):\n"
+                "1. Teach ONE concept per reply (what it is, why it matters). Never the whole topic at once.\n"
+                "2. End EVERY explanation with exactly: 'Reply yes if you understood this concept, or no and I will explain it more simply.'\n"
+                "3. User says no → explain the SAME concept simpler (analogy, tiny steps), ask again.\n"
+                "4. User says yes → emit ONE <quiz_request> about this concept BEFORE the next concept.\n"
+                "5. Quiz results back → explain every WRONG verdict clearly, ask the check again, then move on.\n"
+                "6. Order concepts basic → advanced; make quizzes harder as the session goes.\n"
+                "7. USER SWITCHES TOPIC WITHOUT yes/no: if the user asks for a different concept instead of answering yes/no, do not switch yet. First say politely: 'Before we move on, please answer these quick questions about what we just learned.' Then emit a <quiz_request> about the concept you just explained. When results return, explain every WRONG verdict clearly, then teach the concept the user asked for.\n\n"
+                "QUIZ FORMAT:\n"
+                "<quiz_request>{\"questions\":[{\"q\":\"Question?\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correct\":0}]}</quiz_request>\n"
+                "1-5 questions; 2-4 options; exactly ONE correct (index in \"correct\"); options get trickier down the list; never 'all of the above'.\n\n";
           }
 
           if (_svgVisualsEnabled) {
@@ -2705,6 +2754,10 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         );
         final mcpRegex = RegExp(
           r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
+          caseSensitive: false,
+        );
+        final quizRegex = RegExp(
+          r'<quiz_request>\s*(\{[\s\S]*?\})\s*</quiz_request>',
           caseSensitive: false,
         );
         final memoryRegex = RegExp(
@@ -3178,6 +3231,38 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             }
             if (mounted) setState(() => _toolStatus = '');
             toolOutputs.add("Tool Result [${toolMethod}]:\n\n$mcpResult");
+          }
+        }
+
+        final quizMatch = quizRegex.firstMatch(fullText);
+        if (_studyModeEnabled && quizMatch != null) {
+          executedTools = true;
+          final questions = _QuizSheet.parseQuestions(quizMatch.group(1) ?? '');
+          if (questions.isEmpty) {
+            toolOutputs.add('Quiz Tool Result:\n\n{"error":"malformed quiz_request, no valid questions"}');
+          } else {
+            final answers = await showModalBottomSheet<List<Map<String, dynamic>>>(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              isDismissible: false,
+              builder: (_) => _QuizSheet(questions: questions),
+            );
+            if (answers == null) {
+              toolOutputs.add('Quiz Tool Result:\n\nUser dismissed the quiz without answering. Ask whether to retry or skip, then continue teaching.');
+            } else {
+              final sb = StringBuffer('Quiz results (${answers.length} questions):\n');
+              for (var qi = 0; qi < answers.length; qi++) {
+                final a = answers[qi];
+                sb.writeln('Q${qi + 1}: ${a['q']}');
+                sb.writeln('  User answer: ${a['picked']}');
+                sb.writeln(a['correct'] == true
+                    ? '  Verdict: CORRECT'
+                    : '  Verdict: WRONG (correct answer: ${a['answer']})');
+              }
+              sb.writeln('Explain every WRONG verdict clearly, then repeat the understanding check before the next concept.');
+              toolOutputs.add(sb.toString());
+            }
           }
         }
 
@@ -4728,7 +4813,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             text:
                 "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
-                "${crossPhaseContext.length > 0 ? 'Previous phases context (do NOT re-search these topics):\n$crossPhaseContext\n\n' : ''}"
+                "${crossPhaseContext.length > 0 ? '━━ PREVIOUS PHASE RESULTS (USE AS RESEARCH TARGETS) ━━\nThese entities and findings were discovered in earlier phases. When your current phase requires specific subjects (models, products, tools, etc.), you MUST use ONLY these discovered entities as your search targets. Do NOT substitute or guess entities from your training data.\n$crossPhaseContext\n\n' : ''}"
                 "━━ RECENCY MANDATE ━━\n"
                 "Current date and time: $phaseCurrentTime.\n"
                 "You are researching for a reader who needs CURRENT information. "
@@ -5728,10 +5813,15 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         }
         steps[i]['content'] = stepContent;
 
-        // Update cross-phase context for next phase (compact summary, ~300 tokens)
+        // Update cross-phase context: entity handoff + compact evidence summary
         if (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty) {
+          final entitySet = <String>{};
+          for (final f in phaseFacts) {
+            final subj = (f['subject'] ?? '').toString().trim();
+            if (subj.isNotEmpty) entitySet.add(subj);
+          }
           final topFacts = phaseFacts
-              .take(4)
+              .take(8)
               .map((f) => "${f['subject']} ${f['metric']}: ${f['value']}")
               .join('; ');
           final topFinding = phaseFindings.isNotEmpty
@@ -5741,6 +5831,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             '- Phase ${i + 1} ($phaseTitle): ${phaseFacts.length} facts, ${phaseFindings.length} findings. ' +
             'Key: $topFacts$topFinding',
           );
+          if (entitySet.isNotEmpty) {
+            crossPhaseContext.writeln('  Discovered entities: ${entitySet.join(', ')}');
+          }
         }
 
         _publishResearchState(sessionIndex, messageIndex, stateMap);
@@ -6113,6 +6206,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       _studyModeEnabled = false; // Default off for new chat
     });
     _saveSessions();
+    _clearWorkspaceBucket();
   }
 
   String _safeFileStem(String input) {
@@ -11034,6 +11128,8 @@ class _StreamingCodeBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const visualLangs = {'svg', 'chart', 'json-chart', 'html', 'artifact', 'react', 'docx'};
+    final visual = visualLangs.contains(language.toLowerCase());
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -11048,10 +11144,18 @@ class _StreamingCodeBlock extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.code, size: 13, color: Color(0xFF9CDCFE)),
+              Icon(
+                visual ? Icons.auto_awesome_rounded : Icons.code,
+                size: 13,
+                color: const Color(0xFF9CDCFE),
+              ),
               const SizedBox(width: 6),
               Text(
-                language.isEmpty ? 'streaming' : language,
+                visual
+                    ? 'Rendering ${language.toLowerCase()}…'
+                    : language.isEmpty
+                        ? 'streaming'
+                        : language,
                 style: const TextStyle(
                   color: Color(0xFF9CDCFE),
                   fontSize: 11,
@@ -11062,18 +11166,271 @@ class _StreamingCodeBlock extends StatelessWidget {
               const _StreamingCursor(size: 16, inline: true),
             ],
           ),
-          const SizedBox(height: 8),
-          SelectableText(
-            code,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12.5,
-              height: 1.4,
-              color: Color(0xFFD4D4D4),
+          if (visual)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF9CDCFE),
+                  ),
+                ),
+              ),
+            )
+          else ...[
+            const SizedBox(height: 8),
+            SelectableText(
+              code,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12.5,
+                height: 1.4,
+                color: Color(0xFFD4D4D4),
+              ),
             ),
-          ),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _QuizSheet extends StatefulWidget {
+  const _QuizSheet({required this.questions, super.key});
+  final List<Map<String, dynamic>> questions;
+
+  static List<Map<String, dynamic>> parseQuestions(String json) {
+    try {
+      final decoded = jsonDecode(json);
+      final raw = decoded is Map
+          ? (decoded['questions'] is List ? decoded['questions'] as List : [decoded])
+          : (decoded is List ? decoded : <dynamic>[]);
+      final out = <Map<String, dynamic>>[];
+      for (final item in raw) {
+        if (item is! Map || out.length >= 5) continue;
+        final q = (item['q'] ?? item['question'] ?? '').toString();
+        final opts = item['options'] is List
+            ? (item['options'] as List).map((e) => e.toString()).toList()
+            : <String>[];
+        final correct = item['correct'] is num
+            ? (item['correct'] as num).toInt()
+            : int.tryParse((item['correct'] ?? '').toString()) ?? -1;
+        if (q.isEmpty || opts.length < 2 || correct < 0 || correct >= opts.length) {
+          continue;
+        }
+        out.add({'q': q, 'options': opts, 'correct': correct});
+      }
+      return out;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  @override
+  State<_QuizSheet> createState() => _QuizSheetState();
+}
+
+class _QuizSheetState extends State<_QuizSheet> {
+  int _idx = 0;
+  bool _review = false;
+  final List<Map<String, dynamic>> _answers = [];
+  final TextEditingController _own = TextEditingController();
+
+  void _submit(int picked, String pickedText) {
+    final q = widget.questions[_idx];
+    final opts = (q['options'] as List).map((e) => e.toString()).toList();
+    final correct = (q['correct'] as num).toInt();
+    _answers.add({
+      'q': q['q'],
+      'picked': pickedText,
+      'answer': opts[correct],
+      'correct': picked == correct,
+    });
+    _own.clear();
+    setState(() {
+      if (_idx + 1 < widget.questions.length) {
+        _idx++;
+      } else {
+        _review = true;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final card = dark ? const Color(0xFF242822) : const Color(0xFFFBF7F0);
+    final text = dark ? const Color(0xFFEDE8E0) : const Color(0xFF2D241C);
+    final sub = dark ? const Color(0xFF9AA096) : const Color(0xFF7B7468);
+    const accent = Color(0xFF7B4E2E);
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.75,
+        ),
+        decoration: BoxDecoration(
+          color: card,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: _review ? _buildReview(text, sub) : _buildQuestion(text, sub, accent),
+      ),
+    );
+  }
+
+  Widget _buildQuestion(Color text, Color sub, Color accent) {
+    final q = widget.questions[_idx];
+    final opts = (q['options'] as List).map((e) => e.toString()).toList();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              '${_idx + 1} of ${widget.questions.length}',
+              style: TextStyle(fontSize: 12, color: sub),
+            ),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              color: sub,
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          q['q'] as String,
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: text),
+        ),
+        const SizedBox(height: 12),
+        Flexible(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: opts.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) => InkWell(
+              onTap: () => _submit(i, opts[i]),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text('${i + 1}', style: TextStyle(fontSize: 13, color: accent)),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(opts[i], style: TextStyle(fontSize: 15, color: text)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _own,
+                style: TextStyle(fontSize: 14, color: text),
+                decoration: InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  hintText: 'Type your own answer...',
+                  hintStyle: TextStyle(fontSize: 14, color: sub),
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.arrow_upward, size: 18),
+              color: accent,
+              onPressed: () {
+                final t = _own.text.trim();
+                if (t.isEmpty) return;
+                final match = opts.indexWhere((o) => o.toLowerCase() == t.toLowerCase());
+                _submit(match, t);
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReview(Color text, Color sub) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Results',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: text),
+        ),
+        const SizedBox(height: 12),
+        Flexible(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: _answers.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final a = _answers[i];
+              final ok = a['correct'] == true;
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                      size: 18,
+                      color: ok ? const Color(0xFF3E7B3E) : const Color(0xFFB3402E),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Q${i + 1}: ${a['q']}', style: TextStyle(fontSize: 14, color: text)),
+                          const SizedBox(height: 2),
+                          Text(
+                            ok
+                                ? 'Your answer: ${a['picked']}'
+                                : 'Your answer: ${a['picked']} — correct: ${a['answer']}',
+                            style: TextStyle(fontSize: 12, color: sub),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7B4E2E)),
+            onPressed: () => Navigator.pop(context, _answers),
+            child: const Text('Continue', style: TextStyle(color: Color(0xFFFBF7F0))),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -12430,7 +12787,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             statusNotifier.value = 'Uploading ${uploadedCount + 1}/$totalFiles';
             progressNotifier.value = 0.0;
 
-            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload?ingest=false');
+            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload?ingest=false&session=$_activeSessionId');
             final httpReq = await httpClient.postUrl(uploadUri);
 
             final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
