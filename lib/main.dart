@@ -2287,7 +2287,8 @@ jobs:
                 "7. USER SWITCHES TOPIC WITHOUT yes/no: if the user asks for a different concept instead of answering yes/no, do not switch yet. First say politely: 'Before we move on, please answer these quick questions about what we just learned.' Then emit a <quiz_request> about the concept you just explained. When results return, explain every WRONG verdict clearly, then teach the concept the user asked for.\n\n"
                 "QUIZ FORMAT:\n"
                 "<quiz_request>{\"questions\":[{\"q\":\"Question?\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correct\":0}]}</quiz_request>\n"
-                "1-5 questions; 2-4 options; exactly ONE correct (index in \"correct\"); options get trickier down the list; never 'all of the above'.\n\n";
+                "1-10 questions; 2-4 options; exactly ONE correct (index in \"correct\"); options get trickier down the list; never 'all of the above'.\n"
+                "RANDOMIZE THE CORRECT INDEX — NO PATTERN: pick each question's \"correct\" index at random from its valid range. Never sequential (0,1,2,3,0,1...), never alternating (0,1,0,1...), never fixed on one index (e.g. always 0 or always 1), and never repeat the same index on consecutive questions. Before emitting the quiz_request, check the full list of \"correct\" values you chose — if you see any repeating or sequential pattern, reassign indices until the placement looks genuinely random.\n\n";
           }
 
           if (_svgVisualsEnabled) {
@@ -3267,6 +3268,23 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         final quizMatch = quizRegex.firstMatch(fullText);
         if (_studyModeEnabled && quizMatch != null) {
           executedTools = true;
+          // Hide the raw <quiz_request> tag from the visible bubble and from
+          // future API history; the quiz-results system message (below)
+          // carries the questions/answers forward for the model.
+          setState(() {
+            final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
+            if (idx != -1) {
+              final msgs = List<ChatMessage>.from(_sessions[idx].messages);
+              if (assistantMessageIndex < msgs.length) {
+                final cleaned = msgs[assistantMessageIndex].text
+                    .replaceFirst(quizMatch.group(0) ?? '', '')
+                    .trim();
+                msgs[assistantMessageIndex] = msgs[assistantMessageIndex]
+                    .copyWith(text: cleaned);
+                _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
+              }
+            }
+          });
           final questions = _QuizSheet.parseQuestions(quizMatch.group(1) ?? '');
           if (questions.isEmpty) {
             toolOutputs.add('Quiz Tool Result:\n\n{"error":"malformed quiz_request, no valid questions"}');
@@ -11470,7 +11488,7 @@ class _QuizSheet extends StatefulWidget {
           : (decoded is List ? decoded : <dynamic>[]);
       final out = <Map<String, dynamic>>[];
       for (final item in raw) {
-        if (item is! Map || out.length >= 5) continue;
+        if (item is! Map || out.length >= 10) continue;
         final q = (item['q'] ?? item['question'] ?? '').toString();
         final opts = item['options'] is List
             ? (item['options'] as List).map((e) => e.toString()).toList()
