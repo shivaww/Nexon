@@ -444,7 +444,7 @@ class MethodRouter:
         if expects_list:
             if lowered.startswith("["):
                 try:
-                    parsed = json.loads(text)
+                    parsed = json.loads(text, strict=False)
                     if isinstance(parsed, list):
                         return parsed
                 except json.JSONDecodeError:
@@ -460,7 +460,7 @@ class MethodRouter:
         )
         if expects_dict and lowered.startswith("{"):
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(text, strict=False)
                 if isinstance(parsed, dict):
                     return parsed
             except json.JSONDecodeError:

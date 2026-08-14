@@ -32,10 +32,15 @@ class GitResult:
     data: Any = None
 
     def to_dict(self) -> dict[str, Any]:
+        # 'stdout'/'stderr' aliases: the Flutter client renders result['stdout']
+        # (and appends 'stderr'), falling back to 'error' otherwise; without
+        # these, successful git calls surfaced as a blank "Error: " in the app.
         result = {
             "success": self.success,
             "output": self.output,
             "error": self.error,
+            "stdout": self.output,
+            "stderr": self.error,
         }
         if self.data is not None:
             result["data"] = self.data

@@ -1762,6 +1762,18 @@ class TermuxForgeBridge:
         """Apply multiple search-replace patches atomically with unified diff output."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
+        if isinstance(patches, str):
+            # Flutter's XML tool format delivers list params as JSON strings;
+            # strict=False tolerates raw newlines inside JSON string values.
+            try:
+                patches = json.loads(patches, strict=False)
+            except json.JSONDecodeError as exc:
+                raise JsonRpcError(
+                    ErrorCode.INVALID_PARAMS,
+                    f"patches is a string but not valid JSON: {exc}",
+                )
+        if isinstance(patches, dict):
+            patches = [patches]
         if not isinstance(patches, list):
             raise JsonRpcError(
                 ErrorCode.INVALID_PARAMS,

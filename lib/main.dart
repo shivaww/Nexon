@@ -3805,7 +3805,34 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     }
     final patches = params['patches'];
     if (patches != null && patches is! List) {
-      return '"patches" must be a JSON array';
+      // The XML-style prompt example shows <patches>[...]</patches> as a tag
+      // value, so LLMs often send the array as a JSON string. Coerce it here
+      // so the call reaches the bridge instead of dying pre-flight.
+      if (patches is! String) {
+        return '"patches" must be a JSON array';
+      }
+      final patchText = patches.trim();
+      Object? decoded;
+      try {
+        decoded = jsonDecode(patchText);
+      } catch (_) {
+        // Strict jsonDecode rejects raw control characters inside strings;
+        // escape them and retry once for LLM output that forgot to escape.
+        try {
+          decoded = jsonDecode(
+            patchText
+                .replaceAll('\n', '\\n')
+                .replaceAll('\r', '\\r')
+                .replaceAll('\t', '\\t'),
+          );
+        } catch (_) {
+          decoded = null;
+        }
+      }
+      if (decoded is! List) {
+        return '"patches" must be a JSON array of {search, replace} objects';
+      }
+      params['patches'] = decoded;
     }
     for (final intKey in [
       'start_line',

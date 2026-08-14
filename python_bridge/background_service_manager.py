@@ -439,7 +439,11 @@ class BackgroundServiceManager:
         alive = proc.returncode is None
         if not alive:
             reader_task.cancel()
-            rc = proc.returncode or -1
+            rc = proc.returncode if proc.returncode is not None else -1
+            if rc == 0:
+                # Finite command finished normally inside the startup window —
+                # not a crash; report it as a completed task with its output.
+                return self._completed_block(command, pid, startup_lines, log_file)
             return self._crash_block(command, pid, rc, startup_lines, log_file, cwd)
 
         # ── Detect bound ports ──
@@ -612,6 +616,39 @@ class BackgroundServiceManager:
             "exitCode": exit_code,
             "success": False,
             "crashed": True,
+            "pid": pid,
+        }
+
+    def _completed_block(
+        self,
+        command: str,
+        pid: int,
+        output: list[str],
+        log_file: str,
+    ) -> dict[str, Any]:
+        """Block returned when a finite command finishes normally during startup."""
+        W = 66
+        H = "─"
+        parts = [
+            f"╔{H} TASK COMPLETED {H * 47}╗",
+            f"║  Command: {command[:55]:<55}║",
+            f"║  PID: {pid}  │  Exit code: 0  │  ✓ finished normally  ║",
+            f"╚{H * (W - 2)}╝",
+            "",
+            "  OUTPUT:",
+        ]
+        for line in output[:40]:
+            parts.append(f"    {line}")
+        parts += [
+            f"\n{H * W}",
+            f"  • Log file: {log_file}",
+            f"{H * W}",
+        ]
+        return {
+            "stdout": "\n".join(parts),
+            "exitCode": 0,
+            "success": True,
+            "completed": True,
             "pid": pid,
         }
 
