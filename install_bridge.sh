@@ -56,6 +56,9 @@ retry 3 "system package install" pkg install -y \
 # dart powers on-device dart_format / dart_diagnostics; optional, never blocks setup.
 pkg install -y dart 2>/dev/null || \
   echo "  -> dart not installed (dart_format/dart_diagnostics need it later)."
+# gh powers the GitHub hooks (auth/workflows/runs/releases); optional, never blocks.
+pkg install -y gh 2>/dev/null || \
+  echo "  -> gh not installed (github_hooks workflow/release tools need it later)."
 
 # ── [3/5] Bridge source (GitHub first, local checkout fallback) ────────
 echo "[3/5] Fetching latest python_bridge..."
