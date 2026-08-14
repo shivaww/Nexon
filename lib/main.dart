@@ -2742,8 +2742,11 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           _scrollToBottom();
         }
 
+        // IMPROVEMENT: accept attribute-bearing tags like
+        // <search_request time_range="month">… — the old pattern only matched
+        // bare tags, so attributed searches rendered raw and never executed.
         final searchRegex = RegExp(
-          r'<search_request>\s*([\s\S]*?)\s*</search_request>',
+          r'<search_request\b([^>]*)>\s*([\s\S]*?)\s*</search_request>',
           caseSensitive: false,
           dotAll: true,
         );
@@ -2848,13 +2851,28 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           final searchMatches = searchRegex.allMatches(fullText);
           for (final match in searchMatches) {
             executedTools = true;
-            final query = match.group(1)?.trim() ?? '';
+            final query = match.group(2)?.trim() ?? '';
+            // IMPROVEMENT: parse tag attributes (time_range/topic/dates) and
+            // forward them so recency-filtered searches work in chat mode.
+            final attrStr = match.group(1) ?? '';
+            String? searchAttr(String name) {
+              final m = RegExp(
+                '$name="([^"]*)"',
+                caseSensitive: false,
+              ).firstMatch(attrStr);
+              final v = m?.group(1)?.trim();
+              return (v == null || v.isEmpty) ? null : v;
+            }
             if (mounted) setState(() => _toolStatus = '🔍 Searching: "$query"');
             final searchResultRaw = await _chatClient.searchWeb(
               query,
               _searchSettings.provider,
               [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
               googleCx: _searchSettings.googleCx,
+              topic: searchAttr('topic'),
+              timeRange: searchAttr('time_range'),
+              startDate: searchAttr('start_date'),
+              endDate: searchAttr('end_date'),
             );
             if (mounted) setState(() => _toolStatus = '');
 
@@ -3075,6 +3093,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
               toolMethod = parsed['method']?.toString() ?? 'tool';
               toolParams = parsed['params'] as Map<String, dynamic>? ?? {};
+              final callError = _validateToolCall(
+                jsonString,
+                toolMethod,
+                toolParams,
+              );
+              if (callError != null) paramResolveError = callError;
 
               if (toolParams['server'] == 'remote' &&
                   _customMcpUrl.isNotEmpty) {
@@ -3096,7 +3120,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             }
             if (paramResolveError != null) {
               toolOutputs.add(
-                'Tool Result [${toolMethod}]:\n\n{"error":"outside workspace jail","details":"$paramResolveError"}',
+                'Tool Result [${toolMethod}]:\n\n{"error":"invalid tool call","details":"$paramResolveError"}',
               );
               continue;
             }
@@ -3230,6 +3254,12 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               }
             }
             if (mounted) setState(() => _toolStatus = '');
+            final verification = await _autoVerifyMutation(
+              toolMethod,
+              toolParams,
+              mcpResult,
+            );
+            if (verification != null) mcpResult += verification;
             toolOutputs.add("Tool Result [${toolMethod}]:\n\n$mcpResult");
           }
         }
@@ -3738,6 +3768,192 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     return '';
   }
 
+  // IMPROVEMENT: structured validation of agent tool calls before they reach
+  // the bridge — catches truncated JSON, invalid method names and wrong-typed
+  // core params with clear, actionable errors instead of bridge crashes.
+  String? _validateToolCall(
+    String rawJson,
+    String method,
+    Map<String, dynamic> params,
+  ) {
+    var depth = 0;
+    var inString = false;
+    var escaped = false;
+    for (final ch in rawJson.split('')) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch == '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch == '{' || ch == '[') depth++;
+      if (ch == '}' || ch == ']') depth--;
+      if (depth < 0) return 'tool call JSON has unbalanced brackets';
+    }
+    if (depth != 0 || inString) {
+      return 'tool call JSON is truncated (unbalanced braces)';
+    }
+    if (!RegExp(r'^[a-z][a-z0-9_.]*$').hasMatch(method)) {
+      return 'invalid tool method name: "$method"';
+    }
+    final patches = params['patches'];
+    if (patches != null && patches is! List) {
+      return '"patches" must be a JSON array';
+    }
+    for (final intKey in [
+      'start_line',
+      'end_line',
+      'after_line',
+      'count',
+      'max_matches',
+    ]) {
+      final v = params[intKey];
+      if (v != null && v is! int && int.tryParse(v.toString()) == null) {
+        return '"$intKey" must be an integer, got: $v';
+      }
+    }
+    return null;
+  }
+
+  // IMPROVEMENT: ask the bridge for a dry-run diff so the dialog can show
+  // exactly what will change before the user approves. Best-effort only.
+  Future<String?> _fetchMutationPreview(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    const previewable = {
+      'patch_file',
+      'edit_file',
+      'write_file',
+      'write_file_rich',
+      'replace_lines',
+      'insert_lines',
+      'delete_lines',
+      'append_file',
+    };
+    if (!previewable.contains(method)) return null;
+    try {
+      final previewParams = Map<String, dynamic>.from(params);
+      previewParams['dry_run'] = true;
+      previewParams['auto_checkpoint'] = false;
+      final resultData = await _postMcp(method, previewParams, timeoutSeconds: 10);
+      if (resultData == null) return null;
+      final diff = resultData['diff']?.toString() ?? '';
+      return diff.trim().isNotEmpty ? diff : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// IMPROVEMENT: shared low-level MCP request used by preview + verification.
+  Future<Map<String, dynamic>?> _postMcp(
+    String method,
+    Map<String, dynamic> params, {
+    int timeoutSeconds = 15,
+  }) async {
+    final payload = jsonEncode({'method': method, 'params': params});
+    final endpoint = _customMcpUrl.isNotEmpty
+        ? _customMcpUrl
+        : 'http://127.0.0.1:8390/mcp';
+    final request = await _mcpHttpClient
+        .postUrl(Uri.parse(endpoint))
+        .timeout(Duration(seconds: timeoutSeconds));
+    request.headers.contentType = ContentType.json;
+    final bytes = utf8.encode(payload);
+    request.headers.contentLength = bytes.length;
+    request.add(bytes);
+    final response = await request
+        .close()
+        .timeout(Duration(seconds: timeoutSeconds));
+    final body = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(Duration(seconds: timeoutSeconds));
+    final parsed = jsonDecode(body) as Map<String, dynamic>;
+    final resultData = parsed['result'] as Map<String, dynamic>? ?? parsed;
+    if (resultData['error'] != null) return null;
+    return resultData;
+  }
+
+  String _verifyShellQuote(String s) => "'${s.replaceAll("'", "'\\''")}'";
+
+  // IMPROVEMENT: closed verification loop — after a successful file mutation,
+  // automatically run static checks on the touched file and feed failures back
+  // to the model so it fixes them instead of moving on.
+  Future<String?> _autoVerifyMutation(
+    String method,
+    Map<String, dynamic> params,
+    String mcpResult,
+  ) async {
+    const mutating = {
+      'patch_file',
+      'edit_file',
+      'write_file',
+      'write_file_rich',
+      'replace_lines',
+      'insert_lines',
+      'delete_lines',
+      'append_file',
+    };
+    if (!mutating.contains(method)) return null;
+    if (mcpResult.contains('"error"') || mcpResult.startsWith('Error:')) {
+      return null;
+    }
+    final path = params['path']?.toString() ?? '';
+    if (path.isEmpty) return null;
+    try {
+      if (path.endsWith('.dart')) {
+        final data = await _postMcp('dart_diagnostics', {
+          'path': path,
+          'workspace_dir': _agenticWorkspace,
+        });
+        if (data == null) return null;
+        if (!data.containsKey('errors') && !data.containsKey('diags')) {
+          return null; // unknown shape — don't claim anything
+        }
+        final diags = data['diags'];
+        final errors = data['errors'];
+        final hasErrors = (errors is int && errors > 0) ||
+            (diags is List &&
+                diags.any(
+                  (d) => d is Map && d['severity'] == 'error',
+                ));
+        if (!hasErrors) {
+          return '\n\n--- AUTO-VERIFICATION: PASSED (dart_diagnostics, 0 errors) ---';
+        }
+        final snippet = (data['stdout'] ?? '').toString();
+        return '\n\n--- AUTO-VERIFICATION FAILED ---\n'
+            'dart_diagnostics found errors in $path. Fix them now before continuing:\n'
+            '${snippet.length > 4000 ? snippet.substring(0, 4000) : snippet}';
+      }
+      if (path.endsWith('.py')) {
+        final data = await _postMcp('run_command', {
+          'command': 'python -m py_compile ${_verifyShellQuote(path)}',
+          'cwd': _agenticWorkspace,
+        });
+        if (data == null) return null;
+        final code = data['exitCode'];
+        if (code == 0) {
+          return '\n\n--- AUTO-VERIFICATION: PASSED (py_compile) ---';
+        }
+        final err = (data['stderr'] ?? data['stdout'] ?? '').toString();
+        return '\n\n--- AUTO-VERIFICATION FAILED ---\n'
+            'py_compile errors in $path. Fix them now before continuing:\n'
+            '${err.length > 3000 ? err.substring(0, 3000) : err}';
+      }
+      return null;
+    } catch (_) {
+      return null; // verification is best-effort, never blocks the loop
+    }
+  }
+
   Future<bool> _askFileMutationPermission(
     String method,
     Map<String, dynamic> params,
@@ -3745,6 +3961,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     if (!mounted) return false;
     final target = _fileMutationTarget(method, params);
     final preview = _fileMutationPreview(params);
+    final diffPreview = await _fetchMutationPreview(method, params);
+    if (!mounted) return false;
 
     final result = await showDialog<bool>(
       context: context,
@@ -3791,7 +4009,20 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 _PermissionInfoRow(label: 'Tool', value: method),
                 const SizedBox(height: 8),
                 _PermissionInfoRow(label: 'Target', value: target),
-                if (preview.isNotEmpty) ...[
+                if (diffPreview != null) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Proposed changes',
+                    style: TextStyle(
+                      color: Color(0xFF6C5946),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  DiffViewerWidget(content: diffPreview),
+                ],
+                if (diffPreview == null && preview.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Text(
                     'Preview',
@@ -19264,6 +19495,41 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
                       ),
                     ),
                   ),
+                  // IMPROVEMENT: malformed AI-generated SVG previously left the
+                  // placeholder spinner on screen forever; show an error card.
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF2F2),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFCA5A5)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.error_outline_rounded,
+                          color: Color(0xFFDC2626),
+                          size: 18,
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Failed to render visual: invalid SVG code',
+                            style: TextStyle(
+                              color: Color(0xFF991B1B),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -19298,6 +19564,16 @@ class FullScreenSvgViewer extends StatelessWidget {
                     fit: BoxFit.contain,
                     width: double.infinity,
                     height: double.infinity,
+                    errorBuilder: (context, error, stackTrace) => const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text(
+                          'Failed to render SVG: the generated code is invalid.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Color(0xFFFCA5A5), fontSize: 14),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),

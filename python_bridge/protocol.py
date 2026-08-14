@@ -12,11 +12,95 @@ import json
 import logging
 import os
 import inspect
+import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Callable, Coroutine, Optional, get_args, get_origin
 
 logger = logging.getLogger("termux_forge.protocol")
+
+
+# ── Tool telemetry ────────────────────────────────────────────────────
+# IMPROVEMENT: every JSON-RPC tool call is recorded (method, ok, latency)
+# to a size-capped JSONL file so tool reliability is measured continuously
+# instead of by manual test passes.
+
+_TELEMETRY_ENV = "TERMUX_FORGE_TELEMETRY"
+_TELEMETRY_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _telemetry_path() -> Path:
+    override = os.environ.get(_TELEMETRY_ENV, "")
+    if override:
+        return Path(override)
+    return Path.home() / ".termux_forge" / "tool_telemetry.jsonl"
+
+
+def record_tool_call(method: str, ok: bool, ms: int, error: str = "") -> None:
+    """Append one tool-call record. Never raises, never breaks dispatch."""
+    try:
+        path = _telemetry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > _TELEMETRY_MAX_BYTES:
+            path.unlink()  # simple rotation: start fresh on mobile storage
+        rec: dict[str, Any] = {"ts": int(time.time()), "m": method, "ok": 1 if ok else 0, "ms": ms}
+        if error:
+            rec["err"] = error[:200]
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def summarize_tool_calls(limit: int = 25) -> dict[str, Any]:
+    """Aggregate telemetry into per-method success-rate and latency stats."""
+    stats: dict[str, dict[str, Any]] = {}
+    try:
+        path = _telemetry_path()
+        if not path.exists():
+            return {"total": 0, "tools": [], "note": "no telemetry recorded yet"}
+        total = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                total += 1
+                s = stats.setdefault(
+                    str(rec.get("m", "?")),
+                    {"calls": 0, "ok": 0, "fail": 0, "ms_total": 0, "ms_max": 0, "last_err": ""},
+                )
+                s["calls"] += 1
+                if rec.get("ok"):
+                    s["ok"] += 1
+                else:
+                    s["fail"] += 1
+                    if rec.get("err"):
+                        s["last_err"] = str(rec["err"])
+                ms = int(rec.get("ms", 0))
+                s["ms_total"] += ms
+                s["ms_max"] = max(s["ms_max"], ms)
+        tools = []
+        ranked = sorted(stats.items(), key=lambda kv: kv[1]["calls"], reverse=True)
+        for m, s in ranked[:limit]:
+            tools.append({
+                "method": m,
+                "calls": s["calls"],
+                "ok": s["ok"],
+                "fail": s["fail"],
+                "success_rate": round(s["ok"] / s["calls"], 3) if s["calls"] else 0.0,
+                "avg_ms": int(s["ms_total"] / s["calls"]) if s["calls"] else 0,
+                "max_ms": s["ms_max"],
+                "last_error": s["last_err"],
+            })
+        return {"total": total, "tools": tools}
+    except Exception as e:
+        return {"total": 0, "tools": [], "error": str(e)}
 
 
 # ── JSON-RPC 2.0 Error Codes ─────────────────────────────────────────
@@ -418,17 +502,31 @@ class MethodRouter:
         JsonRpcResponse
             The response with either a result or an error.
         """
+        _t0 = time.perf_counter()
+
+        def _finish(response: JsonRpcResponse) -> JsonRpcResponse:
+            # IMPROVEMENT: continuous tool telemetry; must never break dispatch.
+            try:
+                _ms = int((time.perf_counter() - _t0) * 1000)
+                _err = ""
+                if isinstance(response.error, dict):
+                    _err = str(response.error.get("message") or "")
+                record_tool_call(request.method, response.error is None, _ms, _err)
+            except Exception:
+                pass
+            return response
+
         handler = self._methods.get(request.method)
         if handler is None:
             logger.warning("Method not found: %s", request.method)
-            return JsonRpcResponse(
+            return _finish(JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(
                     code=ErrorCode.METHOD_NOT_FOUND,
                     message=f"Method not found: {request.method}",
                     data={"available_methods": self.list_methods()},
                 ).to_dict(),
-            )
+            ))
 
         try:
             if isinstance(request.params, dict):
@@ -466,28 +564,28 @@ class MethodRouter:
                 result = await handler(*request.params)
             else:
                 result = await handler()
-            return JsonRpcResponse(id=request.id, result=result)
+            return _finish(JsonRpcResponse(id=request.id, result=result))
         except JsonRpcError as exc:
             logger.error("RPC error in %s: %s", request.method, exc.message)
-            return JsonRpcResponse(id=request.id, error=exc.to_dict())
+            return _finish(JsonRpcResponse(id=request.id, error=exc.to_dict()))
         except TypeError as exc:
             logger.error("Invalid params for %s: %s", request.method, exc)
-            return JsonRpcResponse(
+            return _finish(JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(
                     code=ErrorCode.INVALID_PARAMS,
                     message=str(exc),
                 ).to_dict(),
-            )
+            ))
         except Exception as exc:
             logger.exception("Internal error in %s", request.method)
-            return JsonRpcResponse(
+            return _finish(JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(
                     code=ErrorCode.INTERNAL_ERROR,
                     message=str(exc),
                 ).to_dict(),
-            )
+            ))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────

@@ -1211,6 +1211,7 @@ def write_file_rich(
     backup: bool = True,
     workspace_dir: str = "",
     expected_sha256: str = "",
+    dry_run: bool = False,
 ) -> WriteResult | dict[str, Any]:
     """
     Atomically write a file with an optional backup.
@@ -1259,6 +1260,30 @@ def write_file_rich(
     err = _pre_write_checks(path, content)
     if err is not None:
         return err
+
+    # ── Dry-run preview: compute diff without touching disk ──
+    if dry_run:
+        p = Path(path).expanduser()
+        old = p.read_text(encoding=encoding, errors="replace") if p.exists() and p.is_file() else ""
+        diff_text = "".join(list(difflib.unified_diff(
+            old.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f"a/{_rel_path(str(p))}",
+            tofile=f"b/{_rel_path(str(p))}",
+            n=3,
+        ))[:200])
+        lb = old.count("\n") + (1 if old and not old.endswith("\n") else 0)
+        la = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+        header = OutputRenderer.write_header(
+            path=str(p), action="DRY RUN (no write)",
+            lines_before=lb, lines_after=la,
+            size_bytes=len(content.encode(encoding, errors="replace")),
+        )
+        block = header + "\n" + (f"{OutputRenderer._divider()}\nDIFF:\n{diff_text}" if diff_text else "")
+        return {
+            "stdout": block, "path": str(p), "diff": diff_text, "dryRun": True,
+            "linesBefore": lb, "linesAfter": la, "exitCode": 0, "success": True,
+        }
 
     # ── Exclusive lock ──
     err = _acquire_lock(path)
@@ -1352,6 +1377,7 @@ def patch_file_rich(
     backup: bool = True,
     workspace_dir: str = "",
     expected_sha256: str = "",
+    dry_run: bool = False,
 ) -> PatchResult | dict[str, Any]:
     """
     Apply multiple search-and-replace patches to a file atomically.
@@ -1422,7 +1448,22 @@ def patch_file_rich(
             continue
 
         if search_text not in content:
-            failed.append(f"{label}: search text not found — '{search_text[:60]}…'" if len(search_text) > 60 else f"{label}: search text not found — '{search_text}'")
+            # Provide diagnostic hints for common mismatch causes
+            hint = ""
+            stripped = search_text.rstrip("\n\r ")
+            lstripped = search_text.lstrip("\n\r ")
+            if stripped and stripped in content:
+                hint = " (hint: search text has trailing whitespace/newline not present in file)"
+            elif lstripped and lstripped in content:
+                hint = " (hint: search text has leading whitespace/newline not present in file)"
+            elif search_text.strip() and search_text.strip() in content:
+                hint = " (hint: search text has extra surrounding whitespace — try trimming)"
+            elif "\r\n" in search_text and "\r\n" not in content and search_text.replace("\r\n", "\n") in content:
+                hint = " (hint: search text uses \\r\\n but file uses \\n)"
+            elif "\n" in search_text and "\r\n" in content and search_text.replace("\n", "\r\n") in content:
+                hint = " (hint: search text uses \\n but file uses \\r\\n)"
+            short = f"'{search_text[:60]}…'" if len(search_text) > 60 else f"'{search_text}'"
+            failed.append(f"{label}: search text not found — {short}{hint}")
             continue
 
         if count == 0:
@@ -1465,6 +1506,29 @@ def patch_file_rich(
         n=3,
     ))
     diff_text = "".join(diff_lines[:200])  # cap diff at 200 lines
+
+    # ── Dry-run preview: return diff without writing ──
+    if dry_run:
+        la = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+        header = OutputRenderer.write_header(
+            path=str(p), action="DRY RUN (no write)",
+            lines_before=lines_before, lines_after=la,
+            size_bytes=len(content.encode(encoding, errors="replace")),
+        )
+        parts = [header, f"  ✓ {applied} patch(es) would apply  │  {len(failed)} would fail"]
+        if failed:
+            parts.append("\n  ✗ WOULD FAIL:")
+            for f_msg in failed:
+                parts.append(f"    • {f_msg}")
+        if diff_text:
+            parts.append(f"\n{OutputRenderer._divider()}\nDIFF:")
+            parts.append(diff_text)
+        return PatchResult(
+            path=str(p), patches_applied=applied, patches_failed=failed,
+            lines_before=lines_before, lines_after=la,
+            size_bytes=len(content.encode(encoding, errors="replace")),
+            diff=diff_text, block="\n".join(parts),
+        )
 
     # Optimistic concurrency guard.
     if expected_sha256 and p.is_file():
@@ -1545,6 +1609,7 @@ def replace_lines_rich(
     encoding: str = "utf-8",
     backup: bool = True,
     workspace_dir: str = "",
+    dry_run: bool = False,
 ) -> PatchResult | dict[str, Any]:
     """
     Replace a specific line range with new content.
@@ -1588,6 +1653,7 @@ def replace_lines_rich(
         encoding=encoding,
         backup=backup,
         workspace_dir=workspace_dir,
+        dry_run=dry_run,
     )
 
 
@@ -1597,6 +1663,7 @@ def insert_lines_rich(
     content: str,
     encoding: str = "utf-8",
     workspace_dir: str = "",
+    dry_run: bool = False,
 ) -> WriteResult | dict[str, Any]:
     """
     Insert lines after a specific line number.
@@ -1622,7 +1689,7 @@ def insert_lines_rich(
 
     insert_idx = max(0, min(after_line, len(lines)))
     result = lines[:insert_idx] + new_lines + lines[insert_idx:]
-    return write_file_rich(path, "".join(result), encoding, backup=True, workspace_dir=workspace_dir)
+    return write_file_rich(path, "".join(result), encoding, backup=True, workspace_dir=workspace_dir, dry_run=dry_run)
 
 
 def delete_lines_rich(
@@ -1631,6 +1698,7 @@ def delete_lines_rich(
     end_line: int,
     encoding: str = "utf-8",
     workspace_dir: str = "",
+    dry_run: bool = False,
 ) -> WriteResult | dict[str, Any]:
     """Delete a range of lines from a file."""
     if not _is_safe(path, workspace_dir):
@@ -1649,7 +1717,7 @@ def delete_lines_rich(
     start_idx = max(0, start_line - 1)
     end_idx = min(len(lines), end_line)
     result = lines[:start_idx] + lines[end_idx:]
-    return write_file_rich(path, "".join(result), encoding, backup=True, workspace_dir=workspace_dir)
+    return write_file_rich(path, "".join(result), encoding, backup=True, workspace_dir=workspace_dir, dry_run=dry_run)
 
 
 # ── File outline (structure extraction) ───────────────────────────────
@@ -1837,7 +1905,7 @@ async def search_files_rich(
             backend="blocked",
             block=_unsafe_error(path)["stdout"],
         )
-    skip_dirs = set(exclude) | EXTRA_SKIP_DIRS
+    skip_dirs = set(exclude or []) | EXTRA_SKIP_DIRS
     # Try ripgrep first (much faster), fallback to grep
     rg = shutil.which("rg")
     backend = "ripgrep" if rg else "grep"
@@ -2070,6 +2138,7 @@ def append_file_rich(
     encoding: str = "utf-8",
     create_if_missing: bool = True,
     workspace_dir: str = "",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """
     Append content to a file, optionally creating it if missing.
@@ -2105,6 +2174,22 @@ def append_file_rich(
     lines_before = 0
     if existed and p.is_file():
         lines_before = len(_read_lines_safe(p, encoding))
+
+    if dry_run:
+        old = p.read_text(encoding=encoding, errors="replace") if existed and p.is_file() else ""
+        new = old + content
+        diff_text = "".join(list(difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile=f"a/{_rel_path(str(p))}",
+            tofile=f"b/{_rel_path(str(p))}",
+            n=3,
+        ))[:200])
+        return {
+            "stdout": f"DRY RUN (no write): append to {_rel_path(str(p))}",
+            "path": str(p), "diff": diff_text, "dryRun": True,
+            "exitCode": 0, "success": True,
+        }
 
     with open(str(p), "a", encoding=encoding) as f:
         f.write(content)

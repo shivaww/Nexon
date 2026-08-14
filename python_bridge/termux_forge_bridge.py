@@ -315,6 +315,7 @@ class TermuxForgeBridge:
         r.register("dart_diagnostics", self._dart_diagnostics)
         r.register("dart_format",      self._dart_format)
         r.register("symbol_references", self._symbol_references)
+        r.register("tool_stats",         self._tool_stats)
 
     # ── Workspace / path helpers ─────────────────────────────────────
 
@@ -1226,7 +1227,19 @@ class TermuxForgeBridge:
                         timeout=aiohttp.ClientTimeout(total=45),
                         ssl=ssl_context
                     ) as resp:
-                        return await self._process_read_url_response(resp, target_url, query)
+                        result = await self._process_read_url_response(resp, target_url, query)
+                        # Retry once on 5xx transient server errors
+                        if result.get("retryable"):
+                            import asyncio
+                            logger.info("read_url: retrying %s after 5xx (status %d)", target_url, resp.status)
+                            await asyncio.sleep(1.5)
+                            async with session.get(
+                                target_url, allow_redirects=True, max_redirects=10,
+                                timeout=aiohttp.ClientTimeout(total=45),
+                                ssl=ssl_context
+                            ) as retry_resp:
+                                result = await self._process_read_url_response(retry_resp, target_url, query)
+                        return result
                 except (aiohttp.ClientSSLError, ssl.SSLError) as ssl_err:
                     logger.warning(
                         "read_url: SSL verification failed for %s, retrying without verification: %s",
@@ -1246,7 +1259,24 @@ class TermuxForgeBridge:
     async def _process_read_url_response(self, resp, target_url: str, query: str) -> dict:
         """Process HTTP response for read_url (extracted to allow SSL retry logic)."""
         if resp.status < 200 or resp.status >= 300:
-            return {"error": f"Fetch failed: HTTP {resp.status}", "url": target_url}
+            _STATUS_HINTS = {
+                400: "Bad Request — malformed URL or rejected by server",
+                403: "Forbidden — server blocked the request (bot/rate-limit)",
+                404: "Not Found — URL path does not exist",
+                408: "Request Timeout",
+                429: "Too Many Requests — rate limited, retry later",
+                500: "Internal Server Error",
+                502: "Bad Gateway",
+                503: "Service Unavailable — server temporarily overloaded",
+                504: "Gateway Timeout",
+            }
+            hint = _STATUS_HINTS.get(resp.status, "")
+            return {
+                "error": f"Fetch failed: HTTP {resp.status}{' — ' + hint if hint else ''}",
+                "url": target_url,
+                "status_code": resp.status,
+                "retryable": resp.status >= 500,
+            }
 
         content_type = (resp.headers.get("content-type") or "").lower()
         looks_like_pdf = target_url.lower().split("?", 1)[0].endswith(".pdf")
@@ -1700,6 +1730,7 @@ class TermuxForgeBridge:
         expected_mtime: float | None = None,
         expected_exists: bool | None = None,
         auto_checkpoint: bool = True,
+        dry_run: bool = False,
         **kw,
     ) -> dict:
         """Atomically write a file with auto-backup and write verification block."""
@@ -1707,8 +1738,8 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime, expected_exists)
-            checkpoint = await self._auto_checkpoint("write_file", [path], workspace_dir) if auto_checkpoint else None
-            result = write_file_rich(path, content, encoding, create_dirs, backup, workspace_dir)
+            checkpoint = await self._auto_checkpoint("write_file", [path], workspace_dir) if auto_checkpoint and not dry_run else None
+            result = write_file_rich(path, content, encoding, create_dirs, backup, workspace_dir, dry_run=dry_run)
             return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except Exception as exc:
             if isinstance(exc, JsonRpcError):
@@ -1725,6 +1756,7 @@ class TermuxForgeBridge:
         expected_sha256: str = "",
         expected_mtime: float | None = None,
         auto_checkpoint: bool = True,
+        dry_run: bool = False,
         **kw,
     ) -> dict:
         """Apply multiple search-replace patches atomically with unified diff output."""
@@ -1737,8 +1769,8 @@ class TermuxForgeBridge:
             )
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
-            checkpoint = await self._auto_checkpoint("patch_file", [path], workspace_dir) if auto_checkpoint else None
-            result = patch_file_rich(path, patches, encoding, backup, workspace_dir)
+            checkpoint = await self._auto_checkpoint("patch_file", [path], workspace_dir) if auto_checkpoint and not dry_run else None
+            result = patch_file_rich(path, patches, encoding, backup, workspace_dir, dry_run=dry_run)
             return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
@@ -1759,6 +1791,7 @@ class TermuxForgeBridge:
         expected_sha256: str = "",
         expected_mtime: float | None = None,
         auto_checkpoint: bool = True,
+        dry_run: bool = False,
         **kw,
     ) -> dict:
         """Replace a line range with new content, returning a diff."""
@@ -1766,8 +1799,8 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
-            checkpoint = await self._auto_checkpoint("replace_lines", [path], workspace_dir) if auto_checkpoint else None
-            result = replace_lines_rich(path, start_line, end_line, new_content, encoding, backup, workspace_dir)
+            checkpoint = await self._auto_checkpoint("replace_lines", [path], workspace_dir) if auto_checkpoint and not dry_run else None
+            result = replace_lines_rich(path, start_line, end_line, new_content, encoding, backup, workspace_dir, dry_run=dry_run)
             return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
@@ -1786,6 +1819,7 @@ class TermuxForgeBridge:
         expected_sha256: str = "",
         expected_mtime: float | None = None,
         auto_checkpoint: bool = True,
+        dry_run: bool = False,
         **kw,
     ) -> dict:
         """Insert lines after a specific line number (0 = beginning of file)."""
@@ -1793,8 +1827,8 @@ class TermuxForgeBridge:
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         try:
             self._assert_expected_file_state(path, expected_sha256, expected_mtime)
-            checkpoint = await self._auto_checkpoint("insert_lines", [path], workspace_dir) if auto_checkpoint else None
-            result = insert_lines_rich(path, after_line, content, encoding, workspace_dir)
+            checkpoint = await self._auto_checkpoint("insert_lines", [path], workspace_dir) if auto_checkpoint and not dry_run else None
+            result = insert_lines_rich(path, after_line, content, encoding, workspace_dir, dry_run=dry_run)
             return self._with_checkpoint(tool_result_dict(result), checkpoint)
         except FileNotFoundError as exc:
             raise JsonRpcError(ErrorCode.FILE_NOT_FOUND, str(exc))
@@ -1983,14 +2017,16 @@ class TermuxForgeBridge:
         expected_mtime: float | None = None,
         expected_exists: bool | None = None,
         auto_checkpoint: bool = True,
+        dry_run: bool = False,
         **kw,
     ) -> dict:
         """Append content to a file (creates if missing)."""
         if not self.security.validate_path(path):
             raise JsonRpcError(ErrorCode.PERMISSION_DENIED, f"Path not allowed: {path}")
         self._assert_expected_file_state(path, expected_sha256, expected_mtime, expected_exists)
-        checkpoint = await self._auto_checkpoint("append_file", [path], workspace_dir) if auto_checkpoint else None
+        checkpoint = await self._auto_checkpoint("append_file", [path], workspace_dir) if auto_checkpoint and not dry_run else None
         result = append_file_rich(
+            dry_run=dry_run,
             path=path, content=content, encoding=encoding,
             create_if_missing=create_if_missing,
             workspace_dir=workspace_dir,
@@ -2211,6 +2247,24 @@ class TermuxForgeBridge:
         data = result.to_dict()
         data["aiBlock"] = self._render_command_ai_block(result)
         return data
+
+    async def _tool_stats(self, limit: int = 25, **kw) -> dict:
+        """IMPROVEMENT: per-method tool reliability stats from continuous telemetry."""
+        from protocol import summarize_tool_calls
+        data = summarize_tool_calls(limit=limit)
+        tools = data.get("tools", [])
+        lines = []
+        for t in tools:
+            row = (
+                f"  {t['method']:<24} calls={t['calls']:<5} ok={t['ok']:<5} "
+                f"fail={t['fail']:<4} rate={t['success_rate']:.0%} "
+                f"avg={t['avg_ms']}ms max={t['max_ms']}ms"
+            )
+            if t["last_error"]:
+                row += f"  last_err={t['last_error'][:60]}"
+            lines.append(row)
+        block = f"TOOL TELEMETRY — {data.get('total', 0)} recorded calls\n" + "\n".join(lines) if lines else "TOOL TELEMETRY — no calls recorded yet"
+        return {"stdout": block, "total": data.get("total", 0), "tools": tools, "exitCode": 0, "success": True}
 
     async def _symbol_references(
         self,
