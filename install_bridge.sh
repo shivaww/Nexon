@@ -14,7 +14,13 @@
 # ============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  # Piped (curl ... | bash): BASH_SOURCE is unset; use cwd so set -u survives.
+  # The GitHub clone below is the real source in that case.
+  SCRIPT_DIR="$(pwd)"
+fi
 TARGET_DIR="$HOME/nexon_bridge"
 REPO_URL="https://github.com/shivaww/Nexon.git"
 
