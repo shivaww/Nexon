@@ -2892,38 +2892,6 @@ NEVER read an entire large file blindly:
           _scrollToBottom();
         }
 
-        // IMPROVEMENT: accept attribute-bearing tags like
-        // <search_request time_range="month">… — the old pattern only matched
-        // bare tags, so attributed searches rendered raw and never executed.
-        final searchRegex = RegExp(
-          r'<search_request\b([^>]*)>\s*([\s\S]*?)\s*</search_request>',
-          caseSensitive: false,
-          dotAll: true,
-        );
-        final readUrlRegex = RegExp(
-          r'<read_url>\s*([\s\S]*?)\s*</read_url>',
-          caseSensitive: false,
-          dotAll: true,
-        );
-        final mcpRegex = RegExp(
-          r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
-          caseSensitive: false,
-        );
-        final quizRegex = RegExp(
-          r'<quiz_request>\s*(\{[\s\S]*?\})\s*</quiz_request>',
-          caseSensitive: false,
-        );
-        final memoryRegex = RegExp(
-          r'<memory\s+action="([^"]+)">\s*([\s\S]*?)\s*</memory>',
-          caseSensitive: false,
-          dotAll: true,
-        );
-
-        final searchMatch = searchRegex.firstMatch(fullText);
-        final readUrlMatch = readUrlRegex.firstMatch(fullText);
-        final mcpMatch = _findMcpMatch(fullText);
-        final memoryMatch = memoryRegex.firstMatch(fullText);
-
         if (_deepResearchEnabled && fullText.contains('<research_plan>')) {
           final planStart = fullText.indexOf('<research_plan>');
           var planEnd = fullText.indexOf('</research_plan>', planStart);
@@ -2996,65 +2964,6 @@ NEVER read an entire large file blindly:
 
         List<String> toolOutputs = [];
         bool executedTools = false;
-
-        if (_searchSettings.enabled && searchMatch != null) {
-          final searchMatches = searchRegex.allMatches(fullText);
-          for (final match in searchMatches) {
-            executedTools = true;
-            final query = match.group(2)?.trim() ?? '';
-            // IMPROVEMENT: parse tag attributes (time_range/topic/dates) and
-            // forward them so recency-filtered searches work in chat mode.
-            final attrStr = match.group(1) ?? '';
-            String? searchAttr(String name) {
-              final m = RegExp(
-                '$name="([^"]*)"',
-                caseSensitive: false,
-              ).firstMatch(attrStr);
-              final v = m?.group(1)?.trim();
-              return (v == null || v.isEmpty) ? null : v;
-            }
-            if (mounted) setState(() => _toolStatus = '🔍 Searching: "$query"');
-            final searchResult = await _executeWebSearchQuery(
-              query,
-              topic: searchAttr('topic'),
-              timeRange: searchAttr('time_range'),
-              startDate: searchAttr('start_date'),
-              endDate: searchAttr('end_date'),
-            );
-            if (mounted) setState(() => _toolStatus = '');
-            toolOutputs.add(
-              "Web Search results for '$query':\n\n$searchResult",
-            );
-          }
-        }
-
-        if (_searchSettings.enabled && readUrlMatch != null) {
-          final readUrlMatches = readUrlRegex.allMatches(fullText);
-          for (final match in readUrlMatches) {
-            executedTools = true;
-            final url = match.group(1)?.trim() ?? '';
-            final shortUrl = url.length > 50 ? '${url.substring(0, 47)}…' : url;
-            if (mounted) setState(() => _toolStatus = '🌐 Fetching: $shortUrl');
-            final urlResult = await _fetchUrlText(url);
-            if (mounted) setState(() => _toolStatus = '');
-            toolOutputs.add("Content of URL '$url':\n\n$urlResult");
-          }
-        }
-        if (memoryMatch != null) {
-          final memoryMatches = memoryRegex.allMatches(fullText);
-          for (final match in memoryMatches) {
-            executedTools = true;
-            final action = match.group(1)?.toLowerCase().trim() ?? '';
-            final content = match.group(2)?.trim() ?? '';
-            if (mounted)
-              setState(() => _toolStatus = '🧠 Memory Tool: $action');
-
-            final result = await _handleMemoryTool(action, content);
-
-            if (mounted) setState(() => _toolStatus = '');
-            toolOutputs.add("Memory Tool [$action] Result:\n$result");
-          }
-        }
 
         // JSON calls for tools the C++ binary doesn't own are collected here
         // and dispatched through the existing Python-bridge HTTP path below.
@@ -3318,9 +3227,8 @@ NEVER read an entire large file blindly:
         }
 
         if ((_agenticEnabled || _studyModeEnabled) &&
-            (mcpMatch != null || nativeHttpCalls.isNotEmpty)) {
+            nativeHttpCalls.isNotEmpty) {
           final mcpMatches = [
-            if (mcpMatch != null) mcpMatch,
             for (final js in nativeHttpCalls)
               RegExp(r'([\s\S]*)').firstMatch(js)!,
           ];
@@ -3514,55 +3422,6 @@ NEVER read an entire large file blindly:
             );
             if (verification != null) mcpResult += verification;
             toolOutputs.add("Tool Result [${toolMethod}]:\n\n$mcpResult");
-          }
-        }
-
-        final quizMatch = quizRegex.firstMatch(fullText);
-        if (_studyModeEnabled && quizMatch != null) {
-          executedTools = true;
-          // Hide the raw <quiz_request> tag from the visible bubble and from
-          // future API history; the quiz-results system message (below)
-          // carries the questions/answers forward for the model.
-          setState(() {
-            final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
-            if (idx != -1) {
-              final msgs = List<ChatMessage>.from(_sessions[idx].messages);
-              if (assistantMessageIndex < msgs.length) {
-                final cleaned = msgs[assistantMessageIndex].text
-                    .replaceFirst(quizMatch.group(0) ?? '', '')
-                    .trim();
-                msgs[assistantMessageIndex] = msgs[assistantMessageIndex]
-                    .copyWith(text: cleaned);
-                _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
-              }
-            }
-          });
-          final questions = _QuizSheet.parseQuestions(quizMatch.group(1) ?? '');
-          if (questions.isEmpty) {
-            toolOutputs.add('Quiz Tool Result:\n\n{"error":"malformed quiz_request, no valid questions"}');
-          } else {
-            final answers = await showModalBottomSheet<List<Map<String, dynamic>>>(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              isDismissible: false,
-              builder: (_) => _QuizSheet(questions: questions),
-            );
-            if (answers == null) {
-              toolOutputs.add('Quiz Tool Result:\n\nUser dismissed the quiz without answering. Ask whether to retry or skip, then continue teaching.');
-            } else {
-              final sb = StringBuffer('Quiz results (${answers.length} questions):\n');
-              for (var qi = 0; qi < answers.length; qi++) {
-                final a = answers[qi];
-                sb.writeln('Q${qi + 1}: ${a['q']}');
-                sb.writeln('  User answer: ${a['picked']}');
-                sb.writeln(a['correct'] == true
-                    ? '  Verdict: CORRECT'
-                    : '  Verdict: WRONG (correct answer: ${a['answer']})');
-              }
-              sb.writeln('Explain every WRONG verdict clearly, then repeat the understanding check before the next concept.');
-              toolOutputs.add(sb.toString());
-            }
           }
         }
 
@@ -4484,58 +4343,6 @@ NEVER read an entire large file blindly:
     return result == true;
   }
 
-  Match? _findMcpMatch(String fullText) {
-    // 0. Try direct command format: <command>...</command> (case-insensitive with spacing support & unclosed fallback)
-    final cmdStartMatch = RegExp(
-      r'<command\s*>',
-      caseSensitive: false,
-    ).firstMatch(fullText);
-    if (cmdStartMatch != null) {
-      final cmdEndMatch = RegExp(
-        r'</command\s*>',
-        caseSensitive: false,
-      ).firstMatch(fullText);
-      final String commandVal;
-      if (cmdEndMatch != null) {
-        commandVal = fullText
-            .substring(cmdStartMatch.end, cmdEndMatch.start)
-            .trim();
-      } else {
-        commandVal = fullText.substring(cmdStartMatch.end).trim();
-      }
-      final jsonStr = jsonEncode({
-        'method': 'run_command',
-        'params': {
-          'command': commandVal,
-          'cwd': '', // will be set to _agenticWorkspace in dispatch block
-        },
-      });
-      return RegExp(r'([\s\S]*)').firstMatch(jsonStr);
-    }
-
-    final toolRequestJson = _findToolRequestMatch(fullText);
-    if (toolRequestJson != null) {
-      return RegExp(r'([\s\S]*)').firstMatch(toolRequestJson);
-    }
-
-    // 2. Fallback to old JSON format
-    final mcpStart = fullText.indexOf('<mcp_request>');
-    if (mcpStart == -1) return null;
-
-    final jsonStart = fullText.indexOf('{', mcpStart);
-    if (jsonStart == -1) return null;
-
-    final jsonEnd = _findMatchingBracket(fullText, jsonStart);
-    if (jsonEnd == -1) return null;
-
-    final jsonStr = fullText.substring(jsonStart, jsonEnd + 1);
-
-    return RegExp(
-      r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
-      caseSensitive: false,
-    ).firstMatch('<mcp_request>$jsonStr</mcp_request>');
-  }
-
   /// Run one web search query through the chat client and return the
   /// length-capped result text. Shared by the legacy XML path and the native
   /// JSON router so both produce identical output.
@@ -4809,108 +4616,6 @@ NEVER read an entire large file blindly:
     return perm;
   }
 
-  String? _findToolRequestMatch(String fullText) {
-    final xmlStartMatch = RegExp(
-      r'<tool_request\s*>',
-      caseSensitive: false,
-    ).firstMatch(fullText);
-    String? xmlContent;
-    if (xmlStartMatch != null) {
-      final xmlEndMatch = RegExp(
-        r'</tool_request\s*>',
-        caseSensitive: false,
-      ).firstMatch(fullText);
-      if (xmlEndMatch != null) {
-        xmlContent = fullText.substring(xmlStartMatch.end, xmlEndMatch.start);
-      } else {
-        xmlContent = fullText.substring(xmlStartMatch.end);
-      }
-    } else if (RegExp(r'<method\s*>', caseSensitive: false).hasMatch(fullText)) {
-      xmlContent = fullText;
-    }
-    if (xmlContent == null) return null;
-
-    final Map<String, dynamic> result = {};
-    const preserveWhitespaceKeys = {'content', 'new_content', 'patches', 'reads'};
-
-    String cleanToolValue(String key, String value) {
-      if (preserveWhitespaceKeys.contains(key)) {
-        var output = value;
-        if (output.startsWith('\n')) output = output.substring(1);
-        if (output.endsWith('\n')) output = output.substring(0, output.length - 1);
-        return output;
-      }
-      return value.trim();
-    }
-
-    final regex = RegExp(
-      r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
-      caseSensitive: false,
-    );
-    for (final match in regex.allMatches(xmlContent)) {
-      final key = match.group(1)!.toLowerCase();
-      result[key] = cleanToolValue(key, match.group(2)!);
-    }
-
-    final paramRegex = RegExp(
-      r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
-    );
-    for (final m in paramRegex.allMatches(xmlContent)) {
-      final key = m.group(1)!.toLowerCase();
-      result[key] = cleanToolValue(key, m.group(2)!);
-    }
-
-    final paramRegex2 = RegExp(
-      r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
-      caseSensitive: false,
-    );
-    for (final m in paramRegex2.allMatches(xmlContent)) {
-      final key = m.group(1)!.toLowerCase();
-      result[key] = cleanToolValue(key, m.group(2)!);
-    }
-
-    if (!result.containsKey('method')) return null;
-    for (final key in ['method', 'path', 'query', 'start_line', 'end_line', 'pattern', 'command']) {
-      if (result.containsKey(key) && result[key] is String) {
-        result[key] = (result[key] as String).trim();
-      }
-    }
-    final method = result['method'];
-    result.remove('method');
-    return jsonEncode({'method': method, 'params': result});
-  }
-
-  int _findMatchingBracket(String text, int startIndex) {
-    int count = 0;
-    bool inString = false;
-    bool escape = false;
-
-    for (int i = startIndex; i < text.length; i++) {
-      final c = text[i];
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (c == '\\') {
-        escape = true;
-        continue;
-      }
-      if (c == '"') {
-        inString = !inString;
-        continue;
-      }
-      if (inString) continue;
-
-      if (c == '{' || c == '[')
-        count++;
-      else if (c == '}' || c == ']') {
-        count--;
-        if (count == 0) return i;
-      }
-    }
-    return -1;
-  }
-
   String _getResearchFileName(String title) {
     var cleanTitle = title.trim();
     if (cleanTitle.endsWith('...')) {
@@ -4972,146 +4677,6 @@ NEVER read an entire large file blindly:
     return oldText.substring(0, startIdx) +
         newStateStr +
         oldText.substring(endIdx + 17);
-  }
-
-  String _preprocessUnrecognizedToolCalls(
-    String text,
-    List<Map<String, dynamic>> unrecognizedErrors,
-  ) {
-    final pattern = RegExp(r'\b([a-zA-Z_][a-zA-Z0-9_\.:]*)\s*\{');
-    var offset = 0;
-    var result = text;
-    while (true) {
-      if (offset >= result.length) break;
-      final match = pattern.firstMatch(result.substring(offset));
-      if (match == null) break;
-      final matchStart = offset + match.start;
-      final name = match.group(1)!.trim();
-      final braceStart = offset + match.end - 1;
-      int braceEnd = -1;
-      int depth = 1;
-      for (int j = braceStart + 1; j < result.length; j++) {
-        if (result[j] == '{') {
-          depth++;
-        } else if (result[j] == '}') {
-          depth--;
-          if (depth == 0) {
-            braceEnd = j;
-            break;
-          }
-        }
-      }
-      if (braceEnd == -1) {
-        offset = braceStart + 1;
-        continue;
-      }
-      final paramsText = result.substring(braceStart + 1, braceEnd).trim();
-      final fullMatchText = result.substring(matchStart, braceEnd + 1);
-      final nameLower = name.toLowerCase();
-      bool isKnownTool = false;
-      String? mappedTool;
-      if (nameLower.contains('read_url') ||
-          nameLower.contains('readurl') ||
-          nameLower.contains('fetch')) {
-        isKnownTool = true;
-        mappedTool = 'read_url';
-      } else if (nameLower.contains('web_search') ||
-          nameLower.contains('search_web') ||
-          nameLower.contains('search_request') ||
-          (nameLower.contains('search') && !nameLower.contains('research'))) {
-        isKnownTool = true;
-        mappedTool = 'search_request';
-      } else if (nameLower.contains('mcp_request') ||
-          nameLower.contains('mcp_call') ||
-          (nameLower.contains('mcp') && !nameLower.contains('mcp_server'))) {
-        isKnownTool = true;
-        mappedTool = 'mcp_request';
-      }
-      if (isKnownTool) {
-        bool reinterpreted = false;
-        String replacement = '';
-        if (mappedTool == 'read_url') {
-          final urlRegex = RegExp('https?://[^\\s"\'\\}]+');
-          final urlMatch = urlRegex.firstMatch(paramsText);
-          if (urlMatch != null) {
-            final url = urlMatch.group(0)!;
-            replacement = '<read_url>$url</read_url>';
-            reinterpreted = true;
-          }
-        } else if (mappedTool == 'search_request') {
-          final queryRegex1 = RegExp(
-            '(?:query|q)[:\\s="\']+\\s*["\']([^"\']+)["\']',
-          );
-          final queryRegex2 = RegExp(
-            '(?:query|q)[:\\s="\']+\\s*([^\\s"\'\\}]+)',
-          );
-          final quotedRegex = RegExp('["\']([^"\']+)["\']');
-          String? query;
-          final mq1 = queryRegex1.firstMatch(paramsText);
-          if (mq1 != null) {
-            query = mq1.group(1);
-          } else {
-            final mq2 = queryRegex2.firstMatch(paramsText);
-            if (mq2 != null) {
-              query = mq2.group(1);
-            } else {
-              final mqQuoted = quotedRegex.firstMatch(paramsText);
-              if (mqQuoted != null) {
-                query = mqQuoted.group(1);
-              } else if (paramsText.isNotEmpty) {
-                query = paramsText;
-              }
-            }
-          }
-          if (query != null && query.trim().isNotEmpty) {
-            replacement = '<search_request>${query.trim()}</search_request>';
-            reinterpreted = true;
-          }
-        } else if (mappedTool == 'mcp_request') {
-          String finalJson = paramsText;
-          if (!paramsText.startsWith('{')) {
-            finalJson = '{$paramsText}';
-          }
-          try {
-            jsonDecode(finalJson);
-            replacement = '<mcp_request>$finalJson</mcp_request>';
-            reinterpreted = true;
-          } catch (_) {
-            replacement = '<mcp_request>$finalJson</mcp_request>';
-            reinterpreted = true;
-          }
-        }
-        if (reinterpreted) {
-          result =
-              result.substring(0, matchStart) +
-              replacement +
-              result.substring(braceEnd + 1);
-          offset = matchStart + replacement.length;
-        } else {
-          unrecognizedErrors.add({
-            'tool': name,
-            'error':
-                'Unrecognized tool call syntax with unparseable parameters: $fullMatchText',
-          });
-          offset = braceEnd + 1;
-        }
-      } else {
-        final isGenericCallShape =
-            name.contains(':') ||
-            nameLower.startsWith('call') ||
-            nameLower.startsWith('tool') ||
-            nameLower.startsWith('request');
-        if (isGenericCallShape) {
-          unrecognizedErrors.add({
-            'tool': name,
-            'error':
-                'Generic tool call attempt in unrecognized format: $fullMatchText',
-          });
-        }
-        offset = braceEnd + 1;
-      }
-    }
-    return result;
   }
 
   /// Returns a human-readable status label for a tool call, e.g.:
@@ -5830,10 +5395,9 @@ NEVER read an entire large file blindly:
             turnWatch.stop();
 
             final unrecognizedErrors = <Map<String, dynamic>>[];
-            final preprocessedText = _preprocessUnrecognizedToolCalls(
-              responseText,
-              unrecognizedErrors,
-            );
+            // JSON tool calls are extracted directly from fenced ```json blocks
+            // in the dispatch loop — no preprocessing/reinterpretation needed.
+            final preprocessedText = responseText;
 
             Map<String, String> parseSearchAttributes(String attrStr) {
               final Map<String, String> attrs = {};
