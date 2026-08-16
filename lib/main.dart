@@ -38,6 +38,7 @@ import 'package:nexon/services/deep_research/deep_research_bridge_client.dart';
 import 'package:nexon/services/deep_research/deep_research_helpers.dart';
 import 'package:nexon/services/slash_command/slash_command_service.dart';
 import 'package:nexon/services/context_compression/context_compression_service.dart';
+import 'package:nexon/services/termux_bridge/native_tools_service.dart';
 import 'package:nexon/services/checkpoint/checkpoint_service.dart';
 import 'package:nexon/services/workspace/workspace_service.dart';
 import 'package:nexon/services/termux_bridge/termux_bridge_service.dart';
@@ -3261,6 +3262,96 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           }
         }
 
+        // ── Native C++ tools fast path (JSON tool calls) ──────────────────
+        // Fenced ```json blocks shaped {"t","a"} or {"calls":[...]}. Tools the
+        // C++ binary owns run locally with no Python/HTTP hop. Non-cpp JSON
+        // calls fall through to the paths below until the JSON migration
+        // completes.
+        if (_agenticEnabled) {
+          final nativeCalls = _findNativeToolCalls(fullText);
+          for (final nativeCall in nativeCalls) {
+            final toolName = (nativeCall['t'] ?? '').toString();
+            if (toolName.isEmpty || !NativeToolsService.handles(toolName)) {
+              continue;
+            }
+            Map<String, dynamic> toolArgs = const {};
+            final rawArgs = nativeCall['a'];
+            if (rawArgs is Map<String, dynamic>) toolArgs = rawArgs;
+            executedTools = true;
+
+            // Safety checkpoint before heavy file mutations (parity with the
+            // legacy patch_file/write_file_rich/delete_path checkpointing).
+            if (toolName == 'patch' ||
+                toolName == 'edit' ||
+                toolName == 'create_file' ||
+                toolName == 'cut' ||
+                toolName == 'extract' ||
+                toolName == 'fileops') {
+              try {
+                await _slashCheckpoint(
+                  'auto_before_native_${toolName}_${DateTime.now().millisecondsSinceEpoch}',
+                );
+              } catch (e) {
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"warning":"checkpoint creation failed","details":"$e"}',
+                );
+              }
+            }
+
+            // Shell permission gate (parity with run_command).
+            if (toolName == 'sh') {
+              final cmd = toolArgs['cmd']?.toString() ?? '';
+              final allowed = await _askShellPermission(cmd);
+              if (!allowed) {
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"error":"User denied shell command execution."}',
+                );
+                continue;
+              }
+            }
+
+            // File-mutation permission gate. Native arg names differ from the
+            // legacy tools (f/to vs path/src/dest), so map them onto the keys
+            // the existing permission dialog understands.
+            if (_nativeIsFileMutation(toolName, toolArgs)) {
+              final allowed = await _askFileMutationPermission(
+                toolName,
+                _nativePermParams(toolName, toolArgs),
+              );
+              if (!allowed) {
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"error":"User denied file operation."}',
+                );
+                continue;
+              }
+            }
+
+            if (mounted) {
+              setState(
+                () => _toolStatus = _toolStatusLabel(toolName, toolArgs),
+              );
+            }
+
+            Map<String, dynamic> result;
+            try {
+              result = await NativeToolsService().call(
+                workspace: _agenticWorkspace,
+                tool: toolName,
+                args: toolArgs,
+              );
+            } on NativeToolsException catch (e) {
+              result = {'err': e.message, 't': toolName};
+            } catch (e) {
+              result = {'err': 'native tools error: $e', 't': toolName};
+            }
+
+            if (mounted) setState(() => _toolStatus = '');
+            toolOutputs.add(
+              'Tool Result [$toolName]:\n\n${jsonEncode(result)}',
+            );
+          }
+        }
+
         if ((_agenticEnabled || _studyModeEnabled) && mcpMatch != null) {
           final mcpMatches = [mcpMatch];
           for (final match in mcpMatches) {
@@ -4473,6 +4564,83 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
       caseSensitive: false,
     ).firstMatch('<mcp_request>$jsonStr</mcp_request>');
+  }
+
+  // ── Native JSON tool-call extraction & routing helpers ──────────────────
+  // The JSON-format prompt emits fenced ```json blocks containing either a
+  // single call {"t": "tool", "a": {...}} or a batch {"calls": [...]}.
+  // Returns all calls flattened, in order. Non-tool JSON blocks (prose code
+  // samples, config snippets) are ignored: a block only counts when it is a
+  // valid JSON object with a 't' key or a 'calls' array of such objects.
+  List<Map<String, dynamic>> _findNativeToolCalls(String fullText) {
+    final results = <Map<String, dynamic>>[];
+    final fenceRegex = RegExp(
+      r'```(?:json)?\s*\n([\s\S]*?)```',
+      caseSensitive: false,
+    );
+    for (final match in fenceRegex.allMatches(fullText)) {
+      final block = match.group(1)?.trim() ?? '';
+      if (block.isEmpty || !block.startsWith('{')) continue;
+      Map<String, dynamic>? parsed;
+      try {
+        final dynamic decoded = jsonDecode(block);
+        if (decoded is Map<String, dynamic>) parsed = decoded;
+      } catch (_) {
+        continue; // not valid JSON — a prose code block, leave it alone
+      }
+      if (parsed == null) continue;
+      final calls = parsed['calls'];
+      if (calls is List) {
+        for (final c in calls) {
+          if (c is Map<String, dynamic> && c['t'] != null) results.add(c);
+        }
+      } else if (parsed['t'] != null) {
+        results.add(parsed);
+      }
+    }
+    return results;
+  }
+
+  /// True when a native C++ tool call mutates files and therefore needs the
+  /// user permission prompt (read-only tools never prompt).
+  bool _nativeIsFileMutation(String toolName, Map<String, dynamic> args) {
+    switch (toolName) {
+      case 'patch':
+      case 'edit':
+      case 'create_file':
+      case 'create_directory':
+      case 'cut':
+      case 'extract':
+      case 'fileops':
+      case 'undo':
+        return true;
+      case 'git':
+        final action = (args['a'] ?? '').toString();
+        return action == 'commit' ||
+            action == 'ci' ||
+            action == 'revert_file' ||
+            action == 'rv' ||
+            action == 'undo_last_commit' ||
+            action == 'uc' ||
+            action == 'raw' ||
+            action == 'r';
+      default:
+        return false;
+    }
+  }
+
+  /// Map native tool arg names onto the legacy permission-dialog keys so
+  /// _askFileMutationPermission/_allPathsTrusted can find the paths.
+  Map<String, dynamic> _nativePermParams(
+    String toolName,
+    Map<String, dynamic> args,
+  ) {
+    final perm = Map<String, dynamic>.from(args);
+    final f = args['f'];
+    if (f != null && !perm.containsKey('path')) perm['path'] = f;
+    final to = args['to'];
+    if (to != null && !perm.containsKey('dest')) perm['dest'] = to;
+    return perm;
   }
 
   String? _findToolRequestMatch(String fullText) {
