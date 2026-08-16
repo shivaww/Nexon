@@ -112,6 +112,7 @@ struct Json {
 struct JsonParser {
     const std::string& s;
     size_t i = 0;
+    int depth = 0; // nesting-depth guard, managed in parseValue
     explicit JsonParser(const std::string& s_) : s(s_) {}
 
     void skipWs() { while (i < s.size() && isspace((unsigned char)s[i])) i++; }
@@ -122,14 +123,21 @@ struct JsonParser {
     }
 
     Json parseValue() {
+        // Depth guard: pathological nesting would otherwise recurse
+        // parseValue/parseObject/parseArray into a stack overflow. Counted per
+        // value and decremented on exit so wide-but-shallow JSON never trips it.
+        if (++depth > 128) throw std::runtime_error("JSON nesting exceeds 128 levels at pos " + std::to_string(i) + "; refusing pathologically deep input");
         skipWs();
         char c = peek();
-        if (c == '{') return parseObject();
-        if (c == '[') return parseArray();
-        if (c == '"') return Json::Str(parseString());
-        if (c == 't' || c == 'f') return parseBool();
-        if (c == 'n') return parseNull();
-        return parseNumber();
+        Json v;
+        if (c == '{') v = parseObject();
+        else if (c == '[') v = parseArray();
+        else if (c == '"') v = Json::Str(parseString());
+        else if (c == 't' || c == 'f') v = parseBool();
+        else if (c == 'n') v = parseNull();
+        else v = parseNumber();
+        --depth;
+        return v;
     }
     Json parseObject() {
         Json j = Json::Obj();
@@ -185,12 +193,29 @@ struct JsonParser {
                         if (i + 4 > s.size()) throw std::runtime_error("bad unicode escape");
                         std::string hex = s.substr(i, 4); i += 4;
                         unsigned int cp = (unsigned int)std::stoul(hex, nullptr, 16);
+                        // UTF-16 surrogate pair: a high surrogate (\uD800-\uDBFF) must be
+                        // followed by \uDC00-\uDFFF. Combine them into one code point so
+                        // emoji sent as \ud83d\ude00 decode as valid 4-byte UTF-8 instead
+                        // of two broken 3-byte sequences.
+                        if (cp >= 0xD800 && cp <= 0xDBFF &&
+                            i + 6 <= s.size() && s[i] == '\\' && s[i+1] == 'u') {
+                            unsigned int lo = (unsigned int)std::stoul(s.substr(i+2, 4), nullptr, 16);
+                            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                                i += 6;
+                                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                            }
+                        }
                         if (cp < 0x80) out += (char)cp;
                         else if (cp < 0x800) {
                             out += (char)(0xC0 | (cp >> 6));
                             out += (char)(0x80 | (cp & 0x3F));
-                        } else {
+                        } else if (cp < 0x10000) {
                             out += (char)(0xE0 | (cp >> 12));
+                            out += (char)(0x80 | ((cp >> 6) & 0x3F));
+                            out += (char)(0x80 | (cp & 0x3F));
+                        } else {
+                            out += (char)(0xF0 | (cp >> 18));
+                            out += (char)(0x80 | ((cp >> 12) & 0x3F));
                             out += (char)(0x80 | ((cp >> 6) & 0x3F));
                             out += (char)(0x80 | (cp & 0x3F));
                         }
@@ -252,18 +277,44 @@ Json Json::parse(const std::string& text, std::string* err) {
 
 static void jsonEscape(const std::string& s, std::string& out) {
     out.reserve(s.size() + 32);
-    for (char c : s) {
+    for (size_t idx = 0; idx < s.size(); ++idx) {
+        char c = s[idx];
         switch (c) {
             case '"':  out += "\\\""; break;
             case '\\': out += "\\\\"; break;
             case '\n': out += "\\n"; break;
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
-            default:
-                if ((unsigned char)c < 0x20) {
-                    char buf[8]; snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+            default: {
+                unsigned char uc = (unsigned char)c;
+                if (uc < 0x20) {
+                    char buf[8]; snprintf(buf, sizeof(buf), "\\u%04x", uc);
                     out += buf;
-                } else out += c;
+                } else if (uc < 0x80) {
+                    out += c;
+                } else {
+                    // Bytes >= 0x80 must belong to a well-formed UTF-8 sequence to be
+                    // passed through raw: JSON strings must be valid UTF-8, and the
+                    // consuming parser (e.g. Dart's jsonDecode) throws on stray
+                    // latin-1/binary bytes. Verify the sequence and copy it whole;
+                    // escape anything invalid as \u00XX instead.
+                    int seqLen = 0;
+                    if (uc >= 0xC2 && (uc & 0xE0) == 0xC0) seqLen = 2;
+                    else if ((uc & 0xF0) == 0xE0) seqLen = 3;
+                    else if (uc <= 0xF4 && (uc & 0xF8) == 0xF0) seqLen = 4;
+                    bool valid = (seqLen > 0) && (idx + (size_t)seqLen <= s.size());
+                    for (int k = 1; valid && k < seqLen; ++k) {
+                        if (((unsigned char)s[idx + k] & 0xC0) != 0x80) valid = false;
+                    }
+                    if (valid) {
+                        out.append(s, idx, (size_t)seqLen);
+                        idx += (size_t)seqLen - 1; // loop's ++idx steps past the rest
+                    } else {
+                        char buf[8]; snprintf(buf, sizeof(buf), "\\u%04x", uc);
+                        out += buf;
+                    }
+                }
+            }
         }
     }
 }
@@ -431,6 +482,24 @@ void backupFile(const fs::path& baseDir, const std::string& relFile, const std::
         fs::path bfile = bdir / (safeName + "." + std::to_string(now) + ".bak");
         std::ofstream out(bfile, std::ios::binary);
         if (out) out << originalContent;
+        // Retention: keep only the newest 20 snapshots per file so a long agent
+        // session can't fill mobile storage with unbounded backup history.
+        std::vector<std::pair<long long, fs::path>> snaps;
+        std::string prefix = safeName + ".";
+        for (auto& entry : fs::directory_iterator(bdir, fs::directory_options::skip_permission_denied, ec)) {
+            std::error_code rec;
+            if (!entry.is_regular_file(rec) || rec) continue;
+            std::string fname = entry.path().filename().string();
+            if (fname.size() <= prefix.size() + 4) continue;
+            if (fname.compare(0, prefix.size(), prefix) != 0) continue;
+            if (fname.substr(fname.size() - 4) != ".bak") continue;
+            try { snaps.push_back({std::stoll(fname.substr(prefix.size(), fname.size() - prefix.size() - 4)), entry.path()}); }
+            catch (...) {}
+        }
+        if (snaps.size() > 20) {
+            std::sort(snaps.begin(), snaps.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+            for (size_t k = 20; k < snaps.size(); ++k) fs::remove(snaps[k].second, ec);
+        }
     } catch (...) {}
 }
 // Lenient base64 decoder: skips whitespace/newlines/invalid chars, stops at '='.
@@ -2090,7 +2159,10 @@ Json toolGit(const Json& args, const fs::path& baseDir) {
         if (m.empty()) {
             Json r = Json::Obj(); r.set("err", Json::Str("'m' required for commit")); return r;
         }
-        cmd = "git add -A && git commit -m " + shellQuote(m);
+        // Keep .mpt_backups out of the commit: idempotently ensure it is in
+        // .git/info/exclude before staging, so backup snapshots never leak
+        // into the repo.
+        cmd = "mkdir -p .git/info && { grep -qxF '.mpt_backups/' .git/info/exclude 2>/dev/null || echo '.mpt_backups/' >> .git/info/exclude; } && git add -A && git commit -m " + shellQuote(m);
     } else if (action == "revert_file" || action == "rv") {
         std::string f = args.getStr2("f", "file");
         if (f.empty()) {
@@ -2286,6 +2358,7 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
         std::string line = lines[i];
         std::string trimmed = trim(line);
         if (trimmed.empty()) continue;
+        if (trimmed[0] == '}') continue; // closing a prior block; never a symbol start
         if (trimmed[0] == '/' || trimmed[0] == '#') {
             if (isPython && (trimmed.substr(0, 6) == "import" || trimmed.substr(0, 4) == "from")) {
                 entries.push_back({(long)(i+1), "import", trimmed}); continue;
@@ -3179,6 +3252,17 @@ Json toolDiagnostics(const Json& args, const fs::path& baseDir) {
 // ===========================================================================
 // Dispatcher
 // ===========================================================================
+// Health/version probe so the hosting app can verify the binary exists,
+// runs, and speaks the expected protocol before trusting it with files.
+Json toolVersion(const Json&, const fs::path&) {
+    Json r = Json::Obj();
+    r.set("name", Json::Str("tools"));
+    r.set("version", Json::Str("1.1.0-nexon"));
+    r.set("protocol", Json::Num(1));
+    r.set("tools", Json::Str("sh search read patch edit git list find outline recent undo create_file create_directory cut extract fileops diagnostics version"));
+    return r;
+}
+
 Json dispatchSingle(const Json& call, const fs::path& baseDir, std::string& toolName) {
     toolName = call.getStr2("t", "tool");
     if (toolName.empty()) {
@@ -3210,11 +3294,12 @@ Json dispatchSingle(const Json& call, const fs::path& baseDir, std::string& tool
         else if (toolName == "extract" || toolName == "extract_tool") result = toolExtract(args, baseDir);
         else if (toolName == "fileops" || toolName == "fileops_tool" || toolName == "fops") result = toolFileOps(args, baseDir);
         else if (toolName == "diagnostics" || toolName == "diagnostics_tool" || toolName == "diag") result = toolDiagnostics(args, baseDir);
+        else if (toolName == "version" || toolName == "health") result = toolVersion(args, baseDir);
         else {
             result = Json::Obj();
             result.set("err", Json::Str("unknown tool: '" + toolName +
                 "' (valid: sh, search, read, patch, edit, git, list, find, outline, recent, undo, "
-                "create_file, create_directory, cut, extract, fileops, diagnostics)"));
+                "create_file, create_directory, cut, extract, fileops, diagnostics, version)"));
         }
     } catch (std::exception& e) {
         result = Json::Obj();

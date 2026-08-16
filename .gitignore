@@ -88,3 +88,6 @@ llama_server_*.log
 
 # patch tool backups
 .mpt_backups/
+
+# tools C++ bridge (undo snapshots)
+.mpt_backups/
