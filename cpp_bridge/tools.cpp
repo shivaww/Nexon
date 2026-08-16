@@ -1156,71 +1156,104 @@ Json toolMultiSearch(const Json& args, const fs::path& baseDir) {
 
     std::vector<std::string> missing;
     std::vector<fs::path> files = collectFiles(baseDir, subpaths, &missing);
-    Json outResults = Json::Arr();
-
+    // Single-pass multi-query search: compile each query's regex once, then
+    // walk the file set exactly once, testing every line against every active
+    // query. The old shape re-walked and re-read the entire tree per query
+    // (N queries = N full passes); this reads each file once no matter how
+    // many queries, and computes the case-insensitive lowercase form of each
+    // line once for all case-insensitive queries instead of once per query
+    // per line.
+    struct QueryState {
+        std::string query;
+        std::string queryLower;
+        std::regex re;
+        bool reOk = true;
+        std::string reErr;
+        long count = 0;
+        bool truncated = false;
+        std::ostringstream matchText;
+        bool inFile = false;
+    };
+    std::vector<QueryState> states;
     for (auto& q : *queries) {
         std::string query = (q.type == Json::Type::String) ? q.str : "";
         if (query.empty()) continue;
-        Json qres = Json::Obj();
-        long count = 0;
-        bool truncated = false;
-        std::regex re;
-        bool reOk = true;
+        QueryState st;
+        st.query = query;
+        if (!caseSensitive) st.queryLower = toLower(query);
         if (useRegex) {
             try {
-                re = std::regex(query, caseSensitive ? std::regex::ECMAScript : std::regex::ECMAScript | std::regex::icase);
+                st.re = std::regex(query, caseSensitive ? std::regex::ECMAScript : std::regex::ECMAScript | std::regex::icase);
             } catch (const std::exception& e) {
-                reOk = false;
-                qres.set("err", Json::Str(std::string("regex error: ") + e.what()));
-                outResults.arr.push_back(qres);
-                continue;
+                st.reOk = false;
+                st.reErr = e.what();
             }
         }
-        std::ostringstream matchText;
-        std::string currentFile;
-        bool inFile = false;
-        for (auto& fp : files) {
-            if (count >= maxPerQuery) { truncated = true; break; }
-            std::error_code ec;
-            std::string relName = fs::relative(fp, baseDir, ec).string();
-            if (ec) relName = fp.string();
-            std::vector<std::string> lines = readFileLines(fp.string());
-            bool fileHadMatch = false;
-            for (size_t i = 0; i < lines.size(); ++i) {
-                if (count >= maxPerQuery) { truncated = true; break; }
+        states.push_back(std::move(st));
+    }
+
+    for (auto& fp : files) {
+        // Stop walking once every query is finished (truncated) or errored.
+        bool anyActive = false;
+        for (auto& st : states) {
+            if (st.reOk && st.count < maxPerQuery) { anyActive = true; break; }
+        }
+        if (!anyActive) break;
+        std::error_code ec;
+        std::string relName = fs::relative(fp, baseDir, ec).string();
+        if (ec) relName = fp.string();
+        std::vector<std::string> lines = readFileLines(fp.string());
+        std::vector<bool> fileHadMatch(states.size(), false);
+        for (size_t i = 0; i < lines.size(); ++i) {
+            std::string lineLower; // computed lazily once per line, shared by all ci queries
+            bool haveLower = false;
+            for (size_t qi = 0; qi < states.size(); ++qi) {
+                QueryState& st = states[qi];
+                if (!st.reOk || st.count >= maxPerQuery) continue;
                 bool matched = false;
                 try {
-                    if (useRegex && reOk) matched = std::regex_search(lines[i], re);
-                    else if (caseSensitive) matched = lines[i].find(query) != std::string::npos;
-                    else matched = toLower(lines[i]).find(toLower(query)) != std::string::npos;
+                    if (useRegex) matched = std::regex_search(lines[i], st.re);
+                    else if (caseSensitive) matched = lines[i].find(st.query) != std::string::npos;
+                    else {
+                        if (!haveLower) { lineLower = toLower(lines[i]); haveLower = true; }
+                        matched = lineLower.find(st.queryLower) != std::string::npos;
+                    }
                 } catch (...) { matched = false; }
-                if (matched) {
-                    if (count >= maxPerQuery) { truncated = true; break; }
-                    if (!fileHadMatch) {
-                        if (inFile) matchText << "--\n";
-                        matchText << "f:" << relName << "\n";
-                        inFile = true;
-                        fileHadMatch = true;
-                    }
-                    if (context > 0) {
-                        long startI = std::max<long>(0, (long)i - context);
-                        long endI = std::min<long>((long)lines.size() - 1, (long)i + context);
-                        for (long k = startI; k <= endI; ++k) {
-                            char sep = (k == (long)i) ? ':' : '~';
-                            matchText << "  " << (k + 1) << sep << lines[k] << "\n";
-                        }
-                    } else {
-                        matchText << "  " << (i + 1) << ":" << lines[i] << "\n";
-                    }
-                    count++;
+                if (!matched) continue;
+                if (!fileHadMatch[qi]) {
+                    if (st.inFile) st.matchText << "--\n";
+                    st.matchText << "f:" << relName << "\n";
+                    st.inFile = true;
+                    fileHadMatch[qi] = true;
                 }
+                if (context > 0) {
+                    long startI = std::max<long>(0, (long)i - context);
+                    long endI = std::min<long>((long)lines.size() - 1, (long)i + context);
+                    for (long k = startI; k <= endI; ++k) {
+                        char sep = (k == (long)i) ? ':' : '~';
+                        st.matchText << "  " << (k + 1) << sep << lines[k] << "\n";
+                    }
+                } else {
+                    st.matchText << "  " << (i + 1) << ":" << lines[i] << "\n";
+                }
+                st.count++;
+                if (st.count >= maxPerQuery) st.truncated = true;
             }
-            if (truncated) break;
         }
-        if (inFile) matchText << "--\n";
-        qres.set("n", Json::Num((double)count));
-        qres.set("trunc", Json::Bool(truncated));
-        qres.set("m", Json::Str(matchText.str()));
+    }
+
+    Json outResults = Json::Arr();
+    for (auto& st : states) {
+        Json qres = Json::Obj();
+        if (!st.reOk) {
+            qres.set("err", Json::Str(std::string("regex error: ") + st.reErr));
+            outResults.arr.push_back(qres);
+            continue;
+        }
+        if (st.inFile) st.matchText << "--\n";
+        qres.set("n", Json::Num((double)st.count));
+        qres.set("trunc", Json::Bool(st.truncated));
+        qres.set("m", Json::Str(st.matchText.str()));
         outResults.arr.push_back(qres);
     }
     Json out = Json::Obj();
