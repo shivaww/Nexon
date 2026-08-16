@@ -120,14 +120,62 @@ class NativeToolsService {
     _process!.exitCode.then((_) => _handleExit()).ignore();
   }
 
+  /// Auto-retry policy: one retry on timeout or process death, EXCEPT for
+  /// shell commands that sleep / background themselves (a retry would double
+  /// the wait or double-launch the process). Background-service tools are not
+  /// native and never reach this path.
+  static bool _retryable(String tool, Map<String, dynamic> args) {
+    if (tool != 'sh') return true;
+    final cmd = args['cmd']?.toString() ?? '';
+    return !cmd.contains('sleep') &&
+        !cmd.contains('nohup') &&
+        !cmd.contains('background') &&
+        !cmd.contains(' &') &&
+        !cmd.startsWith('&');
+  }
+
   /// Execute one tool call and return the parsed JSON result. Never throws
   /// for tool-level failures — those come back as {'err': ...} maps the LLM
-  /// can read. Setup failures rethrow [NativeToolsException].
+  /// can read. Honors the tool's own `to` (timeout seconds) argument instead
+  /// of a fixed cap, and retries once on transient failures (timeout, process
+  /// death, stdin write error) per [_retryable].
   Future<Map<String, dynamic>> call({
     required String workspace,
     required String tool,
     Map<String, dynamic> args = const {},
-    Duration timeout = const Duration(seconds: 120),
+    Duration? timeout,
+    String? binaryPath,
+  }) async {
+    final int toSec = args['to'] is int
+        ? args['to'] as int
+        : int.tryParse(args['to']?.toString() ?? '') ?? 120;
+    final Duration effective =
+        timeout ?? Duration(seconds: toSec.clamp(5, 600) + 10);
+    final int attempts = _retryable(tool, args) ? 2 : 1;
+    Map<String, dynamic> result = const {};
+    for (int attempt = 1; attempt <= attempts; attempt++) {
+      result = await _callOnce(
+        workspace: workspace,
+        tool: tool,
+        args: args,
+        timeout: effective,
+        binaryPath: binaryPath,
+      );
+      final err = result['err'];
+      final transient = err is String &&
+          (err.contains('timed out') ||
+              err.contains('tools process') ||
+              err.contains('failed to write'));
+      if (err == null || !transient || attempt == attempts) return result;
+    }
+    return result;
+  }
+
+  Future<Map<String, dynamic>> _callOnce({
+    required String workspace,
+    required String tool,
+    Map<String, dynamic> args = const {},
+    required Duration timeout,
     String? binaryPath,
   }) async {
     await ensureRunning(workspace: workspace, binaryPath: binaryPath);

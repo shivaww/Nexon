@@ -8767,6 +8767,90 @@ class _McpToolBlockState extends State<McpToolBlock> {
           'Outline  ${shortPath(p('file_path'))}',
           null,
         );
+      // ── Native C++ bridge tools (JSON {"t","a"} format) ─────────────
+      case 'read':
+        {
+          final r = params['r'];
+          final firstF = (r is List && r.isNotEmpty && r.first is Map)
+              ? shortPath((r.first as Map)['f']?.toString() ?? '')
+              : null;
+          return (
+            Icons.menu_book_outlined,
+            const Color(0xFF0369A1),
+            'Read${r is List && r.length > 1 ? ' ${r.length} ranges' : ''}',
+            firstF,
+          );
+        }
+      case 'search':
+        {
+          final q = params['q'];
+          final sub = (q is List && q.isNotEmpty)
+              ? '"${q.first}"'
+              : (p('q').isNotEmpty ? '"${p('q')}"' : null);
+          return (Icons.search, const Color(0xFF0369A1), 'Search', sub);
+        }
+      case 'patch':
+        {
+          final ps = params['p'];
+          final firstF = (ps is List && ps.isNotEmpty && ps.first is Map)
+              ? shortPath((ps.first as Map)['f']?.toString() ?? '')
+              : null;
+          return (
+            Icons.edit_outlined,
+            const Color(0xFF7C3AED),
+            'Patch${ps is List && ps.length > 1 ? ' ${ps.length} edits' : ''}',
+            firstF,
+          );
+        }
+      case 'edit':
+        return (
+          Icons.edit_outlined,
+          const Color(0xFF7C3AED),
+          'Edit',
+          p('f').isNotEmpty ? shortPath(p('f')) : null,
+        );
+      case 'create_file':
+        return (Icons.edit_document, const Color(0xFF059669), 'Create file', shortPath(p('f')));
+      case 'create_directory':
+        return (Icons.create_new_folder_outlined, const Color(0xFFD97706), 'Create dir', shortPath(p('p')));
+      case 'list':
+        return (Icons.folder_open_outlined, const Color(0xFFD97706), 'List', shortPath(p('p')));
+      case 'find':
+        return (Icons.manage_search_outlined, const Color(0xFFD97706), 'Find', p('glob').isNotEmpty ? '"${p('glob')}"' : null);
+      case 'outline':
+        return (Icons.account_tree_outlined, const Color(0xFF0369A1), 'Outline', shortPath(p('f')));
+      case 'recent':
+        return (Icons.history, const Color(0xFF475569), 'Recent files', null);
+      case 'undo':
+        return (Icons.restore_from_trash_outlined, const Color(0xFF059669), 'Undo', shortPath(p('f')));
+      case 'git':
+        return (Icons.commit, const Color(0xFFF05032), 'Git ${p('a')}', null);
+      case 'sh':
+        {
+          final cmd = p('cmd');
+          final short = cmd.length > 55 ? '${cmd.substring(0, 52)}…' : cmd;
+          return (Icons.terminal, const Color(0xFF1E293B), 'Run', short.isNotEmpty ? short : null);
+        }
+      case 'fileops':
+        {
+          final ops = params['ops'];
+          return (Icons.folder_copy_outlined, const Color(0xFF475569), 'File ops${ops is List ? ' (${ops.length})' : ''}', null);
+        }
+      case 'cut':
+      case 'extract':
+        return (Icons.content_cut, const Color(0xFF7C3AED), method == 'cut' ? 'Split' : 'Extract', shortPath(p('f')));
+      case 'diagnostics':
+        return (Icons.analytics_outlined, const Color(0xFF0175C2), 'Diagnostics', p('cmd').isNotEmpty ? p('cmd') : null);
+      case 'py':
+        return (Icons.code, const Color(0xFF0175C2), 'Python', p('m').isNotEmpty ? p('m') : null);
+      case 'web_search':
+        return (Icons.search, const Color(0xFF0369A1), 'Web search', p('q').isNotEmpty ? '"${p('q')}"' : (p('query').isNotEmpty ? '"${p('query')}"' : null));
+      case 'read_url':
+        return (Icons.link, const Color(0xFF0369A1), 'Read webpage', p('url').isNotEmpty ? shortPath(p('url')) : null);
+      case 'memory':
+        return (Icons.psychology_outlined, const Color(0xFF7C3AED), 'Memory ${p('action')}', null);
+      case 'quiz':
+        return (Icons.school_outlined, const Color(0xFFD97706), 'Quiz', null);
       default:
         return (
           Icons.build_circle_outlined,
