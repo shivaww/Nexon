@@ -3179,4 +3179,20 @@ def build_registry(executor, security) -> HybridToolRegistry:
         },
     )
 
+    reg.register(
+        "list_trash",
+        lambda **kw: list_trash_rich(**kw),
+        "List items soft-deleted into the workspace trash (.nexon/trash)",
+        {},
+    )
+    reg.register(
+        "restore_trash",
+        lambda **kw: restore_trash_rich(**kw),
+        "Restore a trashed item by its trash name, optionally to a new dest",
+        {
+            "name": "str — trash entry name shown by list_trash",
+            "dest": "str (opt) — override restore destination",
+        },
+    )
+
     return reg

@@ -2613,6 +2613,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 • stat_path: <tool_request><method>stat_path</method><path>/file.ext</path></tool_request> (Checks existence, size, sha256, mtime)
 • chmod_path: <tool_request><method>chmod_path</method><path>/script.sh</path><mode>755</mode><recursive>false</recursive></tool_request>
 • diff_files: <tool_request><method>diff_files</method><path_a>/a.ext</path_a><path_b>/b.ext</path_b></tool_request>
+• list_trash: <tool_request><method>list_trash</method></tool_request> (see soft-deleted files)
+• restore_trash: <tool_request><method>restore_trash</method><name>TRASH_NAME</name><dest>/optional/path</dest></tool_request>
+• tool_help: <tool_request><method>tool_help</method></tool_request> — live reference of ALL hybrid tools with exact params. Call it whenever unsure about a tool's parameters.
 
 ── SHELL & BACKGROUND ──
 • run_command: For build tools, git, installs — NOT for file reading/editing.
@@ -2678,6 +2681,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
 
 ━━ RESPONSE PROTOCOL & SAFETY ━━
 • Automatic safety snapshots are created before file mutations. If an edit fails catastrophically, use `run_command` with `git restore <file>`.
+• TRUSTED WORKSPACE: file mutations inside the workspace execute WITHOUT permission prompts — the bridge jail, trash and audit log protect you. Anything targeting paths outside the workspace asks the user first. Deleted files are recoverable via list_trash / restore_trash.
 • Keep final responses concise. Summarize edited files, key logic changes, and diagnostic results.
 • NEVER dump full file contents into chat if you already edited them via tools.
 • For every project, maintain a README.md at the project root.
@@ -3227,6 +3231,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             try {
               final parsed = jsonDecode(jsonString) as Map<String, dynamic>;
               toolMethod = parsed['method']?.toString() ?? 'tool';
+              toolMethod = _normalizeToolMethod(toolMethod);
+              parsed['method'] = toolMethod;
               toolParams = parsed['params'] as Map<String, dynamic>? ?? {};
               final callError = _validateToolCall(
                 jsonString,
@@ -3261,6 +3267,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             }
 
             if (toolMethod == 'patch_file' ||
+                toolMethod == 'patch_file_rich' ||
                 toolMethod == 'write_file_rich' ||
                 toolMethod == 'delete_path') {
               try {
@@ -3365,8 +3372,11 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                   const fileReadMethods = {
                     'read_file_rich',
                     'file_outline',
+                    'file_outline_rich',
                     'search_rich',
                     'tree',
+                    'tree_rich',
+                    'multi_read_rich',
                   };
                   if (fileReadMethods.contains(toolMethod)) {
                     mcpResult = mcpResult.substring(0, 20000);
@@ -3575,8 +3585,11 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           const keepRichToolMethods = {
             'read_file_rich',
             'file_outline',
+            'file_outline_rich',
             'search_rich',
             'tree',
+            'tree_rich',
+            'multi_read_rich',
             'workspace_list',
             'workspace_search',
             'workspace_read_page',
@@ -3868,6 +3881,53 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     return true; // 'yes'
   }
 
+  /// Maps legacy/short tool names emitted by models to the canonical
+  /// hybrid-tools registry names on the Python bridge.
+  String _normalizeToolMethod(String method) {
+    const aliases = {
+      'file_read': 'read_file_rich',
+      'read_file': 'read_file_rich',
+      'multi_read': 'multi_read_rich',
+      'file_write': 'write_file_rich',
+      'write_file': 'write_file_rich',
+      'edit_file': 'patch_file_rich',
+      'patch_file': 'patch_file_rich',
+      'replace_lines': 'replace_lines_rich',
+      'insert_lines': 'insert_lines_rich',
+      'delete_lines': 'delete_lines_rich',
+      'file_outline': 'file_outline_rich',
+      'outline': 'file_outline_rich',
+      'file_search': 'search_rich',
+      'code_search': 'search_rich',
+      'search': 'search_rich',
+      'tree': 'tree_rich',
+      'dir_list': 'tree_rich',
+      'diff_files': 'diff_files_rich',
+      'file_info': 'stat_path',
+      'file_delete': 'delete_path',
+      'dir_create': 'mkdir_path',
+    };
+    return aliases[method] ?? method;
+  }
+
+  /// True when every path-like param resolves inside the agentic workspace.
+  /// The Python bridge re-enforces the jail server-side; this only decides
+  /// whether the user is prompted (Codex/Claude-Code trusted workspace).
+  bool _allPathsTrusted(Map<String, dynamic> params) {
+    final ws = _agenticWorkspace.trim().replaceAll(RegExp(r'/+$'), '');
+    if (ws.isEmpty) return false;
+    const home = '/data/data/com.termux/files/home';
+    for (final key in ['path', 'src', 'dest', 'file', 'directory', 'dir']) {
+      var p = params[key]?.toString().trim() ?? '';
+      if (p.isEmpty) continue;
+      if (p == '~') p = home;
+      if (p.startsWith('~/')) p = '$home${p.substring(1)}';
+      p = p.replaceAll(RegExp(r'/+$'), '');
+      if (p != ws && !p.startsWith('$ws/')) return false;
+    }
+    return true;
+  }
+
   bool _requiresFileMutationPermission(
     String method,
     Map<String, dynamic> params,
@@ -3877,9 +3937,13 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       'write_file_rich',
       'edit_file',
       'patch_file',
+      'patch_file_rich',
       'replace_lines',
+      'replace_lines_rich',
       'insert_lines',
+      'insert_lines_rich',
       'delete_lines',
+      'delete_lines_rich',
       'append_file',
       'delete_path',
       'move_path',
@@ -3891,11 +3955,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       'file_delete',
       'dir_create',
     };
+    var isMutating = mutatingFileTools.contains(method);
     if (method == 'dart_format') {
       final output = params['output']?.toString().toLowerCase().trim();
-      return output == null || output.isEmpty || output == 'write';
+      isMutating = output == null || output.isEmpty || output == 'write';
     }
-    return mutatingFileTools.contains(method);
+    if (!isMutating) return false;
+    // Trusted workspace (Codex/Claude-Code style): mutations fully inside
+    // the agentic workspace run without prompts — the Python bridge
+    // re-enforces the jail, trash and audit log server-side.
+    return !_allPathsTrusted(params);
   }
 
   String _fileMutationTarget(String method, Map<String, dynamic> params) {
@@ -4009,12 +4078,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
   ) async {
     const previewable = {
       'patch_file',
+      'patch_file_rich',
       'edit_file',
       'write_file',
       'write_file_rich',
       'replace_lines',
+      'replace_lines_rich',
       'insert_lines',
+      'insert_lines_rich',
       'delete_lines',
+      'delete_lines_rich',
       'append_file',
     };
     if (!previewable.contains(method)) return null;
@@ -4073,12 +4146,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
   ) async {
     const mutating = {
       'patch_file',
+      'patch_file_rich',
       'edit_file',
       'write_file',
       'write_file_rich',
       'replace_lines',
+      'replace_lines_rich',
       'insert_lines',
+      'insert_lines_rich',
       'delete_lines',
+      'delete_lines_rich',
       'append_file',
     };
     if (!mutating.contains(method)) return null;
@@ -4666,12 +4743,16 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       case 'multi_read':
         return '📖 Batch reading files…';
       case 'patch_file':
+      case 'patch_file_rich':
         return '✏️  Patching ${shortPath(p('path'))}';
       case 'replace_lines':
+      case 'replace_lines_rich':
         return '✏️  Replacing lines ${p('start_line')}–${p('end_line')} in ${shortPath(p('path'))}';
       case 'insert_lines':
+      case 'insert_lines_rich':
         return '✏️  Inserting after line ${p('after_line')} in ${shortPath(p('path'))}';
       case 'delete_lines':
+      case 'delete_lines_rich':
         return '🗑️  Deleting lines ${p('start_line')}–${p('end_line')} in ${shortPath(p('path'))}';
       case 'write_file_rich':
       case 'file_write':
@@ -4681,11 +4762,20 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       case 'code_search':
         return '🔎 Searching: "${p('query')}${p('pattern')}" in ${shortPath(p('path'))}';
       case 'file_outline':
+      case 'file_outline_rich':
         return '🗂️  Outline: ${shortPath(p('path'))}';
       case 'tree':
+      case 'tree_rich':
         return '📂 Tree: ${shortPath(p('path'))}';
       case 'diff_files':
+      case 'diff_files_rich':
         return '🔍 Diffing files…';
+      case 'list_trash':
+        return '🗑️  Listing trash…';
+      case 'restore_trash':
+        return '♻️  Restoring ${p('name')} from trash';
+      case 'tool_help':
+        return '📚 Loading tool reference…';
       case 'file_edit':
         final path2 = shortPath(p('path'));
         final start2 = p('start_line');
@@ -8224,6 +8314,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           null,
         );
       case 'patch_file':
+      case 'patch_file_rich':
         return (
           Icons.edit_outlined,
           const Color(0xFF7C3AED),
@@ -8231,6 +8322,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           'search-replace',
         );
       case 'replace_lines':
+      case 'replace_lines_rich':
         return (
           Icons.edit_outlined,
           const Color(0xFF7C3AED),
@@ -8238,6 +8330,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           shortPath(p('path')),
         );
       case 'insert_lines':
+      case 'insert_lines_rich':
         return (
           Icons.playlist_add,
           const Color(0xFF059669),
@@ -8245,6 +8338,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           shortPath(p('path')),
         );
       case 'delete_lines':
+      case 'delete_lines_rich':
         return (
           Icons.delete_sweep_outlined,
           const Color(0xFFDC2626),
@@ -8272,6 +8366,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
               : null,
         );
       case 'file_outline':
+      case 'file_outline_rich':
         return (
           Icons.account_tree_outlined,
           const Color(0xFF0369A1),
@@ -8279,6 +8374,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           null,
         );
       case 'tree':
+      case 'tree_rich':
         return (
           Icons.folder_open_outlined,
           const Color(0xFFD97706),
@@ -8286,6 +8382,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           null,
         );
       case 'diff_files':
+      case 'diff_files_rich':
         return (
           Icons.difference_outlined,
           const Color(0xFF475569),
@@ -8347,6 +8444,27 @@ class _McpToolBlockState extends State<McpToolBlock> {
           const Color(0xFF475569),
           'Chmod ${p('mode')}',
           shortPath(p('path')),
+        );
+      case 'list_trash':
+        return (
+          Icons.delete_outline,
+          const Color(0xFF475569),
+          'List trash',
+          null,
+        );
+      case 'restore_trash':
+        return (
+          Icons.restore_from_trash_outlined,
+          const Color(0xFF059669),
+          'Restore ${p('name')}',
+          shortPath(p('dest')),
+        );
+      case 'tool_help':
+        return (
+          Icons.help_outline,
+          const Color(0xFF475569),
+          'Tool reference',
+          null,
         );
       case 'file_edit':
         {
