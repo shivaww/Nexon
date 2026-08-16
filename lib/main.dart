@@ -707,6 +707,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   static final _secureStorage = const FlutterSecureStorage();
   static const _settingsKey = 'provider_settings_v1';
   static const _selectedProviderKey = 'selected_provider_id';
+  static const _customProvidersKey = 'custom_providers_v1';
 
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
@@ -715,6 +716,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   SharedPreferences? _prefs;
   Map<String, ProviderSettings> _settings = {};
   final Map<String, List<String>> _modelCache = {};
+  List<ProviderDefinition> _customProviders = [];
   var _selectedProviderId = providerCatalog.first.id;
   final Set<String> _sendingSessionIds = {};
   var _isFetchingModels = false;
@@ -1543,8 +1545,20 @@ class _ChatHomePageState extends State<ChatHomePage> {
     _saveSessions();
   }
 
-  ProviderDefinition get _provider =>
-      providerCatalog.firstWhere((item) => item.id == _selectedProviderId);
+  ProviderDefinition get _provider => _resolveProvider(_selectedProviderId);
+
+  List<ProviderDefinition> get _allProviders => [
+        ...providerCatalog,
+        ..._customProviders,
+      ];
+
+  ProviderDefinition _resolveProvider(String id) => _allProviders.firstWhere(
+        (item) => item.id == id,
+        orElse: () => providerCatalog.first,
+      );
+
+  static bool _isCustomProviderId(String id) =>
+      id == 'custom' || id.startsWith('custom_');
 
   ProviderSettings get _activeSettings =>
       _settings[_selectedProviderId] ?? ProviderSettings.defaults(_provider);
@@ -1730,6 +1744,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_settingsKey);
     final selected = prefs.getString(_selectedProviderKey);
+    final customRaw = prefs.getString(_customProvidersKey);
     final searchRaw = prefs.getString('search_settings_v1');
     final nextSettings = <String, ProviderSettings>{};
 
@@ -1771,6 +1786,81 @@ class _ChatHomePageState extends State<ChatHomePage> {
       nextSettings[provider.id] = normalized.copyWith(apiKey: key ?? '');
     }
 
+    final loadedCustom = <ProviderDefinition>[];
+    if (customRaw != null && customRaw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(customRaw);
+        if (decoded is List) {
+          for (final entry in decoded) {
+            if (entry is! Map) continue;
+            final id = entry['id']?.toString() ?? '';
+            final name = entry['name']?.toString() ?? '';
+            final baseUrl = entry['baseUrl']?.toString() ?? '';
+            if (!id.startsWith('custom_') ||
+                name.isEmpty ||
+                baseUrl.isEmpty) {
+              continue;
+            }
+            loadedCustom.add(
+              ProviderDefinition(
+                id: id,
+                name: name,
+                shortName: name.trim().length >= 2
+                    ? name.trim().substring(0, 2).toUpperCase()
+                    : 'CU',
+                keyLabel: 'CUSTOM_API_KEY',
+                baseUrl: baseUrl,
+                models: const ['custom-model'],
+              ),
+            );
+          }
+        }
+      } catch (_) {
+        loadedCustom.clear();
+      }
+    }
+
+    var effectiveSelected = selected;
+    final legacy = nextSettings['custom'];
+    if (legacy != null &&
+        !loadedCustom.any((p) => p.id == 'custom_legacy') &&
+        (legacy.apiKey.trim().isNotEmpty ||
+            (legacy.baseUrl.trim().isNotEmpty &&
+                legacy.baseUrl.trim() != 'https://example.com/v1'))) {
+      const legacyId = 'custom_legacy';
+      loadedCustom.insert(
+        0,
+        ProviderDefinition(
+          id: legacyId,
+          name: 'My Custom Provider',
+          shortName: 'MC',
+          keyLabel: 'CUSTOM_API_KEY',
+          baseUrl: legacy.baseUrl.trim().isEmpty
+              ? 'https://example.com/v1'
+              : legacy.baseUrl.trim(),
+          models: const ['custom-model'],
+        ),
+      );
+      nextSettings[legacyId] = legacy;
+      if (effectiveSelected == 'custom') effectiveSelected = legacyId;
+    }
+
+    for (final provider in loadedCustom) {
+      String? key;
+      try {
+        key = await _secureStorage.read(key: _keyStorageName(provider.id));
+      } catch (e) {
+        key = prefs.getString('fallback_api_key_${provider.id}');
+      }
+      final current =
+          nextSettings[provider.id] ?? ProviderSettings.defaults(provider);
+      final normalized = current.maxTokens < 1
+          ? current.copyWith(maxTokens: provider.defaultMaxTokens)
+          : current;
+      nextSettings[provider.id] =
+          normalized.copyWith(apiKey: key ?? normalized.apiKey);
+    }
+
     final agenticRaw = prefs.getBool('agentic_enabled_v1');
     final artifactsRaw = prefs.getBool('artifacts_enabled_v1');
     final svgVisualsRaw = prefs.getBool('svg_visuals_enabled_v1');
@@ -1794,9 +1884,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _deepResearchEnabled = deepResearchRaw ?? false;
       _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
       _writerContextBudget = writerContextBudgetRaw ?? 32000;
-      if (selected != null &&
-          providerCatalog.any((provider) => provider.id == selected)) {
-        _selectedProviderId = selected;
+      _customProviders = loadedCustom;
+      if (effectiveSelected != null &&
+          (providerCatalog.any((provider) => provider.id == effectiveSelected) ||
+              loadedCustom.any(
+                (provider) => provider.id == effectiveSelected,
+              ))) {
+        _selectedProviderId = effectiveSelected;
       }
     });
 
@@ -1830,6 +1924,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
     await prefs.setString(_settingsKey, jsonEncode(metadata));
     await prefs.setString(_selectedProviderKey, _selectedProviderId);
+    await prefs.setString(
+      _customProvidersKey,
+      jsonEncode([
+        for (final provider in _customProviders)
+          {
+            'id': provider.id,
+            'name': provider.name,
+            'baseUrl': provider.baseUrl,
+          },
+      ]),
+    );
     await prefs.setString(
       'search_settings_v1',
       jsonEncode(_searchSettings.toJson()),
@@ -1938,12 +2043,10 @@ jobs:
   }
 
   Future<void> _openProviderSheet([String? providerId]) async {
-    final provider = providerCatalog.firstWhere(
-      (item) => item.id == (providerId ?? _selectedProviderId),
-    );
+    final provider = _resolveProvider(providerId ?? _selectedProviderId);
     final current =
         _settings[provider.id] ?? ProviderSettings.defaults(provider);
-    final result = await showModalBottomSheet<ProviderSettings>(
+    final result = await showModalBottomSheet<ProviderSheetResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -1959,9 +2062,42 @@ jobs:
     );
 
     if (result == null) return;
+    var targetId = provider.id;
+    if (_isCustomProviderId(provider.id)) {
+      final name = (result.customName ?? '').trim().isEmpty
+          ? 'Custom Provider'
+          : (result.customName ?? '').trim();
+      final baseUrl = result.settings.baseUrl.trim().isEmpty
+          ? 'https://example.com/v1'
+          : result.settings.baseUrl.trim();
+      final shortName = name.length >= 2
+          ? name.substring(0, 2).toUpperCase()
+          : 'CU';
+      final definition = ProviderDefinition(
+        id: provider.id == 'custom'
+            ? 'custom_${DateTime.now().millisecondsSinceEpoch}'
+            : provider.id,
+        name: name,
+        shortName: shortName,
+        keyLabel: 'CUSTOM_API_KEY',
+        baseUrl: baseUrl,
+        models: const ['custom-model'],
+      );
+      targetId = definition.id;
+      setState(() {
+        if (provider.id == 'custom') {
+          _customProviders = [..._customProviders, definition];
+        } else {
+          _customProviders = [
+            for (final existing in _customProviders)
+              existing.id == provider.id ? definition : existing,
+          ];
+        }
+      });
+    }
     setState(() {
-      _settings = {..._settings, provider.id: result};
-      _selectedProviderId = provider.id;
+      _settings = {..._settings, targetId: result.settings};
+      _selectedProviderId = targetId;
 
       final targetSessionId = _activeSessionId;
       if (targetSessionId != null) {
@@ -1970,9 +2106,9 @@ jobs:
         );
         if (sessionIndex != -1) {
           _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-            providerId: provider.id,
-            model: result.model,
-            maxTokens: result.maxTokens,
+            providerId: targetId,
+            model: result.settings.model,
+            maxTokens: result.settings.maxTokens,
           );
         }
       }
@@ -2108,9 +2244,7 @@ jobs:
     if (sessionIndex == -1) return;
 
     final session = _sessions[sessionIndex];
-    final provider = providerCatalog.firstWhere(
-      (p) => p.id == session.providerId,
-    );
+    final provider = _resolveProvider(session.providerId);
     final baseSettings =
         _settings[session.providerId] ?? ProviderSettings.defaults(provider);
     final settings = baseSettings.copyWith(
@@ -6779,6 +6913,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           sessionId: _activeSessionId ?? '',
           onRestoreCompleted: _loadSessions,
           provider: provider,
+          customProviders: _customProviders,
           settings: settings,
           cachedModels: models,
           searchSettings: _searchSettings,
@@ -6877,9 +7012,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             _saveSessions();
           },
           onProviderChanged: (newProviderId) async {
-            final nextProvider = providerCatalog.firstWhere(
-              (p) => p.id == newProviderId,
-            );
+            final nextProvider = _resolveProvider(newProviderId);
             final nextSettings =
                 _settings[newProviderId] ??
                 ProviderSettings.defaults(nextProvider);
@@ -12321,6 +12454,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.sessions,
     required this.onRestoreCompleted,
     required this.provider,
+    required this.customProviders,
     required this.settings,
     required this.cachedModels,
     required this.searchSettings,
@@ -12354,6 +12488,7 @@ class MediaAndModelSheet extends StatefulWidget {
   });
 
   final ProviderDefinition provider;
+  final List<ProviderDefinition> customProviders;
   final ProviderSettings settings;
   final List<String> cachedModels;
   final SearchSettings searchSettings;
@@ -12392,6 +12527,11 @@ class MediaAndModelSheet extends StatefulWidget {
 }
 
 class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
+  List<ProviderDefinition> get _allProviders => [
+        ...providerCatalog,
+        ...widget.customProviders,
+      ];
+
   late bool _studyModeEnabled;
 
   Future<void> _saveStudyMode(bool val) async {
@@ -13309,8 +13449,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final currentProvider = providerCatalog.firstWhere(
+    final currentProvider = _allProviders.firstWhere(
       (p) => p.id == _selectedProviderId,
+      orElse: () => providerCatalog.first,
     );
     final models = widget.cachedModels.isNotEmpty
         ? widget.cachedModels
@@ -13452,7 +13593,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           size: 20,
                         ),
                       ),
-                      items: providerCatalog.map((p) {
+                      items: _allProviders.map((p) {
                         return DropdownMenuItem<String>(
                           value: p.id,
                           child: Text(
@@ -13466,8 +13607,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {
-                          final nextProvider = providerCatalog.firstWhere(
+                          final nextProvider = _allProviders.firstWhere(
                             (p) => p.id == val,
+                            orElse: () => providerCatalog.first,
                           );
                           setState(() {
                             _selectedProviderId = val as String;
@@ -15685,6 +15827,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   }
 }
 
+class ProviderSheetResult {
+  const ProviderSheetResult({required this.settings, this.customName});
+
+  final ProviderSettings settings;
+  final String? customName;
+}
+
 class ProviderSettingsSheet extends StatefulWidget {
   const ProviderSettingsSheet({
     required this.provider,
@@ -15704,6 +15853,7 @@ class ProviderSettingsSheet extends StatefulWidget {
 }
 
 class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
+  late final TextEditingController _nameController;
   late final TextEditingController _keyController;
   late final TextEditingController _baseUrlController;
   late final TextEditingController _modelController;
@@ -15715,6 +15865,11 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
   @override
   void initState() {
     super.initState();
+    _nameController = TextEditingController(
+      text: widget.provider.id.startsWith('custom_')
+          ? widget.provider.name
+          : '',
+    );
     _keyController = TextEditingController(text: widget.settings.apiKey);
     _baseUrlController = TextEditingController(text: widget.settings.baseUrl);
     _modelController = TextEditingController(text: widget.settings.model);
@@ -15731,6 +15886,7 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
 
   @override
   void dispose() {
+    _nameController.dispose();
     _keyController.dispose();
     _baseUrlController.dispose();
     _modelController.dispose();
@@ -15762,6 +15918,18 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (widget.provider.id == 'custom' ||
+              widget.provider.id.startsWith('custom_')) ...[
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'Provider name',
+                prefixIcon: Icon(Icons.badge_outlined),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           TextField(
             controller: _keyController,
             obscureText: true,
@@ -15913,16 +16081,24 @@ class _ProviderSettingsSheetState extends State<ProviderSettingsSheet> {
                     final parsedMaxTokens =
                         int.tryParse(_maxTokensController.text.trim()) ??
                         widget.provider.defaultMaxTokens;
+                    final isCustom = widget.provider.id == 'custom' ||
+                        widget.provider.id.startsWith('custom_');
                     Navigator.of(context).pop(
-                      ProviderSettings(
-                        apiKey: _keyController.text.trim(),
-                        baseUrl: _baseUrlController.text.trim(),
-                        model: _modelController.text.trim(),
-                        maxTokens: parsedMaxTokens.clamp(1, 131072).toInt(),
-                        fallbackApiKeys: _fallbackControllers
-                            .map((c) => c.text.trim())
-                            .where((e) => e.isNotEmpty)
-                            .toList(),
+                      ProviderSheetResult(
+                        customName: isCustom
+                            ? _nameController.text.trim()
+                            : null,
+                        settings: ProviderSettings(
+                          apiKey: _keyController.text.trim(),
+                          baseUrl: _baseUrlController.text.trim(),
+                          model: _modelController.text.trim(),
+                          maxTokens:
+                              parsedMaxTokens.clamp(1, 131072).toInt(),
+                          fallbackApiKeys: _fallbackControllers
+                              .map((c) => c.text.trim())
+                              .where((e) => e.isNotEmpty)
+                              .toList(),
+                        ),
                       ),
                     );
                   },
