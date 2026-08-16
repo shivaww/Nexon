@@ -3103,7 +3103,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         // read_url and memory run in-app; other JSON tools are translated to
         // the Python bridge's {"method","params"} shape and queued for the
         // existing HTTP dispatch below.
-        if (_agenticEnabled) {
+        if (_agenticEnabled || _studyModeEnabled) {
           final nativeCalls = _findNativeToolCalls(fullText);
           for (final nativeCall in nativeCalls) {
             final toolName = (nativeCall['t'] ?? '').toString();
@@ -3179,6 +3179,90 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
                 final result = await _handleMemoryTool(action, content);
                 if (mounted) setState(() => _toolStatus = '');
                 toolOutputs.add("Memory Tool [$action] Result:\n$result");
+                continue;
+              }
+              if (toolName == 'quiz' || toolName == 'quiz_request') {
+                if (!_studyModeEnabled) {
+                  toolOutputs.add(
+                    'Tool Result [$toolName]:\n\n{"error":"the quiz tool is only available in study mode"}',
+                  );
+                  continue;
+                }
+                executedTools = true;
+                // Hide the quiz's fenced JSON block from the visible bubble and
+                // from future API history so the answer key ("correct" indices)
+                // is not re-shown to the model on the next turn.
+                final quizBlockRegex = RegExp(
+                  r'```(?:json)?\s*\n[\s\S]*?"t"\s*:\s*"quiz(?:_request)?"[\s\S]*?```',
+                  caseSensitive: false,
+                );
+                final rawQuizBlock =
+                    quizBlockRegex.firstMatch(fullText)?.group(0) ?? '';
+                if (rawQuizBlock.isNotEmpty && mounted) {
+                  setState(() {
+                    final idx = _sessions.indexWhere(
+                      (s) => s.id == targetSessionId,
+                    );
+                    if (idx != -1) {
+                      final msgs = List<ChatMessage>.from(
+                        _sessions[idx].messages,
+                      );
+                      if (assistantMessageIndex < msgs.length) {
+                        final cleaned = msgs[assistantMessageIndex]
+                            .text
+                            .replaceFirst(rawQuizBlock, '')
+                            .trim();
+                        msgs[assistantMessageIndex] =
+                            msgs[assistantMessageIndex].copyWith(
+                              text: cleaned,
+                            );
+                        _sessions[idx] = _sessions[idx].copyWith(
+                          messages: msgs,
+                        );
+                      }
+                    }
+                  });
+                }
+                final questions = _QuizSheet.parseQuestions(
+                  jsonEncode(toolArgs),
+                );
+                if (questions.isEmpty) {
+                  toolOutputs.add(
+                    'Quiz Tool Result:\n\n{"error":"malformed quiz tool call, no valid questions"}',
+                  );
+                } else {
+                  final answers =
+                      await showModalBottomSheet<List<Map<String, dynamic>>>(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        isDismissible: false,
+                        builder: (_) => _QuizSheet(questions: questions),
+                      );
+                  if (answers == null) {
+                    toolOutputs.add(
+                      'Quiz Tool Result:\n\nUser dismissed the quiz without answering. Ask whether to retry or skip, then continue teaching.',
+                    );
+                  } else {
+                    final sb = StringBuffer(
+                      'Quiz results (${answers.length} questions):\n',
+                    );
+                    for (var qi = 0; qi < answers.length; qi++) {
+                      final a = answers[qi];
+                      sb.writeln('Q${qi + 1}: ${a['q']}');
+                      sb.writeln('  User answer: ${a['picked']}');
+                      sb.writeln(
+                        a['correct'] == true
+                            ? '  Verdict: CORRECT'
+                            : '  Verdict: WRONG (correct answer: ${a['answer']})',
+                      );
+                    }
+                    sb.writeln(
+                      'Explain every WRONG verdict clearly, then repeat the understanding check before the next concept.',
+                    );
+                    toolOutputs.add(sb.toString());
+                  }
+                }
                 continue;
               }
               // Python-bridge passthrough (run_background, service_*, dart_*,
