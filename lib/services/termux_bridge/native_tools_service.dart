@@ -174,8 +174,8 @@ class NativeToolsService {
   Future<Map<String, dynamic>> _callOnce({
     required String workspace,
     required String tool,
-    Map<String, dynamic> args = const {},
     required Duration timeout,
+    Map<String, dynamic> args = const {},
     String? binaryPath,
   }) async {
     await ensureRunning(workspace: workspace, binaryPath: binaryPath);

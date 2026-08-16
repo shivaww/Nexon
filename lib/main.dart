@@ -602,30 +602,27 @@ class DeepResearchPrompts {
       """ROLE: Planner. No searching, no fetching. Output XML only.
 Decide: complexity (STANDARD/COMPLEX), stage_count (5-15) based on user query.
 Generate a phase-by-phase research plan.
-Output format:
-<research_plan>
-  <phase1>Stage Title - Detailed goal and instructions for this phase</phase1>
-  <phase2>Stage Title - Detailed goal and instructions for this phase</phase2>
-  ...
-</research_plan>
-No text outside the XML tags. Each phase tag MUST match the phase number, e.g. <phase1>...</phase1>, <phase2>...</phase2>. Do not include reasoning or preamble outside the XML.""";
+Output format — ONE fenced json block, nothing else:
+```json
+{"research_plan": [
+  {"title": "Stage Title", "prompt": "Detailed goal and instructions for this phase"},
+  {"title": "Stage Title", "prompt": "Detailed goal and instructions for this phase"}
+]}
+```
+No text outside the code fence. Do not include reasoning or preamble outside the fence.""";
+
 
   static const String researchSystemPrompt =
       """ROLE: Research agent. You are running one phase of a multi-step research plan.
 Your task is to gather enough relevant information to fully address the phase's prompt.
-You have the following tools available:
-1. Web Search: Output <search_request>your query</search_request> to get a list of search results.
-   To configure search parameters, you can add optional XML attributes:
-   - topic: "general" (default) or "news" (specifically for news articles, applying recency-weighted ranking).
-   - time_range: "day" / "d", "week" / "w", "month" / "m", or "year" / "y" to limit search results to a specific timeframe.
-   - start_date / end_date: specific date bounds (e.g. YYYY-MM-DD).
-   - search_depth: "basic" (default, fast/credit-friendly) or "advanced" (thorough/expensive).
+You have the following tools available, each emitted as ONE fenced ```json block:
+1. Web Search: {"t":"web_search","a":{"q":"your query"}} — returns a list of search results.
+   Optional args inside "a": "topic" ("general" default or "news"), "time_range" ("day"/"week"/"month"/"year"), "start_date"/"end_date" (YYYY-MM-DD), "search_depth" ("basic" default or "advanced").
    Examples:
-   - Recent query: <search_request time_range="month" topic="news">latest SWE-bench scores 2026</search_request>
-   - Date-bounded query: <search_request start_date="2026-07-01" end_date="2026-07-15">termux release issues</search_request>
-   - Foundational query: <search_request>how does symlink work in android termux</search_request>
-2. Fetch Page: Output <read_url>URL</read_url> to fetch HTML page content in depth. PDFs are excluded to protect mobile memory and writer context.
-   Example: <read_url>https://example.com/git-guide</read_url>
+   - Recent query: {"t":"web_search","a":{"q":"latest SWE-bench scores 2026","time_range":"month","topic":"news"}}
+   - Date-bounded query: {"t":"web_search","a":{"q":"termux release issues","start_date":"2026-07-01","end_date":"2026-07-15"}}
+   - Foundational query: {"t":"web_search","a":{"q":"how does symlink work in android termux"}}
+2. Fetch Page: {"t":"read_url","a":{"url":"https://example.com/git-guide"}} — fetches HTML page content in depth. PDFs are excluded to protect mobile memory and writer context.
 
 TOOL LIMITS PER PHASE:
 1. You may call web_search up to 20 times and read_url up to 5 times within a single research phase. These are hard limits enforced by the system — once reached, further calls will be rejected with a limit-reached message.
@@ -635,17 +632,17 @@ TOOL LIMITS PER PHASE:
 3. PDF Exclusions: PDFs are not supported by read_url and will be automatically skipped — prefer HTML sources when a choice exists.
 
 CRITICAL DIRECTIVES:
-1. You MUST invoke web_search and read_url tools using the dedicated <search_request> and <read_url> tags.
-2. Do NOT invent alternative tool-call syntaxes. Use ONLY the exact XML tag formats shown above.
+1. You MUST invoke tools ONLY via fenced ```json blocks shaped {"t":"web_search","a":{...}} / {"t":"read_url","a":{...}} / {"t":"step_complete"}.
+2. Do NOT invent alternative tool-call syntaxes. No XML tags, no bare braces outside a fence.
 3. You must run searches and fetches iteratively.
 4. Selection of Search parameters:
-   - For recent/current-events-flavored queries (product releases, benchmark results, pricing, "latest", "current", "2026"), default to time_range="week" or time_range="day" or topic="news". Avoid time_range="month" for fast-changing topics.
+   - For recent/current-events-flavored queries (product releases, benchmark results, pricing, "latest", "current", "2026"), default to "time_range":"week" or "time_range":"day" or "topic":"news". Avoid "time_range":"month" for fast-changing topics.
    - For general/foundational/definitional queries (explaining a concept, historical background), omit time_range entirely to avoid artificially excluding older-but-still-correct foundational sources.
    - Do NOT rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.
-5. Once you have collected enough info for this phase, output <step_complete/> to finish the phase.
-6. You can output multiple `<search_request>` tags (or multiple `<read_url>` tags) in a single response to execute them in parallel. Do not mix search and read url tags in the same message. Wait for the user response after each action.
+5. Once you have collected enough info for this phase, emit {"t":"step_complete"} in its own ```json block to finish the phase.
+6. You can batch multiple web_search calls in one response via {"calls":[{...},{...}]}. Do not mix web_search and read_url in the same message. Wait for the results after each action.
 
-7. RECENCY & ACCURACY: For time-sensitive queries (news, versions, releases), ALWAYS use time_range="week" or time_range="day". Do NOT rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.""";
+7. RECENCY & ACCURACY: For time-sensitive queries (news, versions, releases), ALWAYS use "time_range":"week" or "time_range":"day". Do not rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.""";
 
   static const String summarizerSystemPrompt = """ROLE: Summarization agent.
 Extract information from the provided source. Output ONLY a valid JSON object matching the schema below.
@@ -2407,7 +2404,7 @@ jobs:
 
         if (_deepResearchEnabled &&
             !currentSession.messages.any(
-              (m) => m.text.contains('<research_state>'),
+              (m) => m.text.contains('"research_state"'),
             )) {
           systemPromptText = DeepResearchPrompts.plannerSystemPrompt;
         } else {
@@ -2924,62 +2921,62 @@ NEVER read an entire large file blindly:
           _scrollToBottom();
         }
 
-        if (_deepResearchEnabled && fullText.contains('<research_plan>')) {
-          final planStart = fullText.indexOf('<research_plan>');
-          var planEnd = fullText.indexOf('</research_plan>', planStart);
-          if (planEnd == -1) {
-            planEnd = fullText.length;
-          }
-          final planContent = fullText
-              .substring(planStart + 15, planEnd)
-              .trim();
-          final phaseRegex = RegExp(
-            r'<phase\s*(\d+)\s*>(.*?)</phase\s*\d+\s*>',
-            caseSensitive: false,
-            dotAll: true,
-          );
-          final matches = phaseRegex.allMatches(planContent);
-          if (matches.isNotEmpty) {
+        if (_deepResearchEnabled) {
+          final planFence = _findFenceWithKeys(fullText, ['research_plan']);
+          if (planFence != null) {
+            final rawPlan =
+                (planFence['json'] as Map<String, dynamic>)['research_plan'];
+            final phaseList = rawPlan is List
+                ? rawPlan
+                : (rawPlan is Map<String, dynamic> &&
+                          rawPlan['phases'] is List
+                      ? rawPlan['phases'] as List
+                      : const <dynamic>[]);
             final List<Map<String, dynamic>> stepsList = [];
-            for (final match in matches) {
-              final phaseNum = int.tryParse(match.group(1) ?? '') ?? 0;
-              final textContent = match.group(2)?.trim() ?? '';
-
-              String title = 'Phase $phaseNum';
-              String prompt = textContent;
-              final separatorIndex = textContent.indexOf(RegExp(r'[:\-]'));
-              if (separatorIndex != -1 && separatorIndex < 35) {
-                title = textContent.substring(0, separatorIndex).trim();
-                prompt = textContent.substring(separatorIndex + 1).trim();
+            int phaseNum = 1;
+            for (final entry in phaseList) {
+              if (entry is! Map) continue;
+              final textContent = (entry['prompt'] ?? '').toString().trim();
+              var title = (entry['title'] ?? '').toString().trim();
+              var prompt = textContent;
+              if (title.isEmpty) {
+                final separatorIndex = textContent.indexOf(RegExp(r'[:\-]'));
+                if (separatorIndex != -1 && separatorIndex < 35) {
+                  title = textContent.substring(0, separatorIndex).trim();
+                  prompt = textContent.substring(separatorIndex + 1).trim();
+                } else {
+                  title = 'Phase $phaseNum';
+                }
               }
               stepsList.add({
                 "title": title,
-                "prompt": prompt,
+                "prompt": prompt.isNotEmpty ? prompt : title,
                 "status": "pending",
                 "content": "",
               });
+              phaseNum++;
             }
 
-            final stateMap = {"status": "pending", "steps": stepsList};
+            if (stepsList.isNotEmpty) {
+              final stateMap = {"status": "pending", "steps": stepsList};
 
-            setState(() {
-              final msgs = List<ChatMessage>.from(
-                _sessions[sessionIndex].messages,
-              );
-              msgs[assistantMessageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text:
-                    fullText +
-                    '\n\n<research_state>${jsonEncode(stateMap)}</research_state>',
-                reasoning: reasoningText,
-              );
-              _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-                messages: msgs,
-              );
-              _sendingSessionIds.remove(targetSessionId);
-            });
-            await _saveSessions();
-            return;
+              setState(() {
+                final msgs = List<ChatMessage>.from(
+                  _sessions[sessionIndex].messages,
+                );
+                msgs[assistantMessageIndex] = ChatMessage(
+                  role: MessageRole.assistant,
+                  text: fullText + '\n\n' + _researchStateFence(stateMap),
+                  reasoning: reasoningText,
+                );
+                _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+                  messages: msgs,
+                );
+                _sendingSessionIds.remove(targetSessionId);
+              });
+              await _saveSessions();
+              return;
+            }
           }
         }
 
@@ -4696,19 +4693,14 @@ NEVER read an entire large file blindly:
     String oldText,
     Map<String, dynamic> stateMap,
   ) {
-    final newStateStr =
-        '<research_state>${jsonEncode(stateMap)}</research_state>';
-    final startIdx = oldText.indexOf('<research_state>');
-    if (startIdx == -1) {
+    final newStateStr = _researchStateFence(stateMap);
+    final span = _findFenceWithKeys(oldText, ['research_state']);
+    if (span == null) {
       return oldText.isEmpty ? newStateStr : '$oldText\n\n$newStateStr';
     }
-    final endIdx = oldText.indexOf('</research_state>', startIdx);
-    if (endIdx == -1) {
-      return oldText.substring(0, startIdx) + newStateStr;
-    }
-    return oldText.substring(0, startIdx) +
+    return oldText.substring(0, span['start'] as int) +
         newStateStr +
-        oldText.substring(endIdx + 17);
+        oldText.substring(span['end'] as int);
   }
 
   /// Returns a human-readable status label for a tool call, e.g.:
@@ -4867,17 +4859,13 @@ NEVER read an entire large file blindly:
     if (sessionIndex == -1) return;
 
     final message = activeSession.messages[messageIndex];
-    if (!message.text.contains('<research_state>')) return;
+    final stateFence = _findFenceWithKeys(message.text, ['research_state']);
+    if (stateFence == null) return;
 
-    final stateStr = message.text
-        .substring(
-          message.text.indexOf('<research_state>') + 16,
-          message.text.indexOf('</research_state>'),
-        )
-        .trim();
     try {
-      final stateMap =
-          editedStateMap ?? (jsonDecode(stateStr) as Map<String, dynamic>);
+      final stateMap = editedStateMap ??
+          (stateFence['json'] as Map<String, dynamic>)['research_state']
+              as Map<String, dynamic>;
       stateMap['status'] = 'running';
 
       setState(() {
@@ -4886,9 +4874,9 @@ NEVER read an entire large file blindly:
         msgs[messageIndex] = ChatMessage(
           role: MessageRole.assistant,
           text: message.text.replaceRange(
-            message.text.indexOf('<research_state>'),
-            message.text.indexOf('</research_state>') + 17,
-            '<research_state>${jsonEncode(stateMap)}</research_state>',
+            stateFence['start'] as int,
+            stateFence['end'] as int,
+            _researchStateFence(stateMap),
           ),
           reasoning: message.reasoning,
         );
@@ -4929,7 +4917,7 @@ NEVER read an entire large file blindly:
     });
   }
 
-  // Bound state persisted into <research_state>; all limits are UTF-8 bytes.
+  // Bound state persisted into the research_state JSON fence; all limits are UTF-8 bytes.
   String _truncateEventText(String value, int maxBytes) {
     final bytes = utf8.encode(value);
     if (bytes.length <= maxBytes) return value;
@@ -5097,21 +5085,30 @@ NEVER read an entire large file blindly:
         }
 
         final plannedSteps = <Map<String, dynamic>>[];
-        final stepMatches = RegExp(
-          r"<phase\s*(\d+)\s*>(.*?)</phase\s*\d+\s*>",
-          caseSensitive: false,
-          dotAll: true,
-        ).allMatches(planText);
+        final planFence = _findFenceWithKeys(planText, ['research_plan']);
+        final rawPlan = planFence == null
+            ? null
+            : (planFence['json'] as Map<String, dynamic>)['research_plan'];
+        final phaseList = rawPlan is List
+            ? rawPlan
+            : (rawPlan is Map<String, dynamic> && rawPlan['phases'] is List
+                  ? rawPlan['phases'] as List
+                  : const <dynamic>[]);
 
         int stepIdx = 1;
-        for (final match in stepMatches) {
-          // Keep full queryText; derive a short UI title from the planner's
-          // "Title - instructions" / "Title | …" / "… success:" conventions.
-          final queryText = match.group(2)?.trim() ?? '';
-          final derivedTitle = queryText
-              .split(RegExp(r' - | \| | success:', caseSensitive: false))
-              .first
+        for (final entry in phaseList) {
+          if (entry is! Map) continue;
+          // Keep full queryText; derive a short UI title when absent.
+          final queryText = (entry['prompt'] ?? entry['title'] ?? '')
+              .toString()
               .trim();
+          var derivedTitle = (entry['title'] ?? '').toString().trim();
+          if (derivedTitle.isEmpty) {
+            derivedTitle = queryText
+                .split(RegExp(r' - | \| | success:', caseSensitive: false))
+                .first
+                .trim();
+          }
           final title = derivedTitle.isNotEmpty
               ? derivedTitle
               : 'Phase $stepIdx';
@@ -5321,7 +5318,7 @@ NEVER read an entire large file blindly:
                 "4. NEVER state a fact from your training data. If you haven't found it via search/fetch, you don't know it.\n\n"
                 "Please formulate search queries or read specific URLs to gather evidence. "
                 "Cite specific metrics, comparisons, and sources in your final response. "
-                "When you are finished, write a concise summary of your findings and emit <step_complete/>.",
+                "When you are finished, write a concise summary of your findings and emit {\"t\":\"step_complete\"} in its own ```json block.",
           ),
         ];
 
@@ -5431,39 +5428,21 @@ NEVER read an entire large file blindly:
             // in the dispatch loop — no preprocessing/reinterpretation needed.
             final preprocessedText = responseText;
 
-            Map<String, String> parseSearchAttributes(String attrStr) {
-              final Map<String, String> attrs = {};
-              final matches = RegExp(r'(\w+)="([^"]*)"').allMatches(attrStr);
-              for (final m in matches) {
-                attrs[m.group(1)!.toLowerCase()] = m.group(2)!;
-              }
-              return attrs;
-            }
-
-            final searchMatches = RegExp(
-              r'<search_request\b([^>]*)>\s*([\s\S]*?)\s*</search_request>',
-              caseSensitive: false,
-              dotAll: true,
-            ).allMatches(preprocessedText).toList();
-
-            final readUrlMatches = RegExp(
-              r'<read_url>\s*([\s\S]*?)\s*</read_url>',
-              caseSensitive: false,
-              dotAll: true,
-            ).allMatches(preprocessedText).toList();
+            // JSON tool calls: the research agent uses the same fenced
+            // ```json protocol as the chat agent (web_search / read_url /
+            // step_complete). Parameters live inside "a" — no XML parsing.
+            final nativeCalls = _findNativeToolCalls(preprocessedText);
+            final searchCalls = nativeCalls
+                .where((c) => c['t'] == 'web_search' || c['t'] == 'search_web')
+                .toList();
+            final readUrlCalls = nativeCalls
+                .where((c) => c['t'] == 'read_url')
+                .toList();
+            final bool stepCompleteRequested = nativeCalls.any(
+              (c) => c['t'] == 'step_complete',
+            );
 
             bool isMalformed = unrecognizedErrors.isNotEmpty;
-            final hasRawSearchTag =
-                preprocessedText.contains('<search_request') ||
-                preprocessedText.contains('</search_request');
-            final hasRawReadTag =
-                preprocessedText.contains('<read_url') ||
-                preprocessedText.contains('</read_url');
-
-            if ((hasRawSearchTag && searchMatches.isEmpty) ||
-                (hasRawReadTag && readUrlMatches.isEmpty)) {
-              isMalformed = true;
-            }
 
             if (isMalformed) {
               consecutiveMalformedTags++;
@@ -5504,15 +5483,13 @@ NEVER read an entire large file blindly:
               consecutiveMalformedTags = 0;
             }
 
-            final completeMatch = RegExp(
-              r'<step_complete/?>',
-              caseSensitive: false,
-            ).firstMatch(responseText);
-
-            if (completeMatch != null) {
+            if (stepCompleteRequested) {
               final contentClean = responseText
                   .replaceAll(
-                    RegExp(r'<step_complete/?>', caseSensitive: false),
+                    RegExp(
+                      r'```json\s*\n\s*\{\s*"t"\s*:\s*"step_complete"\s*(,\s*"a"\s*:\s*\{\s*\})?\s*\}\s*\n```',
+                      caseSensitive: false,
+                    ),
                     '',
                   )
                   .trim();
@@ -5520,19 +5497,29 @@ NEVER read an entire large file blindly:
                   ? contentClean
                   : '$stepContent\n\n$contentClean';
               stepDone = true;
-            } else if (searchMatches.isNotEmpty) {
+            } else if (searchCalls.isNotEmpty) {
               final List<Future<String>> searchFutures = [];
               final List<String> eventIds = [];
               final List<Stopwatch> stopwatches = [];
               final List<String> queries = [];
               final List<Map<String, String>> searchAttrsList = [];
 
-              for (final match in searchMatches) {
-                final attrsStr = match.group(1) ?? '';
-                final query = match.group(2)?.trim() ?? '';
+              for (final call in searchCalls) {
+                final a = call['a'] is Map<String, dynamic>
+                    ? call['a'] as Map<String, dynamic>
+                    : <String, dynamic>{};
+                final query = (a['q'] ?? a['query'] ?? '').toString().trim();
                 queries.add(query);
-                final attrs = parseSearchAttributes(attrsStr);
-                searchAttrsList.add(attrs);
+                searchAttrsList.add({
+                  for (final key in const [
+                    'topic',
+                    'time_range',
+                    'start_date',
+                    'end_date',
+                    'search_depth',
+                  ])
+                    if (a[key] != null) key: a[key].toString(),
+                });
 
                 final eventWatch = Stopwatch()..start();
                 stopwatches.add(eventWatch);
@@ -5542,16 +5529,17 @@ NEVER read an entire large file blindly:
                   query: query,
                 );
                 eventIds.add(eventId);
+                final trailEntry = jsonEncode({'t': 'web_search', 'a': a});
                 stepContent = stepContent.isEmpty
-                    ? '<search_request>$query</search_request>'
-                    : '$stepContent\n\n<search_request>$query</search_request>';
+                    ? trailEntry
+                    : '$stepContent\n\n$trailEntry';
               }
 
               steps[i]['content'] = stepContent;
               _publishResearchState(sessionIndex, messageIndex, stateMap);
 
               bool searchCapHit = false;
-              for (var k = 0; k < searchMatches.length; k++) {
+              for (var k = 0; k < searchCalls.length; k++) {
                 final query = queries[k];
                 final attrs = searchAttrsList[k];
                 final normQuery = _normalizeQueryOrUrl(query);
@@ -5635,7 +5623,7 @@ NEVER read an entire large file blindly:
               final List<String> allUrls = [];
               final StringBuffer combinedResults = StringBuffer();
 
-              for (var k = 0; k < searchMatches.length; k++) {
+              for (var k = 0; k < searchCalls.length; k++) {
                 final query = queries[k];
                 final eventId = eventIds[k];
                 final eventWatch = stopwatches[k];
@@ -5708,7 +5696,7 @@ NEVER read an entire large file blindly:
                   text: combinedResults.toString().trim(),
                 ),
               );
-            } else if (readUrlMatches.isNotEmpty) {
+            } else if (readUrlCalls.isNotEmpty) {
               final availableRam = await _getSystemAvailableRamBytes();
               final bool lowMemory = availableRam < 300 * 1024 * 1024;
               final int activeFetchConcurrency = lowMemory
@@ -5729,8 +5717,12 @@ NEVER read an entire large file blindly:
                 return lower.contains('.pdf') || lower.contains('/pdf/');
               }
 
-              for (final match in readUrlMatches) {
-                final url = match.group(1)?.trim() ?? '';
+              for (final call in readUrlCalls) {
+                final url = ((call['a'] is Map<String, dynamic>)
+                        ? ((call['a'] as Map<String, dynamic>)['url'] ?? '')
+                            .toString()
+                        : '')
+                    .trim();
                 urls.add(url);
                 final eventWatch = Stopwatch()..start();
                 stopwatches.add(eventWatch);
@@ -5740,9 +5732,10 @@ NEVER read an entire large file blindly:
                   url: url,
                 );
                 eventIds.add(eventId);
+                final trailEntry = jsonEncode({'t': 'read_url', 'a': call['a']});
                 stepContent = stepContent.isEmpty
-                    ? '<read_url>$url</read_url>'
-                    : '$stepContent\n\n<read_url>$url</read_url>';
+                    ? trailEntry
+                    : '$stepContent\n\n$trailEntry';
 
                 var targetPreview = url.trim();
                 if (!targetPreview.startsWith('http')) {
@@ -11004,8 +10997,6 @@ class MessageBubble extends StatelessWidget {
     int currentIndex = 0;
 
     final tags = [
-      (tag: '<research_plan>', isXml: false),
-      (tag: '<research_state>', isXml: false),
       (tag: '<search_request>', isXml: false),
       (tag: '<read_url>', isXml: false),
       (tag: '<mcp_request>', isXml: false),
@@ -11024,6 +11015,10 @@ class MessageBubble extends StatelessWidget {
       // Native JSON tool calls: fenced ```json blocks shaped {"t":...} or
       // {"calls":[...]} render as tool blocks, just like the legacy tags.
       final toolFence = _findNativeToolFence(substring);
+      final researchFence = _findFenceWithKeys(
+        substring,
+        const ['research_plan', 'research_state'],
+      );
       int earliestIndex = -1;
       var matchedTag = tags.first;
 
@@ -11035,6 +11030,34 @@ class MessageBubble extends StatelessWidget {
             matchedTag = tagInfo;
           }
         }
+      }
+
+      if (researchFence != null &&
+          (toolFence == null ||
+              (researchFence['start'] as int) < toolFence.start) &&
+          (earliestIndex == -1 ||
+              (researchFence['start'] as int) < earliestIndex)) {
+        final textBefore =
+            substring.substring(0, researchFence['start'] as int).trim();
+        if (textBefore.isNotEmpty) {
+          widgets.addAll(_buildBlocks(context, textBefore));
+        }
+        final rj = researchFence['json'] as Map<String, dynamic>;
+        if (rj['research_state'] is Map<String, dynamic>) {
+          widgets.add(
+            ResearchPlanWidget(
+              stateMap: rj['research_state'] as Map<String, dynamic>,
+              workspaceDir: agenticWorkspace,
+              fileName: fileName,
+              isSending: isSending,
+              onStartResearch: onStartResearch,
+            ),
+          );
+        } else {
+          widgets.add(const SizedBox.shrink());
+        }
+        currentIndex += researchFence['end'] as int;
+        continue;
       }
 
       if (toolFence != null &&
@@ -20974,6 +20997,33 @@ void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
   params
     ..clear()
     ..addAll(resolved);
+}
+
+/// Fenced ```json marker carrying the research state map.
+String _researchStateFence(Map<String, dynamic> stateMap) =>
+    '```json\n{"research_state": ${jsonEncode(stateMap)}}\n```';
+
+/// Find the first fenced ```json block in [text] containing any of [keys].
+/// Returns {'start', 'end', 'json'} with offsets into [text], or null.
+/// Research plan/state markers use this; tool fences use _findNativeToolFence.
+Map<String, dynamic>? _findFenceWithKeys(String text, List<String> keys) {
+  int from = 0;
+  while (true) {
+    final open = text.indexOf('```', from);
+    if (open == -1) return null;
+    final nl = text.indexOf('\n', open);
+    if (nl == -1) return null;
+    final close = text.indexOf('```', nl + 1);
+    if (close == -1) return null;
+    final inner = text.substring(nl + 1, close).trim();
+    try {
+      final dynamic d = jsonDecode(inner);
+      if (d is Map<String, dynamic> && keys.any((k) => d[k] != null)) {
+        return {'start': open, 'end': close + 3, 'json': d};
+      }
+    } catch (_) {}
+    from = close + 3;
+  }
 }
 
 /// Returns the tool name when the text contains a fenced ```json tool
