@@ -2808,9 +2808,10 @@ NEVER read an entire large file blindly:
                 if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
                     _liveVoiceEngine.state == LiveVoiceState.speaking) {
                   // Skip tool-call / SSML tag chunks so they are not spoken
-                  // (e.g. <tool_request>, <dialect>, </reasoning>). Pure
-                  // speech chunks are stripped of SSML at enqueue time.
-                  if (!textChunk.contains('<')) {
+                  // (SSML tags, and fenced ```json tool blocks). Pure speech
+                  // chunks are stripped of SSML at enqueue time.
+                  final fenceCount = '```'.allMatches(fullText).length;
+                  if (!textChunk.contains('<') && fenceCount.isEven) {
                     _liveVoiceEngine.feedStreamToken(textChunk);
                   }
                 }
@@ -4536,6 +4537,45 @@ NEVER read an entire large file blindly:
       return urlResult;
     } catch (e) {
       return 'Error fetching URL: $e';
+    }
+  }
+
+  /// Returns the tool name when the text contains a fenced ```json tool
+  /// block ({"t": ...}), else null. Drives the streaming avatar state.
+  String? _detectNativeToolCall(String text) {
+    if (!text.contains('```')) return null;
+    final m = RegExp(r'"t"\s*:\s*"([a-z_][a-zA-Z0-9_]*)"').firstMatch(text);
+    return m?.group(1);
+  }
+
+  /// Locate the first fenced ```json block in [text] whose content parses as
+  /// a native tool call ({"t":...} or {"calls":[...]}). Returns null when no
+  /// tool fence exists (plain code fences are skipped). Offsets are relative
+  /// to [text].
+  _NativeToolFence? _findNativeToolFence(String text) {
+    int searchFrom = 0;
+    while (true) {
+      final openIdx = text.indexOf('```json', searchFrom);
+      if (openIdx == -1) return null;
+      final contentStart = text.indexOf('\n', openIdx);
+      if (contentStart == -1) return null;
+      final closeIdx = text.indexOf('```', contentStart + 1);
+      if (closeIdx == -1) return null; // unclosed while streaming — leave as text
+      final inner = text.substring(contentStart + 1, closeIdx).trim();
+      Map<String, dynamic>? parsed;
+      try {
+        final dynamic decoded = jsonDecode(inner);
+        if (decoded is Map<String, dynamic> &&
+            (decoded['t'] != null || decoded['calls'] is List)) {
+          parsed = decoded;
+        }
+      } catch (_) {
+        parsed = null;
+      }
+      if (parsed != null) {
+        return _NativeToolFence(openIdx, closeIdx + 3, parsed);
+      }
+      searchFrom = closeIdx + 3; // plain JSON example — keep scanning
     }
   }
 
@@ -7787,12 +7827,12 @@ class ChatSurface extends StatelessWidget {
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
-                  if (msg.text.contains('<mcp_request>') ||
-                      msg.text.contains('<tool_request>') ||
-                      msg.text.contains('<command>')) {
-                    state = AvatarAnimationState.mcp;
-                  } else if (msg.text.contains('<search_request>')) {
+                  final nativeTool = _detectNativeToolCall(msg.text);
+                  if (nativeTool == 'web_search' ||
+                      nativeTool == 'search_web') {
                     state = AvatarAnimationState.searching;
+                  } else if (nativeTool != null) {
+                    state = AvatarAnimationState.mcp;
                   } else if ((msg.reasoning?.isNotEmpty ?? false) &&
                       msg.text.isEmpty) {
                     state = AvatarAnimationState.reasoning;
@@ -10904,6 +10944,10 @@ class MessageBubble extends StatelessWidget {
 
     while (currentIndex < text.length) {
       final substring = text.substring(currentIndex);
+
+      // Native JSON tool calls: fenced ```json blocks shaped {"t":...} or
+      // {"calls":[...]} render as tool blocks, just like the legacy tags.
+      final toolFence = _findNativeToolFence(substring);
       int earliestIndex = -1;
       var matchedTag = tags.first;
 
@@ -10915,6 +10959,32 @@ class MessageBubble extends StatelessWidget {
             matchedTag = tagInfo;
           }
         }
+      }
+
+      if (toolFence != null &&
+          (earliestIndex == -1 || toolFence.start < earliestIndex)) {
+        final textBefore = substring.substring(0, toolFence.start).trim();
+        if (textBefore.isNotEmpty) {
+          widgets.addAll(_buildBlocks(context, textBefore));
+        }
+        final fenceCalls = toolFence.json['calls'] is List
+            ? (toolFence.json['calls'] as List)
+                  .whereType<Map<String, dynamic>>()
+                  .toList()
+            : <Map<String, dynamic>>[toolFence.json];
+        for (final fenceCall in fenceCalls) {
+          widgets.add(
+            McpToolBlock(
+              mcpJson: jsonEncode({
+                'method': fenceCall['t']?.toString() ?? 'tool',
+                'params': fenceCall['a'] ?? <String, dynamic>{},
+              }),
+              isXml: false,
+            ),
+          );
+        }
+        currentIndex += toolFence.end;
+        continue;
       }
 
       if (earliestIndex == -1) {
@@ -20828,6 +20898,13 @@ void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
   params
     ..clear()
     ..addAll(resolved);
+}
+
+class _NativeToolFence {
+  final int start;
+  final int end;
+  final Map<String, dynamic> json;
+  _NativeToolFence(this.start, this.end, this.json);
 }
 
 Future<String> _handleMemoryTool(String action, String content) async {
