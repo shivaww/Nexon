@@ -836,6 +836,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
   int? _editingMessageIndex;
   int _historyLimit = 50;
   bool _isLoadingMoreHistory = false;
+  DateTime _lastDriveSync = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<void> _loadMoreHistory() async {
     if (_isLoadingMoreHistory) return;
@@ -843,25 +844,49 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _isLoadingMoreHistory = true;
     });
 
+    var added = 0;
     try {
-      final result = await DriveSyncService.restoreFromDriveDetailed();
-      if (result.success) {
-        final prefs = await SharedPreferences.getInstance();
-        final raw = prefs.getString('chat_sessions_v1');
-        if (raw != null && raw.trim().isNotEmpty) {
+      // 1) Local full-history backup written by _saveSessions when the
+      //    prefs payload exceeds the size cap. Works offline — no Drive.
+      final backupFile = await _sessionBackupPrefsFile();
+      if (await backupFile.exists()) {
+        final raw = await backupFile.readAsString();
+        if (raw.trim().isNotEmpty) {
           final decoded = jsonDecode(raw) as List<dynamic>;
-          final loadedSessions = decoded
+          final backupSessions = decoded
               .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
               .toList();
-          if (mounted && loadedSessions.isNotEmpty) {
+          if (mounted) {
             setState(() {
-              _sessions = loadedSessions;
+              added = _mergeLoadedSessions(backupSessions);
             });
           }
         }
       }
+
+      // 2) Fall back to Google Drive when the local backup added nothing.
+      if (added == 0) {
+        final result = await DriveSyncService.restoreFromDriveDetailed();
+        if (result.success) {
+          final prefs = await SharedPreferences.getInstance();
+          final raw = prefs.getString('chat_sessions_v1');
+          if (raw != null && raw.trim().isNotEmpty) {
+            final decoded = jsonDecode(raw) as List<dynamic>;
+            final driveSessions = decoded
+                .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
+                .toList();
+            if (mounted) {
+              setState(() {
+                added = _mergeLoadedSessions(driveSessions);
+              });
+            }
+          }
+        }
+      }
+
+      if (added > 0) await _saveSessions();
     } catch (e) {
-      debugPrint('[HistoryPagination] Error loading more from Drive: $e');
+      debugPrint('[HistoryPagination] Error loading more history: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -870,6 +895,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
         });
       }
     }
+  }
+
+  /// Merges [incoming] sessions into [_sessions], skipping ids that already
+  /// exist (the in-memory copy is newer). Returns how many were added.
+  int _mergeLoadedSessions(List<ChatSession> incoming) {
+    if (incoming.isEmpty) return 0;
+    final existingIds = _sessions.map((s) => s.id).toSet();
+    final older = incoming.where((s) => !existingIds.contains(s.id)).toList();
+    if (older.isEmpty) return 0;
+    _sessions = [..._sessions, ...older];
+    return older.length;
   }
 
   List<ChatMessage> get _messages {
@@ -1016,8 +1052,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
       await prefs.setString('active_session_id_v1', _activeSessionId!);
     }
 
-    // Fire and forget auto-sync to Google Drive
-    DriveSyncService.syncToDrive(_sessions);
+    // Fire-and-forget auto-sync to Google Drive, throttled so we don't
+    // serialize + upload the full history on every single chat turn.
+    final nowSync = DateTime.now();
+    if (nowSync.difference(_lastDriveSync).inSeconds >= 15) {
+      _lastDriveSync = nowSync;
+      DriveSyncService.syncToDrive(_sessions);
+    }
   }
 
   Future<String> _expandHomePath(String path) async {
@@ -16668,6 +16709,13 @@ class _ProviderAvatarState extends State<ProviderAvatar>
 }
 
 class ChatClient {
+  /// Shared keep-alive HTTP client: reuses TCP/TLS connections across
+  /// chat turns so each request skips a full handshake.
+  static final HttpClient _sharedHttpClient = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 30)
+    ..idleTimeout = const Duration(seconds: 60)
+    ..autoUncompress = true;
+
   /// Models that accept image input (multimodal/vision).
   static final Set<String> modelsWithVision = {};
 
@@ -16727,9 +16775,7 @@ class ChatClient {
     ProviderDefinition provider,
     ProviderSettings settings,
   ) async {
-    final client = HttpClient()
-      ..findProxy = ((uri) => "DIRECT")
-      ..connectionTimeout = const Duration(seconds: 20);
+    final client = _sharedHttpClient;
     try {
       final uri = Uri.parse('${_baseUrl(provider, settings)}/models');
       final request = await client.getUrl(uri);
@@ -16870,7 +16916,7 @@ class ChatClient {
 
       return provider.models;
     } finally {
-      client.close(force: true);
+      // Shared keep-alive client — intentionally not closed.
     }
   }
 
@@ -16889,8 +16935,7 @@ class ChatClient {
     final token =
         Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 30);
+    final client = _sharedHttpClient;
     try {
       final allKeys = isManagedMode
           ? [token]
@@ -17020,7 +17065,7 @@ class ChatClient {
         'Failed to send request with any provided API key',
       );
     } finally {
-      client.close(force: true);
+      // Shared keep-alive client — intentionally not closed.
     }
   }
 
@@ -17039,8 +17084,7 @@ class ChatClient {
     final token =
         Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 30);
+    final client = _sharedHttpClient;
     try {
       final allKeys = isManagedMode
           ? [token]
@@ -17205,7 +17249,7 @@ class ChatClient {
         break; // Successfully streamed, do not try next key
       }
     } finally {
-      client.close(force: true);
+      // Shared keep-alive client — intentionally not closed.
     }
   }
 
