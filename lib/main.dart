@@ -3051,24 +3051,14 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
               return (v == null || v.isEmpty) ? null : v;
             }
             if (mounted) setState(() => _toolStatus = '🔍 Searching: "$query"');
-            final searchResultRaw = await _chatClient.searchWeb(
+            final searchResult = await _executeWebSearchQuery(
               query,
-              _searchSettings.provider,
-              [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
-              googleCx: _searchSettings.googleCx,
               topic: searchAttr('topic'),
               timeRange: searchAttr('time_range'),
               startDate: searchAttr('start_date'),
               endDate: searchAttr('end_date'),
             );
             if (mounted) setState(() => _toolStatus = '');
-
-            String searchResult = searchResultRaw;
-            if (searchResult.length > 4000) {
-              searchResult =
-                  searchResult.substring(0, 4000) +
-                  '\n\n...[truncated due to length]';
-            }
             toolOutputs.add(
               "Web Search results for '$query':\n\n$searchResult",
             );
@@ -3082,166 +3072,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             final url = match.group(1)?.trim() ?? '';
             final shortUrl = url.length > 50 ? '${url.substring(0, 47)}…' : url;
             if (mounted) setState(() => _toolStatus = '🌐 Fetching: $shortUrl');
-            String urlResult = '';
-            try {
-              var targetUrl = url;
-              if (!targetUrl.startsWith('http')) {
-                targetUrl = 'https://$targetUrl';
-              }
-              final client = HttpClient()
-                ..findProxy = ((uri) => "DIRECT")
-                ..connectionTimeout = const Duration(seconds: 15);
-
-              var currentUrl = targetUrl;
-              HttpClientResponse response;
-              int redirectCount = 0;
-
-              while (true) {
-                final request = await client
-                    .getUrl(Uri.parse(currentUrl))
-                    .timeout(const Duration(seconds: 45));
-                request.followRedirects = true;
-                request.maxRedirects = 10;
-                request.headers.set(
-                  HttpHeaders.userAgentHeader,
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                );
-                request.headers.set(
-                  HttpHeaders.acceptHeader,
-                  'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                );
-                request.headers.set(
-                  HttpHeaders.acceptLanguageHeader,
-                  'en-US,en;q=0.9',
-                );
-
-                response = await request.close().timeout(
-                  const Duration(seconds: 45),
-                );
-
-                if ((response.isRedirect ||
-                        (response.statusCode >= 300 &&
-                            response.statusCode < 400)) &&
-                    redirectCount < 8) {
-                  final location = response.headers.value(
-                    HttpHeaders.locationHeader,
-                  );
-                  if (location != null && location.isNotEmpty) {
-                    await response.drain<void>();
-                    redirectCount++;
-                    final resolvedUri = Uri.parse(currentUrl).resolve(location);
-                    currentUrl = resolvedUri.toString();
-                    continue;
-                  }
-                }
-                break;
-              }
-
-              if (response.statusCode < 200 || response.statusCode >= 300) {
-                await response.drain<void>();
-                throw HttpException('HTTP ${response.statusCode}');
-              }
-
-              final isPdf =
-                  targetUrl.toLowerCase().endsWith('.pdf') ||
-                  (response.headers.contentType?.mimeType == 'application/pdf');
-
-              String text = '';
-              if (isPdf) {
-                try {
-                  final bytesBuilder = BytesBuilder();
-                  await for (final chunk in response.timeout(
-                    const Duration(seconds: 60),
-                  )) {
-                    bytesBuilder.add(chunk);
-                  }
-                  final bytes = bytesBuilder.takeBytes();
-                  if (bytes.isEmpty) {
-                    throw const FormatException('Empty PDF bytes');
-                  }
-                  final PdfDocument document = PdfDocument(inputBytes: bytes);
-                  text = PdfTextExtractor(document).extractText();
-                  document.dispose();
-                  if (text.trim().isEmpty) {
-                    throw const FormatException(
-                      'No extractable text in PDF (possibly scanned/image-only)',
-                    );
-                  }
-                } catch (e) {
-                  throw FormatException('PDF extraction failed: $e');
-                }
-              } else {
-                final body = await response
-                    .transform(utf8.decoder)
-                    .join()
-                    .timeout(const Duration(seconds: 60));
-
-                var htmlBody = body;
-                final bodyMatch = RegExp(
-                  r'<body[^>]*>(.*?)</body>',
-                  caseSensitive: false,
-                  dotAll: true,
-                ).firstMatch(body);
-                if (bodyMatch != null) {
-                  htmlBody = bodyMatch.group(1) ?? htmlBody;
-                }
-
-                // Strip boilerplate/navigation tags to save tokens
-                htmlBody = htmlBody.replaceAll(
-                  RegExp(r'<(nav|header|footer|aside)\b[^>]*>[\s\S]*?</\1>', caseSensitive: false, dotAll: true),
-                  ' ',
-                );
-
-                htmlBody = htmlBody.replaceAll(
-                  RegExp(
-                    r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
-                    caseSensitive: false,
-                    dotAll: true,
-                  ),
-                  '',
-                );
-                htmlBody = htmlBody.replaceAll(
-                  RegExp(
-                    r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
-                    caseSensitive: false,
-                    dotAll: true,
-                  ),
-                  '',
-                );
-                htmlBody = htmlBody.replaceAll(
-                  RegExp(r'<img[^>]*>', caseSensitive: false),
-                  '',
-                );
-                htmlBody = htmlBody.replaceAll(
-                  RegExp(
-                    r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
-                    caseSensitive: false,
-                    dotAll: true,
-                  ),
-                  '',
-                );
-                htmlBody = htmlBody.replaceAll(
-                  RegExp(r'<!--.*?-->', dotAll: true),
-                  '',
-                );
-
-                text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
-                text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-              }
-
-              urlResult = text;
-              if (urlResult.length > 8000) {
-                // Truncate at a sentence boundary to avoid cutting mid-sentence
-                final substring = urlResult.substring(0, 8000);
-                final lastPeriod = substring.lastIndexOf('. ');
-                final endIdx = lastPeriod > 6000 ? lastPeriod + 1 : 8000;
-                urlResult =
-                    urlResult.substring(0, endIdx) +
-                    '\n\n...[truncated due to length]';
-              }
-            } catch (e) {
-              urlResult = 'Error fetching URL: $e';
-            }
+            final urlResult = await _fetchUrlText(url);
             if (mounted) setState(() => _toolStatus = '');
             toolOutputs.add("Content of URL '$url':\n\n$urlResult");
           }
@@ -4564,6 +4395,202 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       r'<mcp_request>\s*(\{[\s\S]*?\})\s*</mcp_request>',
       caseSensitive: false,
     ).firstMatch('<mcp_request>$jsonStr</mcp_request>');
+  }
+
+  /// Run one web search query through the chat client and return the
+  /// length-capped result text. Shared by the legacy XML path and the native
+  /// JSON router so both produce identical output.
+  Future<String> _executeWebSearchQuery(
+    String query, {
+    String? topic,
+    String? timeRange,
+    String? startDate,
+    String? endDate,
+  }) async {
+    final searchResultRaw = await _chatClient.searchWeb(
+      query,
+      _searchSettings.provider,
+      [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
+      googleCx: _searchSettings.googleCx,
+      topic: topic,
+      timeRange: timeRange,
+      startDate: startDate,
+      endDate: endDate,
+    );
+    String searchResult = searchResultRaw;
+    if (searchResult.length > 4000) {
+      searchResult =
+          searchResult.substring(0, 4000) +
+          '\n\n...[truncated due to length]';
+    }
+    return searchResult;
+  }
+
+  /// Fetch a URL and return readable text: redirects followed, PDFs text-
+  /// extracted, HTML boilerplate stripped, result length-capped. Errors come
+  /// back as a readable string, never thrown. Shared by the legacy XML path
+  /// and the native JSON router so both behave identically.
+  Future<String> _fetchUrlText(String url) async {
+    try {
+      var targetUrl = url;
+      if (!targetUrl.startsWith('http')) {
+        targetUrl = 'https://$targetUrl';
+      }
+      final client = HttpClient()
+        ..findProxy = ((uri) => "DIRECT")
+        ..connectionTimeout = const Duration(seconds: 15);
+
+      var currentUrl = targetUrl;
+      HttpClientResponse response;
+      int redirectCount = 0;
+
+      while (true) {
+        final request = await client
+            .getUrl(Uri.parse(currentUrl))
+            .timeout(const Duration(seconds: 45));
+        request.followRedirects = true;
+        request.maxRedirects = 10;
+        request.headers.set(
+          HttpHeaders.userAgentHeader,
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        );
+        request.headers.set(
+          HttpHeaders.acceptHeader,
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        );
+        request.headers.set(
+          HttpHeaders.acceptLanguageHeader,
+          'en-US,en;q=0.9',
+        );
+
+        response = await request.close().timeout(
+          const Duration(seconds: 45),
+        );
+
+        if ((response.isRedirect ||
+                (response.statusCode >= 300 &&
+                    response.statusCode < 400)) &&
+            redirectCount < 8) {
+          final location = response.headers.value(
+            HttpHeaders.locationHeader,
+          );
+          if (location != null && location.isNotEmpty) {
+            await response.drain<void>();
+            redirectCount++;
+            final resolvedUri = Uri.parse(currentUrl).resolve(location);
+            currentUrl = resolvedUri.toString();
+            continue;
+          }
+        }
+        break;
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        await response.drain<void>();
+        throw HttpException('HTTP ${response.statusCode}');
+      }
+
+      final isPdf =
+          targetUrl.toLowerCase().endsWith('.pdf') ||
+          (response.headers.contentType?.mimeType == 'application/pdf');
+
+      String text = '';
+      if (isPdf) {
+        try {
+          final bytesBuilder = BytesBuilder();
+          await for (final chunk in response.timeout(
+            const Duration(seconds: 60),
+          )) {
+            bytesBuilder.add(chunk);
+          }
+          final bytes = bytesBuilder.takeBytes();
+          if (bytes.isEmpty) {
+            throw const FormatException('Empty PDF bytes');
+          }
+          final PdfDocument document = PdfDocument(inputBytes: bytes);
+          text = PdfTextExtractor(document).extractText();
+          document.dispose();
+          if (text.trim().isEmpty) {
+            throw const FormatException(
+              'No extractable text in PDF (possibly scanned/image-only)',
+            );
+          }
+        } catch (e) {
+          throw FormatException('PDF extraction failed: $e');
+        }
+      } else {
+        final body = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(const Duration(seconds: 60));
+
+        var htmlBody = body;
+        final bodyMatch = RegExp(
+          r'<body[^>]*>(.*?)</body>',
+          caseSensitive: false,
+          dotAll: true,
+        ).firstMatch(body);
+        if (bodyMatch != null) {
+          htmlBody = bodyMatch.group(1) ?? htmlBody;
+        }
+
+        // Strip boilerplate/navigation tags to save tokens
+        htmlBody = htmlBody.replaceAll(
+          RegExp(r'<(nav|header|footer|aside)\b[^>]*>[\s\S]*?</\1>', caseSensitive: false, dotAll: true),
+          ' ',
+        );
+
+        htmlBody = htmlBody.replaceAll(
+          RegExp(
+            r'<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>',
+            caseSensitive: false,
+            dotAll: true,
+          ),
+          '',
+        );
+        htmlBody = htmlBody.replaceAll(
+          RegExp(
+            r'<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>',
+            caseSensitive: false,
+            dotAll: true,
+          ),
+          '',
+        );
+        htmlBody = htmlBody.replaceAll(
+          RegExp(r'<img[^>]*>', caseSensitive: false),
+          '',
+        );
+        htmlBody = htmlBody.replaceAll(
+          RegExp(
+            r'<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>',
+            caseSensitive: false,
+            dotAll: true,
+          ),
+          '',
+        );
+        htmlBody = htmlBody.replaceAll(
+          RegExp(r'<!--.*?-->', dotAll: true),
+          '',
+        );
+
+        text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
+        text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      }
+
+      var urlResult = text;
+      if (urlResult.length > 8000) {
+        // Truncate at a sentence boundary to avoid cutting mid-sentence
+        final substring = urlResult.substring(0, 8000);
+        final lastPeriod = substring.lastIndexOf('. ');
+        final endIdx = lastPeriod > 6000 ? lastPeriod + 1 : 8000;
+        urlResult =
+            urlResult.substring(0, endIdx) +
+            '\n\n...[truncated due to length]';
+      }
+      return urlResult;
+    } catch (e) {
+      return 'Error fetching URL: $e';
+    }
   }
 
   // ── Native JSON tool-call extraction & routing helpers ──────────────────
