@@ -3408,7 +3408,59 @@ Json toolVersion(const Json&, const fs::path&) {
     r.set("name", Json::Str("tools"));
     r.set("version", Json::Str("1.1.0-nexon"));
     r.set("protocol", Json::Num(1));
-    r.set("tools", Json::Str("sh search read patch edit git list find outline recent undo create_file create_directory cut extract fileops diagnostics version"));
+    r.set("tools", Json::Str("sh search read patch edit git list find outline recent undo create_file create_directory cut extract fileops diagnostics version py"));
+    return r;
+}
+
+// ===========================================================================
+// Tool: py_tool (alias: py) — one-shot passthrough to the Python shim for
+// STATELESS Python-only tools (chmod, dart_format, read_url). Spawns
+// `python3 py_tool.py` located next to this binary (resolved via
+// /proc/self/exe), pipes the request as JSON on stdin, and lifts the JSON
+// reply. Stateful services (background process registry etc.) do NOT belong
+// here — a one-shot process has no memory between calls; those stay on the
+// long-running Python bridge's WebSocket.
+// ===========================================================================
+Json toolPy(const Json& args, const fs::path& baseDir) {
+    std::string method = args.getStr2("m", "method");
+    if (method.empty()) {
+        Json r = Json::Obj();
+        r.set("err", Json::Str("'m' (method) is required (chmod | dart_format | read_url)"));
+        return r;
+    }
+    // Locate the shim relative to this executable so it works no matter
+    // which project directory the binary is pointed at.
+    std::error_code ec;
+    fs::path exe = fs::read_symlink("/proc/self/exe", ec);
+    fs::path shim = ec ? fs::path() : (exe.parent_path() / "py_tool.py");
+    if (ec || !fs::exists(shim, ec)) {
+        Json r = Json::Obj();
+        r.set("err", Json::Str("py_tool.py not found next to the tools binary (expected: " + shim.string() + ")"));
+        return r;
+    }
+    Json req = Json::Obj();
+    req.set("m", Json::Str(method));
+    const Json* params = args.get("p");
+    req.set("p", params ? *params : Json::Obj());
+    req.set("workspace", Json::Str(baseDir.string()));
+    long timeout = args.getInt2("to", "timeout", 60);
+    if (timeout < 1) timeout = 60;
+    if (timeout > 600) timeout = 600;
+    // Feed the request on stdin to avoid argv length/quoting issues.
+    std::string full = "printf '%s' " + shellQuote(req.dump()) + " | python3 " + shellQuote(shim.string());
+    auto [code, output] = runShellTimed(full, baseDir, timeout);
+    Json r = Json::Obj();
+    r.set("rc", Json::Num(code));
+    if (code == -1000) { r.set("err", Json::Str("timeout")); r.set("out", Json::Str(truncateOutput(output))); return r; }
+    // The shim always prints one JSON object on stdout; parse and lift it.
+    std::string parseErr;
+    Json parsed = Json::parse(trim(output), &parseErr);
+    if (parseErr.empty() && parsed.type == Json::Type::Object) {
+        for (auto& kv : parsed.obj) r.set(kv.first, kv.second);
+        return r;
+    }
+    r.set("err", Json::Str("shim did not return valid JSON"));
+    r.set("out", Json::Str(truncateOutput(output)));
     return r;
 }
 
@@ -3444,11 +3496,12 @@ Json dispatchSingle(const Json& call, const fs::path& baseDir, std::string& tool
         else if (toolName == "fileops" || toolName == "fileops_tool" || toolName == "fops") result = toolFileOps(args, baseDir);
         else if (toolName == "diagnostics" || toolName == "diagnostics_tool" || toolName == "diag") result = toolDiagnostics(args, baseDir);
         else if (toolName == "version" || toolName == "health") result = toolVersion(args, baseDir);
+        else if (toolName == "py" || toolName == "py_tool") result = toolPy(args, baseDir);
         else {
             result = Json::Obj();
             result.set("err", Json::Str("unknown tool: '" + toolName +
                 "' (valid: sh, search, read, patch, edit, git, list, find, outline, recent, undo, "
-                "create_file, create_directory, cut, extract, fileops, diagnostics, version)"));
+                "create_file, create_directory, cut, extract, fileops, diagnostics, version, py)"));
         }
     } catch (std::exception& e) {
         result = Json::Obj();
@@ -3661,6 +3714,180 @@ R"(
 }
 
 // ===========================================================================
+// Self-test: exercises the real dispatch path against a throwaway temp
+// project. Run: ./tools --selftest    (no project dir argument needed)
+// Prints one JSON summary to stdout; exit code 0 = all pass, 1 = any fail.
+// Intended as the install-time gate and the post-rebuild regression check.
+// ===========================================================================
+static int runSelfTest() {
+    std::error_code ec;
+    fs::path tmp = fs::temp_directory_path(ec) / ("tools_selftest_" + std::to_string(::getpid()));
+    fs::remove_all(tmp, ec); // never resume a stale dir from a crashed run
+    fs::create_directories(tmp, ec);
+    if (ec) {
+        std::cout << "{\"selftest\":true,\"fail\":1,\"err\":\"could not create temp dir\"}\n";
+        return 1;
+    }
+    long pass = 0, fail = 0;
+    Json tests = Json::Arr();
+    auto record = [&](const std::string& name, bool ok, const std::string& note) {
+        Json t = Json::Obj();
+        t.set("test", Json::Str(name));
+        t.set("st", Json::Str(ok ? "pass" : "FAIL"));
+        if (!ok && !note.empty()) t.set("r", Json::Str(note));
+        tests.arr.push_back(t);
+        if (ok) pass++; else fail++;
+    };
+    auto call = [&](Json cmd) {
+        std::string tn;
+        return dispatchSingle(cmd, tmp, tn);
+    };
+    auto makeRead = [&](const std::string& relFile) {
+        Json rd = Json::Obj();
+        rd.set("f", Json::Str(relFile));
+        rd.set("ln", Json::Bool(false));
+        Json rarr = Json::Arr();
+        rarr.arr.push_back(rd);
+        Json a = Json::Obj();
+        a.set("r", rarr);
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("read"));
+        cmd.set("a", a);
+        return call(cmd);
+    };
+    auto readContent = [&](const Json& readResult) {
+        const Json* rr = readResult.get("r");
+        if (rr && !rr->arr.empty()) return rr->arr[0].getStr2("c", "");
+        return std::string();
+    };
+
+    // 1+2. create_file with hostile content, then read back byte-identical
+    std::string hostile = "<style>&&</style>\nif (a < b) log(\"x\") \xF0\x9F\x9A\x80\n";
+    {
+        Json a = Json::Obj();
+        a.set("f", Json::Str("probe.txt"));
+        a.set("c", Json::Str(hostile));
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("create_file"));
+        cmd.set("a", a);
+        Json r = call(cmd);
+        const Json* rr = r.get("r");
+        bool ok = rr && !rr->arr.empty() && rr->arr[0].getStr2("st", "") == "ok";
+        record("create_file_hostile_content", ok, ok ? "" : r.dump());
+        record("read_back_byte_identical", readContent(makeRead("probe.txt")) == hostile, "content mismatch after read");
+    }
+    // 3. patch search_replace
+    {
+        Json p = Json::Obj();
+        p.set("f", Json::Str("probe.txt"));
+        p.set("o", Json::Str("log(\"x\")"));
+        p.set("n", Json::Str("log(\"y\")"));
+        Json parr = Json::Arr();
+        parr.arr.push_back(p);
+        Json a = Json::Obj();
+        a.set("p", parr);
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("patch"));
+        cmd.set("a", a);
+        Json r = call(cmd);
+        const Json* rr = r.get("r");
+        bool ok = rr && !rr->arr.empty() && rr->arr[0].getStr2("st", "") == "ok";
+        record("patch_search_replace", ok, ok ? "" : r.dump());
+    }
+    // 4. undo restores the pre-patch content exactly
+    {
+        Json a = Json::Obj();
+        a.set("f", Json::Str("probe.txt"));
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("undo"));
+        cmd.set("a", a);
+        Json r = call(cmd);
+        bool ok = r.getStr2("st", "") == "ok" && readContent(makeRead("probe.txt")) == hostile;
+        record("undo_restores_pre_patch_content", ok, r.dump());
+    }
+    // 5. sandbox escape refused
+    {
+        Json p = Json::Obj();
+        p.set("f", Json::Str("../escape.txt"));
+        p.set("o", Json::Str("x"));
+        p.set("n", Json::Str("y"));
+        Json parr = Json::Arr();
+        parr.arr.push_back(p);
+        Json a = Json::Obj();
+        a.set("p", parr);
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("patch"));
+        cmd.set("a", a);
+        Json r = call(cmd);
+        const Json* rr = r.get("r");
+        bool refused = rr && !rr->arr.empty() && rr->arr[0].getStr2("st", "") == "fail";
+        record("sandbox_escape_refused", refused, "patch outside project was not refused");
+    }
+    // 6. pathologically deep JSON refused by the depth cap
+    {
+        std::string deep;
+        for (int i = 0; i < 200; ++i) deep += "{\"a\":";
+        deep += "1";
+        for (int i = 0; i < 200; ++i) deep += "}";
+        std::string err;
+        Json::parse(deep, &err);
+        record("deep_json_depth_cap", !err.empty(), "200-level nesting parsed without error");
+    }
+    // 7. base64 content (cb64) decodes correctly
+    {
+        Json a = Json::Obj();
+        a.set("f", Json::Str("b64.txt"));
+        a.set("cb64", Json::Str("aGVsbG8gYmFzZTY0")); // "hello base64"
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("create_file"));
+        cmd.set("a", a);
+        Json r = call(cmd);
+        const Json* rr = r.get("r");
+        bool ok = rr && !rr->arr.empty() && rr->arr[0].getStr2("st", "") == "ok";
+        std::string got = readFileAll((tmp / "b64.txt").string());
+        record("base64_content_roundtrip", ok && got == "hello base64", got);
+    }
+    // 8. zero-match search returns clean n:0 (the old bridge errored here)
+    {
+        Json q = Json::Arr();
+        q.arr.push_back(Json::Str("zzz_selftest_nomatch"));
+        Json a = Json::Obj();
+        a.set("q", q);
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("search"));
+        cmd.set("a", a);
+        Json r = call(cmd);
+        const Json* rr = r.get("r");
+        bool ok = rr && !rr->arr.empty() && rr->arr[0].getInt2("n", "n", -1) == 0 && rr->arr[0].get("err") == nullptr;
+        record("search_zero_match_clean", ok, r.dump());
+    }
+    // 9. audit trail exists after mutations
+    {
+        std::error_code aec;
+        bool exists = fs::exists(tmp / ".mpt_backups" / "audit.jsonl", aec) && !aec;
+        record("audit_trail_written", exists, "audit.jsonl missing after patch mutation");
+    }
+    // 10. version/health probe
+    {
+        Json cmd = Json::Obj();
+        cmd.set("t", Json::Str("version"));
+        cmd.set("a", Json::Obj());
+        Json r = call(cmd);
+        record("version_tool", r.getStr2("name", "") == "tools", r.dump());
+    }
+
+    fs::remove_all(tmp, ec);
+    Json out = Json::Obj();
+    out.set("selftest", Json::Bool(true));
+    out.set("pass", Json::Num((double)pass));
+    out.set("fail", Json::Num((double)fail));
+    out.set("tests", tests);
+    std::cout << out.dump() << "\n";
+    std::cout.flush();
+    return fail == 0 ? 0 : 1;
+}
+
+// ===========================================================================
 // Main
 // ===========================================================================
 int main(int argc, char* argv[]) {
@@ -3674,6 +3901,7 @@ int main(int argc, char* argv[]) {
     // optional output cap wraps oversized results in a small JSON envelope
     // with paging guidance instead of dumping one huge blob.
     std::vector<std::string> posArgs;
+    bool selfTest = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--plain") { g_plainMode = true; continue; }
@@ -3681,8 +3909,13 @@ int main(int argc, char* argv[]) {
             try { g_maxOutputChars = (size_t)std::stoul(a.substr(13)); } catch (...) {}
             continue;
         }
+        if (a == "--selftest") { selfTest = true; continue; }
         posArgs.push_back(a);
     }
+    // Install-time / post-build regression gate: exercise the real dispatch
+    // path against a throwaway temp project, print a JSON pass/fail summary,
+    // and exit non-zero on any failure. No project directory needed.
+    if (selfTest) return runSelfTest();
     if (const char* envPlain = std::getenv("TOOLS_PLAIN")) {
         std::string v = envPlain;
         if (!v.empty() && v != "0") g_plainMode = true;
