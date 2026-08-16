@@ -32,6 +32,7 @@
 #include <sys/wait.h>
 #include <sys/select.h>
 #include <fcntl.h>
+#include <sys/file.h>
 
 namespace fs = std::filesystem;
 
@@ -472,7 +473,10 @@ std::string backupSafeName(const std::string& relFile) {
     return fnv1a64Hex(relFile).substr(0, 8) + "_" + flat;
 }
 
-void backupFile(const fs::path& baseDir, const std::string& relFile, const std::string& originalContent) {
+// Returns false if the snapshot could not be written. Callers surface this as
+// a 'warn' field in their result instead of silently continuing with no undo
+// history for the mutation they're about to make.
+bool backupFile(const fs::path& baseDir, const std::string& relFile, const std::string& originalContent) {
     try {
         fs::path bdir = baseDir / ".mpt_backups";
         std::error_code ec;
@@ -481,7 +485,10 @@ void backupFile(const fs::path& baseDir, const std::string& relFile, const std::
         auto now = std::chrono::system_clock::now().time_since_epoch().count();
         fs::path bfile = bdir / (safeName + "." + std::to_string(now) + ".bak");
         std::ofstream out(bfile, std::ios::binary);
-        if (out) out << originalContent;
+        if (!out) return false;
+        out << originalContent;
+        out.flush();
+        if (!out) return false;
         // Retention: keep only the newest 20 snapshots per file so a long agent
         // session can't fill mobile storage with unbounded backup history.
         std::vector<std::pair<long long, fs::path>> snaps;
@@ -500,6 +507,58 @@ void backupFile(const fs::path& baseDir, const std::string& relFile, const std::
             std::sort(snaps.begin(), snaps.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
             for (size_t k = 20; k < snaps.size(); ++k) fs::remove(snaps[k].second, ec);
         }
+        return true;
+    } catch (...) { return false; }
+}
+// Advisory per-file write lock (flock). tools itself is single-threaded, so this
+// protects against two tools processes (app session + human terminal) or any
+// other flock-respecting writer interleaving mutations on the same file.
+// LOCK_EX | LOCK_NB: refuse immediately instead of hanging an agent session.
+struct FileLock {
+    int fd = -1;
+    FileLock() = default;
+    FileLock(const FileLock&) = delete;
+    FileLock& operator=(const FileLock&) = delete;
+    FileLock(FileLock&& o) noexcept : fd(o.fd) { o.fd = -1; }
+    ~FileLock() { release(); }
+    void release() {
+        if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); fd = -1; }
+    }
+};
+static bool acquireFileLock(const fs::path& baseDir, const std::string& relFile, FileLock& lock, std::string& err) {
+    std::error_code ec;
+    fs::path ldir = baseDir / ".mpt_backups";
+    fs::create_directories(ldir, ec);
+    fs::path lfile = ldir / (backupSafeName(relFile) + ".lock");
+    int fd = ::open(lfile.c_str(), O_CREAT | O_RDWR, 0644);
+    if (fd < 0) { err = "could not open lock file for " + relFile; return false; }
+    if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        ::close(fd);
+        err = "'" + relFile + "' is write-locked by another process (flock); retry when it finishes";
+        return false;
+    }
+    lock.fd = fd;
+    return true;
+}
+// Append-only JSONL audit trail of successful mutations: one line per written
+// file. Lives next to the backups so it shares their lifecycle/ignore rules.
+static void auditAppend(const fs::path& baseDir, const std::string& tool, const std::string& relFile,
+                        long bytes, const std::string& chk) {
+    try {
+        std::error_code ec;
+        fs::path ldir = baseDir / ".mpt_backups";
+        fs::create_directories(ldir, ec);
+        std::ofstream log(ldir / "audit.jsonl", std::ios::binary | std::ios::app);
+        if (!log) return;
+        long long ts = (long long)std::chrono::system_clock::now().time_since_epoch().count();
+        Json e = Json::Obj();
+        e.set("ts", Json::Num((double)ts));
+        e.set("tool", Json::Str(tool));
+        e.set("f", Json::Str(relFile));
+        e.set("bytes", Json::Num((double)bytes));
+        e.set("chk", Json::Str(chk));
+        e.set("pid", Json::Num((double)::getpid()));
+        log << e.dump() << "\n";
     } catch (...) {}
 }
 // Lenient base64 decoder: skips whitespace/newlines/invalid chars, stops at '='.
@@ -1724,32 +1783,57 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
             }
 
             std::vector<std::pair<std::string, std::string>> written;
+            std::vector<FileLock> locks; // held until batch end; RAII releases
             bool writeFailed = false;
+            // Acquire advisory locks on every dirty file BEFORE writing any of
+            // them: either the whole batch holds its locks or none. A file already
+            // locked by another process fails the batch instead of interleaving.
             for (auto& [relFile, state] : fileCache) {
                 if (state.currentContent == state.originalContent) continue;
-                fs::path full;
-                std::error_code ec;
-                if (!safeResolve(baseDir, relFile, full)) { writeFailed = true; break; }
-                if (!state.backupDone) {
-                    backupFile(baseDir, relFile, state.originalContent);
-                    state.backupDone = true;
-                }
-                fs::create_directories(full.parent_path(), ec);
-                Json fentry = Json::Obj();
-                fentry.set("f", Json::Str(relFile));
-                if (!writeFileAll(full.string(), state.currentContent)) {
+                std::string lockErr;
+                locks.emplace_back();
+                if (!acquireFileLock(baseDir, relFile, locks.back(), lockErr)) {
+                    locks.pop_back();
+                    for (auto& rr : results.arr) {
+                        if (rr.getStr2("f", "") == relFile && rr.getStr2("st", "") == "ok") {
+                            rr.set("st", Json::Str("fail"));
+                            rr.set("r", Json::Str(lockErr));
+                        }
+                    }
                     writeFailed = true;
-                    fentry.set("written", Json::Bool(false));
-                    fentry.set("r", Json::Str("write failed"));
-                    filesSummary.arr.push_back(fentry);
                     break;
                 }
-                written.push_back({relFile, state.originalContent});
-                fentry.set("written", Json::Bool(true));
-                fentry.set("chk", Json::Str(fnv1a64Hex(state.currentContent)));
-                fentry.set("lines", Json::Num((double)splitLines(normalizeLineEndings(state.currentContent)).size()));
-                fentry.set("bytes", Json::Num((double)state.currentContent.size()));
-                filesSummary.arr.push_back(fentry);
+            }
+            if (!writeFailed) {
+                for (auto& [relFile, state] : fileCache) {
+                    if (state.currentContent == state.originalContent) continue;
+                    fs::path full;
+                    std::error_code ec;
+                    if (!safeResolve(baseDir, relFile, full)) { writeFailed = true; break; }
+                    Json fentry = Json::Obj();
+                    fentry.set("f", Json::Str(relFile));
+                    if (!state.backupDone) {
+                        if (!backupFile(baseDir, relFile, state.originalContent)) {
+                            fentry.set("warn", Json::Str("backup snapshot failed; undo may not cover this change"));
+                        }
+                        state.backupDone = true;
+                    }
+                    fs::create_directories(full.parent_path(), ec);
+                    if (!writeFileAll(full.string(), state.currentContent)) {
+                        writeFailed = true;
+                        fentry.set("written", Json::Bool(false));
+                        fentry.set("r", Json::Str("write failed"));
+                        filesSummary.arr.push_back(fentry);
+                        break;
+                    }
+                    written.push_back({relFile, state.originalContent});
+                    auditAppend(baseDir, "patch", relFile, (long)state.currentContent.size(), fnv1a64Hex(state.currentContent));
+                    fentry.set("written", Json::Bool(true));
+                    fentry.set("chk", Json::Str(fnv1a64Hex(state.currentContent)));
+                    fentry.set("lines", Json::Num((double)splitLines(normalizeLineEndings(state.currentContent)).size()));
+                    fentry.set("bytes", Json::Num((double)state.currentContent.size()));
+                    filesSummary.arr.push_back(fentry);
+                }
             }
             if (writeFailed && atomic) {
                 // Best-effort rollback of files already committed by this batch.
@@ -2067,38 +2151,63 @@ Json toolFileEdit(const Json& args, const fs::path& baseDir) {
 
     Json filesSummary = Json::Arr();
     std::vector<std::pair<std::string, FileState*>> written; // for rollback
+    std::vector<FileLock> locks; // held until batch end; RAII releases
     bool writeFailed = false;
+    // Acquire advisory locks on every dirty file BEFORE writing any of them:
+    // either the whole batch holds its locks or none. A file already locked by
+    // another process fails the batch instead of interleaving writes.
     for (auto& [relFile, state] : fileCache) {
         if (!state.dirty) continue;
-        fs::path full;
-        std::error_code ec2;
-        if (!safeResolve(baseDir, relFile, full)) { writeFailed = true; break; }
-        if (state.existedOnDisk && !state.backupDone) {
-            backupFile(baseDir, relFile, state.originalContent);
-            state.backupDone = true;
-        }
-        fs::create_directories(full.parent_path(), ec2);
-        std::string finalContent = joinLines(state.lines);
-        Json fentry = Json::Obj();
-        fentry.set("f", Json::Str(relFile));
-        if (!writeFileAll(full.string(), finalContent)) {
-            writeFailed = true;
-            for (auto& r : results.arr) {
-                if (r.getStr2("f","") == relFile && r.getStr2("st","") == "ok") {
-                    r.set("st", Json::Str("fail"));
-                    r.set("r", Json::Str("write failed"));
+        std::string lockErr;
+        locks.emplace_back();
+        if (!acquireFileLock(baseDir, relFile, locks.back(), lockErr)) {
+            locks.pop_back();
+            for (auto& rr : results.arr) {
+                if (rr.getStr2("f", "") == relFile && rr.getStr2("st", "") == "ok") {
+                    rr.set("st", Json::Str("fail"));
+                    rr.set("r", Json::Str(lockErr));
                 }
             }
-            fentry.set("written", Json::Bool(false));
-            filesSummary.arr.push_back(fentry);
-            if (atomic) break; else continue;
+            writeFailed = true;
+            break;
         }
-        written.push_back({relFile, &state});
-        fentry.set("written", Json::Bool(true));
-        fentry.set("chk", Json::Str(fnv1a64Hex(finalContent)));
-        fentry.set("lines", Json::Num((double)state.lines.size()));
-        fentry.set("bytes", Json::Num((double)finalContent.size()));
-        filesSummary.arr.push_back(fentry);
+    }
+    if (!writeFailed) {
+        for (auto& [relFile, state] : fileCache) {
+            if (!state.dirty) continue;
+            fs::path full;
+            std::error_code ec2;
+            if (!safeResolve(baseDir, relFile, full)) { writeFailed = true; break; }
+            Json fentry = Json::Obj();
+            fentry.set("f", Json::Str(relFile));
+            if (state.existedOnDisk && !state.backupDone) {
+                if (!backupFile(baseDir, relFile, state.originalContent)) {
+                    fentry.set("warn", Json::Str("backup snapshot failed; undo may not cover this change"));
+                }
+                state.backupDone = true;
+            }
+            fs::create_directories(full.parent_path(), ec2);
+            std::string finalContent = joinLines(state.lines);
+            if (!writeFileAll(full.string(), finalContent)) {
+                writeFailed = true;
+                for (auto& r : results.arr) {
+                    if (r.getStr2("f","") == relFile && r.getStr2("st","") == "ok") {
+                        r.set("st", Json::Str("fail"));
+                        r.set("r", Json::Str("write failed"));
+                    }
+                }
+                fentry.set("written", Json::Bool(false));
+                filesSummary.arr.push_back(fentry);
+                if (atomic) break; else continue;
+            }
+            written.push_back({relFile, &state});
+            auditAppend(baseDir, "edit", relFile, (long)finalContent.size(), fnv1a64Hex(finalContent));
+            fentry.set("written", Json::Bool(true));
+            fentry.set("chk", Json::Str(fnv1a64Hex(finalContent)));
+            fentry.set("lines", Json::Num((double)state.lines.size()));
+            fentry.set("bytes", Json::Num((double)finalContent.size()));
+            filesSummary.arr.push_back(fentry);
+        }
     }
 
     if (writeFailed && atomic) {
@@ -2577,12 +2686,13 @@ Json toolUndo(const Json& args, const fs::path& baseDir) {
     std::string restoredContent = readFileAll(backups[(size_t)n - 1].path.string());
     // Snapshot current (pre-undo) state too, so undo is itself undoable: calling
     // undo again with n=1 restores what we're about to overwrite right now.
-    backupFile(baseDir, relFile, currentContent);
+    bool undoBackupOk = backupFile(baseDir, relFile, currentContent);
     fs::create_directories(full.parent_path(), ec);
     bool ok = writeFileAll(full.string(), restoredContent);
     Json r = Json::Obj();
     r.set("f", Json::Str(relFile));
     r.set("st", Json::Str(ok ? "ok" : "fail"));
+    if (!undoBackupOk) r.set("warn", Json::Str("pre-undo snapshot failed; this undo is not redoable"));
     if (!ok) {
         r.set("r", Json::Str("write failed"));
     } else {
@@ -2662,7 +2772,9 @@ Json toolCreateFile(const Json& args, const fs::path& baseDir) {
             continue;
         }
         if (existed && overwrite) {
-            backupFile(baseDir, relFile, readFileAll(full.string()));
+            if (!backupFile(baseDir, relFile, readFileAll(full.string()))) {
+                entry.set("warn", Json::Str("backup snapshot failed; undo may not cover this overwrite"));
+            }
         }
         fs::create_directories(full.parent_path(), ec);
         bool ok = writeFileAll(full.string(), content);
@@ -2838,7 +2950,7 @@ Json toolCut(const Json& args, const fs::path& baseDir) {
         if (insertPos > (long)finalLines.size()) insertPos = (long)finalLines.size();
         finalLines.insert(finalLines.begin() + insertPos, cutLines.begin(), cutLines.end());
         std::string finalContent = joinLines(finalLines);
-        backupFile(baseDir, relFile, srcOriginal);
+        if (!backupFile(baseDir, relFile, srcOriginal)) r.set("warn", Json::Str("backup snapshot failed; undo may not cover this change"));
         if (!writeFileAll(fullSrc.string(), finalContent)) { r.set("err", Json::Str("write failed")); return r; }
         Json entry = Json::Obj();
         entry.set("f", Json::Str(relFile));
@@ -2874,7 +2986,7 @@ Json toolCut(const Json& args, const fs::path& baseDir) {
         finalDstContent = joinLines(dstLines);
     }
 
-    if (dstExisted) backupFile(baseDir, relTo, dstOriginal);
+    if (dstExisted && !backupFile(baseDir, relTo, dstOriginal)) r.set("warn", Json::Str("backup snapshot failed; undo may not cover the destination"));
     fs::create_directories(fullDst.parent_path(), ec);
     if (!writeFileAll(fullDst.string(), finalDstContent)) { r.set("err", Json::Str("write to destination failed")); return r; }
 
@@ -2891,7 +3003,7 @@ Json toolCut(const Json& args, const fs::path& baseDir) {
     if (!keep) {
         srcLines.erase(srcLines.begin() + (startLine - 1), srcLines.begin() + endLine);
         std::string finalSrcContent = joinLines(srcLines);
-        backupFile(baseDir, relFile, srcOriginal);
+        if (!backupFile(baseDir, relFile, srcOriginal)) r.set("warn", Json::Str("backup snapshot failed; undo may not cover the source"));
         if (!writeFileAll(fullSrc.string(), finalSrcContent)) { r.set("err", Json::Str("cut destination written, but source rewrite failed (source unchanged)")); return r; }
         srcEntry.set("chk", Json::Str(fnv1a64Hex(finalSrcContent)));
         srcEntry.set("lines", Json::Num((double)srcLines.size()));
@@ -3142,7 +3254,9 @@ Json toolFileOps(const Json& args, const fs::path& baseDir) {
                 entry.set("st", Json::Str("fail")); entry.set("r", Json::Str("is a directory (r:true to remove recursively)"));
                 results.arr.push_back(entry); continue;
             }
-            if (!isDir) backupFile(baseDir, relFile, readFileAll(full.string()));
+            if (!isDir && !backupFile(baseDir, relFile, readFileAll(full.string()))) {
+                entry.set("warn", Json::Str("backup snapshot failed; this delete is not undoable"));
+            }
             uintmax_t n = isDir ? fs::remove_all(full, ec) : (fs::remove(full, ec) ? 1 : 0);
             entry.set("st", Json::Str(!ec ? "ok" : "fail"));
             if (ec) entry.set("r", Json::Str(ec.message()));
@@ -3166,7 +3280,9 @@ Json toolFileOps(const Json& args, const fs::path& baseDir) {
             if (!fs::exists(full, ec)) { entry.set("st", Json::Str("fail")); entry.set("r", Json::Str("source not found")); results.arr.push_back(entry); continue; }
             bool toExisted = fs::exists(fullTo, ec);
             if (toExisted && !overwrite) { entry.set("st", Json::Str("fail")); entry.set("r", Json::Str("destination exists (ow:true to replace)")); results.arr.push_back(entry); continue; }
-            if (toExisted && !fs::is_directory(fullTo, ec)) backupFile(baseDir, relTo, readFileAll(fullTo.string()));
+            if (toExisted && !fs::is_directory(fullTo, ec) && !backupFile(baseDir, relTo, readFileAll(fullTo.string()))) {
+                entry.set("warn", Json::Str("backup snapshot failed; undo may not cover the overwritten destination"));
+            }
             fs::create_directories(fullTo.parent_path(), ec);
             entry.set("to", Json::Str(relTo));
             if (op == "copy" || op == "cp") {
