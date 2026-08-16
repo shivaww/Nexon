@@ -29,6 +29,19 @@ class SlashCommandCallbacks {
 }
 
 class SlashCommandService {
+  /// Whether agentic file access is enabled; gates /new, /list, /save.
+  static bool agenticAccessEnabled = true;
+
+  static const Set<String> _agenticOnly = <String>{'/new', '/list', '/save'};
+
+  /// Catalog filtered by current agentic access for autocomplete and /help.
+  static List<String> availableCatalog() {
+    if (agenticAccessEnabled) return commandCatalog;
+    return commandCatalog
+        .where((c) => !_agenticOnly.contains(c.split(' ').first))
+        .toList(growable: false);
+  }
+
   static const List<String> commandCatalog = <String>[
     '/new [title]',
     '/list',
@@ -48,7 +61,7 @@ class SlashCommandService {
   static List<String> filterCommands(String input) {
     if (!input.trimLeft().startsWith('/')) return const <String>[];
     final needle = input.trim().toLowerCase();
-    return commandCatalog
+    return availableCatalog()
         .where((cmd) => cmd.toLowerCase().startsWith(needle))
         .toList(growable: false);
   }
@@ -62,6 +75,14 @@ class SlashCommandService {
     final parts = trimmed.split(RegExp(r'\s+'));
     final command = parts.first.toLowerCase();
     final args = parts.length > 1 ? parts.sublist(1) : const <String>[];
+
+    if (!agenticAccessEnabled && _agenticOnly.contains(command)) {
+      await callbacks.showSystemMessage(
+        '$command is only available when Agentic File Access is enabled. '
+        'Turn it on in Input & Settings → Features.',
+      );
+      return;
+    }
 
     String output;
     switch (command) {
@@ -121,7 +142,7 @@ class SlashCommandService {
         output = await callbacks.clearCurrent();
         break;
       case '/help':
-        output = 'Slash commands:\n${commandCatalog.map((c) => '- $c').join('\n')}';
+        output = 'Slash commands:\n${availableCatalog().map((c) => '- $c').join('\n')}';
         break;
       default:
         output = 'Unknown slash command: $command';

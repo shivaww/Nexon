@@ -1883,6 +1883,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _customMcpUrl = customMcpUrlRaw ?? '';
       _deepResearchEnabled = deepResearchRaw ?? false;
       _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
+      SlashCommandService.agenticAccessEnabled = _agenticEnabled;
       _writerContextBudget = writerContextBudgetRaw ?? 32000;
       _customProviders = loadedCustom;
       if (effectiveSelected != null &&
@@ -7045,6 +7046,7 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           onAgenticEnabledChanged: (val) async {
             setState(() {
               _agenticEnabled = val;
+              SlashCommandService.agenticAccessEnabled = val;
             });
             await _saveSettings();
           },
