@@ -2194,9 +2194,21 @@ def append_file_rich(
     if existed and p.is_file():
         lines_before = len(_read_lines_safe(p, encoding))
 
+    # Auto-newline: never merge appended content into the previous line.
+    separator = ""
+    if existed and p.is_file():
+        try:
+            with open(str(p), "rb") as f:
+                f.seek(0, os.SEEK_END)
+                if f.tell() > 0:
+                    f.seek(-1, os.SEEK_CUR)
+                    if f.read(1) not in (b"\n", b"\r"):
+                        separator = "\n"
+        except OSError:
+            pass
     if dry_run:
         old = p.read_text(encoding=encoding, errors="replace") if existed and p.is_file() else ""
-        new = old + content
+        new = old + separator + content
         diff_text = "".join(list(difflib.unified_diff(
             old.splitlines(keepends=True),
             new.splitlines(keepends=True),
@@ -2211,7 +2223,7 @@ def append_file_rich(
         }
 
     with open(str(p), "a", encoding=encoding) as f:
-        f.write(content)
+        f.write(separator + content)
         f.flush()
         os.fsync(f.fileno())
 

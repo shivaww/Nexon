@@ -181,8 +181,45 @@ class TermuxForgeBridge:
         # Router
         self.router = MethodRouter()
         self._register_methods()
+        self._register_hybrid_registry_tools()
 
     # ── Method registration ───────────────────────────────────────────
+
+    def _register_hybrid_registry_tools(self) -> None:
+        """Expose every hybrid registry tool as a JSON-RPC method.
+
+        Explicit registrations in _register_methods() take precedence;
+        this loop only fills the gaps so canonical names like
+        patch_file_rich / tree_rich / find_files / list_trash are always
+        routable alongside their short aliases.
+        """
+        import inspect as _inspect
+
+        _drop = {"cwd", "auto_checkpoint", "server"}
+        for tool in self.hybrid.list_tools():
+            name = tool["name"]
+            if self.router.has_method(name):
+                continue
+            handler = self.hybrid.get_handler(name)
+            if handler is None:
+                continue  # e.g. search_rich — async, registered separately
+            if _inspect.iscoroutinefunction(handler):
+                self.router.register(name, handler)
+                continue
+
+            async def _wrapped(_h=handler, _name=name, **kw):
+                kw = {k: v for k, v in kw.items() if k not in _drop}
+                try:
+                    return await asyncio.to_thread(_h, **kw)
+                except TypeError as exc:
+                    return {
+                        "stdout": f"ERROR: {_name}: {exc}",
+                        "error": str(exc),
+                        "exitCode": 1,
+                        "success": False,
+                    }
+
+            self.router.register(name, _wrapped)
 
     def _register_methods(self) -> None:
         """Register all JSON-RPC method handlers."""
