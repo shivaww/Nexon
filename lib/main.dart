@@ -2592,6 +2592,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
   <tool_request><method>symbol_references</method><symbol>MyClass</symbol><path>/projects/myapp/src</path></tool_request>
 • tree: List project structure.
   <tool_request><method>tree</method><path>/projects/myapp</path><max_depth>3</max_depth></tool_request>
+• find_files: <tool_request><method>find_files</method><pattern>*.dart</pattern><path>/projects/myapp</path><max_results>100</max_results></tool_request> (glob file names)
+• symbol_search: <tool_request><method>symbol_search</method><symbol>MyClass</symbol><path>/projects/myapp/src</path></tool_request> (locate definitions across files)
 
 ── EDIT & CREATE ──
 • patch_file: Multi search-and-replace, atomic, outputs unified diff. The tool request and all parameter tags are XML; the VALUE inside `<patches>` MUST be a valid JSON array because this parameter is a list of patch objects. Each item has string `search` and `replace`, plus optional integer `count` (0 = all matches) and `label`. Escape newlines inside the JSON strings as `\n`; search text must EXACTLY match, including whitespace. If any item fails, NO changes are written.
@@ -3590,6 +3592,9 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
             'tree',
             'tree_rich',
             'multi_read_rich',
+            'find_files',
+            'symbol_search',
+            'symbol_references',
             'workspace_list',
             'workspace_search',
             'workspace_read_page',
@@ -3906,6 +3911,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
       'file_info': 'stat_path',
       'file_delete': 'delete_path',
       'dir_create': 'mkdir_path',
+      'glob': 'find_files',
+      'find': 'find_files',
     };
     return aliases[method] ?? method;
   }
@@ -4023,6 +4030,18 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
     }
     if (!RegExp(r'^[a-z][a-z0-9_.]*$').hasMatch(method)) {
       return 'invalid tool method name: "$method"';
+    }
+    final reads = params['reads'];
+    if (reads != null && reads is! List) {
+      if (reads is String) {
+        try {
+          final decodedReads = jsonDecode(reads.trim());
+          if (decodedReads is List) params['reads'] = decodedReads;
+        } catch (_) {}
+      }
+      if (params['reads'] is! List) {
+        return '"reads" must be a JSON array of {path, start_line, end_line}';
+      }
     }
     final patches = params['patches'];
     if (patches != null && patches is! List) {
@@ -4792,6 +4811,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
         return '📁 Creating dir ${shortPath(p('path'))}';
       case 'find_paths':
         return '🔎 Finding paths matching: ${p('pattern')}';
+      case 'find_files':
+        return '🔎 Finding: ${p('pattern')} in ${shortPath(p('path'))}';
       case 'symbol_search':
         return '🔎 Symbol search: ${p('symbol')}';
       case 'file_info':
@@ -8465,6 +8486,20 @@ class _McpToolBlockState extends State<McpToolBlock> {
           const Color(0xFF475569),
           'Tool reference',
           null,
+        );
+      case 'find_files':
+        return (
+          Icons.manage_search_outlined,
+          const Color(0xFFD97706),
+          'Find  ${p('pattern')}',
+          shortPath(p('path')),
+        );
+      case 'symbol_search':
+        return (
+          Icons.travel_explore_outlined,
+          const Color(0xFF7C3AED),
+          'Symbol search  ${p('symbol')}',
+          shortPath(p('path')),
         );
       case 'file_edit':
         {

@@ -1007,7 +1007,10 @@ def read_file_rich(
             was_truncated=True,
         )
 
-    # Clamp range
+    # Clamp range (coerce string params coming from XML tool calls)
+    start_line = max(1, _to_int(start_line, 1))
+    end_line = _to_int(end_line, 0) or None
+    max_lines = _to_int(max_lines, DEFAULT_MAX_LINES)
     start_line = max(1, start_line)
     if end_line is None:
         end_line = start_line + max_lines - 1
@@ -1069,6 +1072,9 @@ def read_file_rich(
     )
 
     age_line = f"  Modified: {_age_str(mtime)}"
+    ctx = _enclosing_context(p, start_line, encoding)
+    if ctx:
+        age_line += "\n  Context: " + " › ".join(ctx)
 
     parts = [header, age_line, OutputRenderer._divider(), body, OutputRenderer._divider()]
 
@@ -1421,6 +1427,7 @@ def patch_file_rich(
 
     content = original
     applied = 0
+    fuzzy_notes = 0
     failed: list[str] = []
 
     for i, spec in enumerate(patches):
@@ -1447,6 +1454,14 @@ def patch_file_rich(
             failed.append(f"{label}: count must be zero or a positive integer")
             continue
 
+        if search_text not in content:
+            # Whitespace-tolerant fallback (unique matches only).
+            span = _fuzzy_span(content, search_text)
+            if span is not None:
+                content = content[: span[0]] + replace_text + content[span[1] :]
+                applied += 1
+                fuzzy_notes += 1
+                continue
         if search_text not in content:
             # Provide diagnostic hints for common mismatch causes
             hint = ""
@@ -1572,6 +1587,10 @@ def patch_file_rich(
     )
     parts = [header]
     parts.append(f"  ✓ {applied} patch(es) applied  │  {len(failed)} failed")
+    if fuzzy_notes:
+        parts.append(
+            f"  ≈ {fuzzy_notes} patch(es) applied via whitespace-tolerant match"
+        )
 
     if failed:
         parts.append(f"\n  ✗ FAILED PATCHES:")
@@ -1946,8 +1965,8 @@ async def search_files_rich(
     for line in raw_lines[:max_matches * 3]:  # read extra, parse up to limit
         # ripgrep: file:line:content  or  file-line-content (context)
         # grep: file:line:content
-        m = re.match(r"^([^:\-]+)[:\-](\d+)[:\-](.*)$", line)
-        if m and ":" in line:
+        m = re.match(r"^(.+?):(\d+):(.*)$", line)
+        if m:
             matches.append({
                 "file": m.group(1),
                 "line": int(m.group(2)),
@@ -2816,6 +2835,226 @@ def stat_path_rich(
     }
 
 
+def _to_int(value: Any, default: int) -> int:
+    """Coerce LLM-supplied params (often XML strings) to int safely."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _walk_files(
+    root: Path,
+    max_files: int = 20000,
+    extensions: list[str] | None = None,
+) -> list[Path]:
+    """Collect text files under [root], skipping noise dirs, capped."""
+    ext_set = (
+        frozenset(f".{e.lstrip('.')}" for e in extensions) if extensions else None
+    )
+    out: list[Path] = []
+    for cur, dirs, files in os.walk(root.expanduser()):
+        dirs[:] = [d for d in dirs if d not in EXTRA_SKIP_DIRS and not d.startswith(".")]
+        for name in sorted(files):
+            p = Path(cur) / name
+            if ext_set is not None and p.suffix.lower() not in ext_set:
+                continue
+            out.append(p)
+            if len(out) >= max_files:
+                return out
+    return out
+
+
+def _fuzzy_span(content: str, search_text: str) -> tuple[int, int] | None:
+    """
+    Whitespace-tolerant fallback matcher for patch_file_rich.
+    Tolerates per-line trailing whitespace and CRLF/LF differences while
+    keeping the core text exact. Returns the span only when the match is
+    unique — ambiguous fuzzy matches are refused.
+    """
+    core_lines = [
+        ln.strip()
+        for ln in search_text.replace("\r\n", "\n").split("\n")
+        if ln.strip()
+    ]
+    if not core_lines:
+        return None
+    parts = [r"[ \t]*" + re.escape(ln) + r"[ \t]*" for ln in core_lines]
+    try:
+        rx = re.compile(r"\r?\n".join(parts))
+    except re.error:
+        return None
+    first = rx.search(content)
+    if not first:
+        return None
+    if rx.search(content, first.end()):
+        return None  # ambiguous — refuse fuzzy match
+    return first.span()
+
+
+def _enclosing_context(path: Path, start_line: int, encoding: str = "utf-8") -> list[str]:
+    """Last outline symbols at/above [start_line] — a navigation aid."""
+    patterns = _OUTLINE_PATTERNS.get(path.suffix.lower(), [])
+    if not patterns or start_line <= 1:
+        return []
+    try:
+        stack: list[str] = []
+        with open(path, encoding=encoding, errors="replace") as f:
+            for line_no, line in enumerate(f, start=1):
+                if line_no > start_line:
+                    break
+                for kind, pattern in patterns:
+                    m = pattern.match(line)
+                    if m:
+                        stack.append(f"{kind} {m.group(1)} (L{line_no})")
+                        break
+        return stack[-2:]
+    except OSError:
+        return []
+
+
+def find_files_rich(
+    pattern: str,
+    path: str = HOME,
+    max_results: int = 100,
+    workspace_dir: str = "",
+) -> dict[str, Any]:
+    """Glob-search file names under [path] (fnmatch on name and rel path)."""
+    import fnmatch
+
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
+    base = Path(path).expanduser()
+    if not base.is_dir():
+        return {
+            "stdout": f"ERROR: Not a directory: {path}",
+            "error": "Not a directory",
+            "path": str(base),
+            "exitCode": 1,
+            "success": False,
+        }
+    hits: list[dict[str, Any]] = []
+    for p in _walk_files(base):
+        rel = str(p.relative_to(base))
+        if fnmatch.fnmatch(p.name, pattern) or fnmatch.fnmatch(rel, pattern):
+            try:
+                s = p.stat()
+                hits.append({"path": str(p), "rel": rel, "size": s.st_size, "mtime": s.st_mtime})
+            except OSError:
+                continue
+            if len(hits) >= max_results:
+                break
+    header = OutputRenderer.tool_header(
+        f"FIND: {pattern}",
+        f"In: {_rel_path(str(base))}  │  {len(hits)} match(es)",
+    )
+    body = (
+        "\n".join(
+            f"  {_rel_path(h['path'])}  [{_human_size(h['size'])}, {_age_str(h['mtime'])}]"
+            for h in hits
+        )
+        if hits
+        else "  (No files matched the pattern)"
+    )
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+    return {"stdout": block, "matches": hits, "count": len(hits), "exitCode": 0, "success": True}
+
+
+def symbol_search_rich(
+    symbol: str,
+    path: str = HOME,
+    max_results: int = 50,
+    workspace_dir: str = "",
+) -> dict[str, Any]:
+    """Locate definitions of [symbol] across supported source files."""
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
+    base = Path(path).expanduser()
+    needle = symbol.strip()
+    exact: list[dict[str, Any]] = []
+    partial: list[dict[str, Any]] = []
+    for p in _walk_files(base, extensions=list(_OUTLINE_PATTERNS.keys())):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for line_no, line in enumerate(f, start=1):
+                    for kind, pattern in _OUTLINE_PATTERNS.get(p.suffix.lower(), []):
+                        m = pattern.match(line)
+                        if not m:
+                            continue
+                        name = m.group(1)
+                        if name == needle:
+                            exact.append({"file": str(p), "line": line_no, "kind": kind, "snippet": line.rstrip()[:90]})
+                        elif needle and needle.lower() in name.lower():
+                            partial.append({"file": str(p), "line": line_no, "kind": kind, "snippet": line.rstrip()[:90]})
+                        break
+        except OSError:
+            continue
+        if len(exact) >= max_results:
+            break
+    results = exact or partial[:max_results]
+    header = OutputRenderer.tool_header(
+        f"SYMBOL SEARCH: {needle}",
+        f"{len(exact)} exact  │  {len(partial)} partial  │  In: {_rel_path(str(base))}",
+    )
+    body = (
+        "\n".join(
+            f"  {r['kind']:>9}  L{r['line']:<6} {_rel_path(r['file'])}\n             {r['snippet']}"
+            for r in results[:max_results]
+        )
+        if results
+        else "  (No definitions found. Try search_rich for free-text usage.)"
+    )
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+    return {"stdout": block, "matches": results, "count": len(results), "exact": len(exact), "exitCode": 0, "success": True}
+
+
+def symbol_references_rich(
+    symbol: str,
+    path: str = HOME,
+    max_matches: int = 100,
+    workspace_dir: str = "",
+) -> dict[str, Any]:
+    """Find word-boundary references of [symbol] across text files."""
+    if not _is_safe(path, workspace_dir):
+        return _unsafe_error(path)
+    base = Path(path).expanduser()
+    try:
+        rx = re.compile(rf"\b{re.escape(symbol.strip())}\b")
+    except re.error:
+        return {"stdout": f"ERROR: Invalid symbol: {symbol}", "exitCode": 1, "success": False, "error": "Invalid symbol"}
+    matches: list[dict[str, Any]] = []
+    for p in _walk_files(base):
+        if _is_binary_file(p):
+            continue
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for line_no, line in enumerate(f, start=1):
+                    if rx.search(line):
+                        matches.append({"file": str(p), "line": line_no, "content": line.rstrip()[:100]})
+                        if len(matches) >= max_matches:
+                            break
+        except OSError:
+            continue
+        if len(matches) >= max_matches:
+            break
+    header = OutputRenderer.tool_header(
+        f"REFERENCES: {symbol.strip()}",
+        f"{len(matches)} match(es)  │  In: {_rel_path(str(base))}",
+    )
+    if matches:
+        by_file: dict[str, list[dict]] = {}
+        for m in matches:
+            by_file.setdefault(m["file"], []).append(m)
+        body = "\n".join(
+            f"  📄 {_rel_path(fp)} ({len(ms)} hit(s))\n" + "\n".join(f"    L{m['line']:>5}: {m['content']}" for m in ms[:10])
+            for fp, ms in list(by_file.items())[:30]
+        )
+    else:
+        body = "  (No references found)"
+    block = f"{header}\n{OutputRenderer._divider()}\n{body}\n{OutputRenderer._divider()}"
+    return {"stdout": block, "matches": matches, "count": len(matches), "exitCode": 0, "success": True}
+
+
 def chmod_path_rich(
     path: str,
     mode: str,
@@ -3192,6 +3431,36 @@ def build_registry(executor, security) -> HybridToolRegistry:
         {
             "name": "str — trash entry name shown by list_trash",
             "dest": "str (opt) — override restore destination",
+        },
+    )
+    reg.register(
+        "find_files",
+        lambda **kw: find_files_rich(**kw),
+        "Glob-search file names under a path (fnmatch on name and relative path)",
+        {
+            "pattern": "str — glob pattern, e.g. '*.dart' or 'src/*_test.py'",
+            "path": "str (opt, default $HOME) — root directory",
+            "max_results": "int (opt, default 100)",
+        },
+    )
+    reg.register(
+        "symbol_search",
+        lambda **kw: symbol_search_rich(**kw),
+        "Locate class/function/method definitions of a symbol across source files",
+        {
+            "symbol": "str — definition name to locate",
+            "path": "str (opt, default $HOME) — root directory",
+            "max_results": "int (opt, default 50)",
+        },
+    )
+    reg.register(
+        "symbol_references",
+        lambda **kw: symbol_references_rich(**kw),
+        "Find word-boundary references of a symbol across text files",
+        {
+            "symbol": "str — symbol name",
+            "path": "str (opt, default $HOME) — root directory",
+            "max_matches": "int (opt, default 100)",
         },
     )
 
