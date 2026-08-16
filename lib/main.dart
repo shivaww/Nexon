@@ -2615,6 +2615,37 @@ Every tool call is ONE fenced ```json code block:
 • After emitting a block you MUST stop and wait for its result. Never assume results. Never emit a fallback call in the same reply.
 • RELATIVE PATHS ONLY: "lib/main.dart" — never absolute paths, never "../". The bridge refuses them.
 
+━━ EXAMPLES — HOW TO USE THE TOOLS ━━
+A block is emitted COMPLETE, then you STOP. All calls inside one block run together in ONE GO, and their results come back together. Only AFTER every result has arrived may you emit the next block.
+
+EXAMPLE 1 — explore before editing (independent read-only calls → batch them):
+```json
+{"calls": [
+  {"t": "outline", "a": {"f": "lib/main.dart"}},
+  {"t": "search", "a": {"q": ["_saveSessions"], "paths": ["lib"], "ctx": 2}},
+  {"t": "read", "a": {"r": [{"f": "lib/main.dart", "s": 100, "e": 160}]}}
+]}
+```
+→ STOP here. Wait for all three results. Then plan the edit.
+
+EXAMPLE 2 — a mutation is ALWAYS a single call, alone in its block:
+```json
+{"t": "patch", "a": {"p": [{"f": "lib/main.dart", "o": "exact old text", "n": "replacement text"}]}}
+```
+→ STOP. Wait for the result. On "not found" or "ambiguous": re-read that exact range, fix `o` (whitespace matters) or pass `occ`, and retry. Never fall back to rewriting the whole file.
+
+EXAMPLE 3 — verify after a mutation (read-only → batch again):
+```json
+{"calls": [
+  {"t": "read", "a": {"r": [{"f": "lib/main.dart", "s": 95, "e": 135}]}},
+  {"t": "diagnostics", "a": {"cmd": "dart analyze", "to": 60}}
+]}
+```
+→ STOP. Wait. Then report the outcome.
+
+THE RHYTHM: batch read-only calls → WAIT → ONE mutation → WAIT → batch verification → WAIT → answer.
+ABSOLUTELY NEVER: emit a second block before the previous results arrived · guess or simulate a result · add fallback calls "in case" the first fails · mix a mutation into a batch.
+
 ━━ CORE RULES ━━
 1. WAIT FOR OUTPUT, THEN PROCEED: the next call may only appear in a NEW reply AFTER you have actually seen the previous result.
 2. ONE STEP PER TURN: read → WAIT → edit → WAIT → verify. Never skip the waiting step.
