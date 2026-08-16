@@ -2086,8 +2086,11 @@ jobs:
 
   Future<void> _openProviderSheet([String? providerId]) async {
     final provider = _resolveProvider(providerId ?? _selectedProviderId);
-    final current =
-        _settings[provider.id] ?? ProviderSettings.defaults(provider);
+    // 'custom' is create-mode: always start from a clean blank form so a
+    // new provider never inherits a previously saved key/base URL.
+    final current = provider.id == 'custom'
+        ? ProviderSettings.defaults(provider)
+        : _settings[provider.id] ?? ProviderSettings.defaults(provider);
     final result = await showModalBottomSheet<ProviderSheetResult>(
       context: context,
       isScrollControlled: true,
