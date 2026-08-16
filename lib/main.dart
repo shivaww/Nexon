@@ -4540,45 +4540,6 @@ NEVER read an entire large file blindly:
     }
   }
 
-  /// Returns the tool name when the text contains a fenced ```json tool
-  /// block ({"t": ...}), else null. Drives the streaming avatar state.
-  String? _detectNativeToolCall(String text) {
-    if (!text.contains('```')) return null;
-    final m = RegExp(r'"t"\s*:\s*"([a-z_][a-zA-Z0-9_]*)"').firstMatch(text);
-    return m?.group(1);
-  }
-
-  /// Locate the first fenced ```json block in [text] whose content parses as
-  /// a native tool call ({"t":...} or {"calls":[...]}). Returns null when no
-  /// tool fence exists (plain code fences are skipped). Offsets are relative
-  /// to [text].
-  _NativeToolFence? _findNativeToolFence(String text) {
-    int searchFrom = 0;
-    while (true) {
-      final openIdx = text.indexOf('```json', searchFrom);
-      if (openIdx == -1) return null;
-      final contentStart = text.indexOf('\n', openIdx);
-      if (contentStart == -1) return null;
-      final closeIdx = text.indexOf('```', contentStart + 1);
-      if (closeIdx == -1) return null; // unclosed while streaming — leave as text
-      final inner = text.substring(contentStart + 1, closeIdx).trim();
-      Map<String, dynamic>? parsed;
-      try {
-        final dynamic decoded = jsonDecode(inner);
-        if (decoded is Map<String, dynamic> &&
-            (decoded['t'] != null || decoded['calls'] is List)) {
-          parsed = decoded;
-        }
-      } catch (_) {
-        parsed = null;
-      }
-      if (parsed != null) {
-        return _NativeToolFence(openIdx, closeIdx + 3, parsed);
-      }
-      searchFrom = closeIdx + 3; // plain JSON example — keep scanning
-    }
-  }
-
   // ── Native JSON tool-call extraction & routing helpers ──────────────────
   // The JSON-format prompt emits fenced ```json blocks containing either a
   // single call {"t": "tool", "a": {...}} or a batch {"calls": [...]}.
@@ -20898,6 +20859,46 @@ void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
   params
     ..clear()
     ..addAll(resolved);
+}
+
+/// Returns the tool name when the text contains a fenced ```json tool
+/// block ({"t": ...}), else null. Drives the streaming avatar state.
+/// Top-level (not a class method): called from ChatSurface and MessageBubble.
+String? _detectNativeToolCall(String text) {
+  if (!text.contains('```')) return null;
+  final m = RegExp(r'"t"\s*:\s*"([a-z_][a-zA-Z0-9_]*)"').firstMatch(text);
+  return m?.group(1);
+}
+
+/// Locate the first fenced ```json block in [text] whose content parses as
+/// a native tool call ({"t":...} or {"calls":[...]}). Returns null when no
+/// tool fence exists (plain code fences are skipped). Offsets are relative
+/// to [text]. Top-level: called from MessageBubble's rich-content parser.
+_NativeToolFence? _findNativeToolFence(String text) {
+  int searchFrom = 0;
+  while (true) {
+    final openIdx = text.indexOf('```json', searchFrom);
+    if (openIdx == -1) return null;
+    final contentStart = text.indexOf('\n', openIdx);
+    if (contentStart == -1) return null;
+    final closeIdx = text.indexOf('```', contentStart + 1);
+    if (closeIdx == -1) return null; // unclosed while streaming — leave as text
+    final inner = text.substring(contentStart + 1, closeIdx).trim();
+    Map<String, dynamic>? parsed;
+    try {
+      final dynamic decoded = jsonDecode(inner);
+      if (decoded is Map<String, dynamic> &&
+          (decoded['t'] != null || decoded['calls'] is List)) {
+        parsed = decoded;
+      }
+    } catch (_) {
+      parsed = null;
+    }
+    if (parsed != null) {
+      return _NativeToolFence(openIdx, closeIdx + 3, parsed);
+    }
+    searchFrom = closeIdx + 3; // plain JSON example — keep scanning
+  }
 }
 
 class _NativeToolFence {
