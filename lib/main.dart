@@ -7070,6 +7070,8 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           onRestoreCompleted: _loadSessions,
           provider: provider,
           customProviders: _customProviders,
+          allSettings: _settings,
+          modelCache: _modelCache,
           settings: settings,
           cachedModels: models,
           searchSettings: _searchSettings,
@@ -12666,6 +12668,8 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onRestoreCompleted,
     required this.provider,
     required this.customProviders,
+    required this.allSettings,
+    required this.modelCache,
     required this.settings,
     required this.cachedModels,
     required this.searchSettings,
@@ -12701,6 +12705,8 @@ class MediaAndModelSheet extends StatefulWidget {
 
   final ProviderDefinition provider;
   final List<ProviderDefinition> customProviders;
+  final Map<String, ProviderSettings> allSettings;
+  final Map<String, List<String>> modelCache;
   final ProviderSettings settings;
   final List<String> cachedModels;
   final SearchSettings searchSettings;
@@ -13673,9 +13679,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       (p) => p.id == _selectedProviderId,
       orElse: () => providerCatalog.first,
     );
-    final models = widget.cachedModels.isNotEmpty
-        ? widget.cachedModels
-        : currentProvider.models;
+    final selectedCache = widget.modelCache[_selectedProviderId];
+    final models = (selectedCache != null && selectedCache.isNotEmpty)
+        ? selectedCache
+        : (_selectedProviderId == widget.provider.id &&
+                  widget.cachedModels.isNotEmpty
+              ? widget.cachedModels
+              : currentProvider.models);
     final visionEnabled = modelHasVision(_selectedModel);
 
     return Container(
@@ -13833,7 +13843,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     if (val == null) return;
                     setState(() {
                       _selectedProviderId = val;
-                      _selectedModel = p.models.isNotEmpty ? p.models.first : '';
+                      final saved = widget.allSettings[val];
+                      _selectedModel =
+                          (saved != null && saved.model.trim().isNotEmpty)
+                          ? saved.model.trim()
+                          : (p.models.isNotEmpty ? p.models.first : '');
                     });
                     widget.onProviderChanged(val);
                   },
