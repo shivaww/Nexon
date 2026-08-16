@@ -28,6 +28,9 @@ nexon/
 │   ├── media_hooks.py            # AI image generation APIs integration
 │   ├── workflow_runner.py        # Process workflow step engines
 │   └── requirements.txt          # Production dependencies
+├── cpp_bridge/                   # Native C++ tool execution bridge (agentic fast path)
+│   ├── tools.cpp                 # Single-file JSON tool binary: file/shell/git ops, snapshots, sandbox
+│   └── py_tool.py                # Stateless Python shim (chmod/dart_format/read_url) for the py tool
 ├── test/                         # Unit and Widget tests directory
 ├── pubspec.yaml                  # Flutter package definition and assets configuration
 ├── analysis_options.yaml         # Dart static analysis configuration

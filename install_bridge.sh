@@ -11,6 +11,8 @@
 #    C-extension build no longer kills the whole install
 #  - smoke-tests `import termux_forge_bridge` at the end so build errors are
 #    caught at install time, not at first runtime use
+#  - compiles the native C++ tools bridge (tools.cpp) on-device and gates it
+#    on `tools --selftest` (a failing binary is removed, never left in place)
 # ============================================================================
 set -euo pipefail
 
@@ -43,11 +45,11 @@ retry() {
 echo "=== Nexon Environment Setup ==="
 
 # ── [1/5] System packages ──────────────────────────────────────────────
-echo "[1/5] Updating package indexes (required on fresh Termux)..."
+echo "[1/6] Updating package indexes (required on fresh Termux)..."
 pkg update -y || apt-get update -y || \
   echo "  -> index update failed; continuing with existing indexes."
 
-echo "[2/5] Installing system packages..."
+echo "[2/6] Installing system packages..."
 # clang/make/pkg-config/libffi/openssl: compile C extensions (psutil) on-device.
 # ripgrep: fast search backend. poppler: PDF tooling.
 retry 3 "system package install" pkg install -y \
@@ -60,14 +62,14 @@ pkg install -y dart 2>/dev/null || \
 pkg install -y gh 2>/dev/null || \
   echo "  -> gh not installed (github_hooks workflow/release tools need it later)."
 
-# ── [3/5] Bridge source (GitHub first, local checkout fallback) ────────
-echo "[3/5] Fetching latest python_bridge..."
+# ── [3/6] Bridge sources (GitHub first, local checkout fallback) ───────
+echo "[3/6] Fetching bridge sources (Python + C++)..."
 TMP_CLONE="$(mktemp -d)"
 trap 'rm -rf "$TMP_CLONE"' EXIT
 
 SOURCE_DIR=""
 if git clone --depth 1 --filter=blob:none --sparse "$REPO_URL" "$TMP_CLONE" 2>/dev/null && \
-   git -C "$TMP_CLONE" sparse-checkout set python_bridge 2>/dev/null && \
+   git -C "$TMP_CLONE" sparse-checkout set python_bridge cpp_bridge 2>/dev/null && \
    [ -f "$TMP_CLONE/python_bridge/requirements.txt" ]; then
   SOURCE_DIR="$TMP_CLONE/python_bridge"
 else
@@ -77,13 +79,27 @@ else
   SOURCE_DIR="$SCRIPT_DIR/python_bridge"
 fi
 
+# C++ bridge sources: prefer the clone, fall back to this checkout. Missing
+# sources degrade gracefully in step [6/6] (warning, no native tools)
+# instead of blocking the Python bridge install.
+CPP_SOURCE_DIR=""
+if [ -f "$TMP_CLONE/cpp_bridge/tools.cpp" ]; then
+  CPP_SOURCE_DIR="$TMP_CLONE/cpp_bridge"
+elif [ -f "$SCRIPT_DIR/cpp_bridge/tools.cpp" ]; then
+  CPP_SOURCE_DIR="$SCRIPT_DIR/cpp_bridge"
+fi
+
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 cp -a "$SOURCE_DIR/." "$TARGET_DIR/"
+if [ -n "$CPP_SOURCE_DIR" ]; then
+  cp "$CPP_SOURCE_DIR/tools.cpp" "$TARGET_DIR/tools.cpp"
+  cp "$CPP_SOURCE_DIR/py_tool.py" "$TARGET_DIR/py_tool.py"
+fi
 cd "$TARGET_DIR"
 
-# ── [4/5] Python version + pip bootstrap + dependencies ────────────────
-echo "[4/5] Checking Python and installing dependencies..."
+# ── [4/6] Python version + pip bootstrap + dependencies ────────────────
+echo "[4/6] Checking Python and installing dependencies..."
 python3 - <<'PY'
 import sys
 if sys.version_info < (3, 10):
@@ -112,8 +128,8 @@ if ! retry 2 "requirements.txt install" pip_install -q -r requirements.txt; then
   done < requirements.txt
 fi
 
-# ── [5/5] Verify modules + bridge import smoke test ────────────────────
-echo "[5/5] Verifying Python modules..."
+# ── [5/6] Verify modules + bridge import smoke test ────────────────────
+echo "[5/6] Verifying Python modules..."
 python3 - <<'PY'
 import importlib.util
 
@@ -142,7 +158,29 @@ if ! python3 -c "import termux_forge_bridge" 2>"$TARGET_DIR/.import_check.err"; 
 fi
 rm -f "$TARGET_DIR/.import_check.err"
 
-echo "=== Nexon Python Bridge environment ready! ==="
+# ── [6/6] Native C++ tools bridge (compile + selftest gate) ────────────
+echo "[6/6] Building native C++ tools bridge..."
+if [ ! -f "$TARGET_DIR/tools.cpp" ]; then
+  echo "  -> WARNING: cpp_bridge sources not found; agentic file tools will be unavailable."
+elif ! command -v clang++ >/dev/null 2>&1; then
+  echo "  -> WARNING: clang++ not installed; agentic file tools unavailable (fix: pkg install clang, re-run)."
+elif clang++ -O2 -std=c++17 "$TARGET_DIR/tools.cpp" -o "$TARGET_DIR/tools" 2>"$TARGET_DIR/.cpp_build.err"; then
+  chmod +x "$TARGET_DIR/tools"
+  echo "  -> Running tools --selftest install gate..."
+  if "$TARGET_DIR/tools" --selftest >/dev/null; then
+    echo "  -> Native tools bridge OK (selftest passed)."
+  else
+    rm -f "$TARGET_DIR/tools"
+    echo "  -> WARNING: tools --selftest FAILED; binary removed. Agentic file tools unavailable until a rebuild succeeds."
+  fi
+else
+  echo "  -> WARNING: C++ bridge compile failed. First lines of the build log:" >&2
+  head -25 "$TARGET_DIR/.cpp_build.err" >&2
+  echo "  -> Agentic file tools will be unavailable (fix the errors above and re-run)."
+fi
+rm -f "$TARGET_DIR/.cpp_build.err"
+
+echo "=== Nexon Bridge environment ready! ==="
 echo "All components have been successfully configured."
 echo "You can start the bridge server now by running:"
 echo "  cd ~/nexon_bridge && python3 mcp_server.py"
