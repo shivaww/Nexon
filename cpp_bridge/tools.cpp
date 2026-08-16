@@ -2558,6 +2558,8 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
                 size_t arrowPos = trimmed.find("=> ");
                 std::string sig = trim(trimmed.substr(0, arrowPos));
                 size_t parenPos = sig.find('(');
+                size_t dotPos = sig.find('.');
+                if (parenPos > 0 && dotPos != std::string::npos && dotPos < parenPos) continue; // chained call
                 if (parenPos > 0) entries.push_back({(long)(i+1), "func", sig});
                 continue;
             }
@@ -2585,6 +2587,8 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
                 if (sig.substr(0, 3) == "if " || sig.substr(0, 4) == "for " || sig.substr(0, 6) == "while " ||
                     sig.substr(0, 6) == "switch" || sig.substr(0, 4) == "else" || sig.substr(0, 5) == "catch") continue;
                 size_t parenPos = sig.find('(');
+                size_t dotPos = sig.find('.');
+                if (parenPos > 0 && dotPos != std::string::npos && dotPos < parenPos) continue; // chained call, not a definition
                 if (parenPos > 0) entries.push_back({(long)(i+1), "func", sig});
                 continue;
             }
@@ -2597,6 +2601,8 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
                         entries.push_back({(long)(i+1), "func", trimmed}); continue;
                     }
                     size_t parenPos = trimmed.find('(');
+                    size_t dotPos = trimmed.find('.');
+                    if (parenPos > 0 && dotPos != std::string::npos && dotPos < parenPos) continue; // chained call
                     if (parenPos > 0) entries.push_back({(long)(i+1), "func", trimmed});
                 }
             }
