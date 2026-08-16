@@ -2496,6 +2496,7 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
     bool isGo = (ext == ".go");
     bool isRust = (ext == ".rs");
     bool isJava = (ext == ".java" || ext == ".kt" || ext == ".scala");
+    bool isDart = (ext == ".dart");
     for (size_t i = 0; i < lines.size() && i < 50000; ++i) {
         std::string line = lines[i];
         std::string trimmed = trim(line);
@@ -2538,7 +2539,30 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
                 entries.push_back({(long)(i+1), "class", sig}); continue;
             }
         }
-        if (isCpp || isJava || isGo || isRust) {
+        if (isDart) {
+            // Dart type declarations beyond `class` (handled in the shared block)
+            if (trimmed.substr(0, 6) == "mixin " || trimmed.substr(0, 5) == "enum " ||
+                trimmed.substr(0, 10) == "extension " || trimmed.substr(0, 8) == "typedef ") {
+                size_t bracePos = trimmed.find('{');
+                size_t eqPos = trimmed.find('=');
+                size_t endPos = std::min(bracePos, eqPos);
+                std::string sig = (endPos != std::string::npos) ? trim(trimmed.substr(0, endPos)) : trimmed;
+                entries.push_back({(long)(i+1), "class", sig});
+                continue;
+            }
+            // Single-line expression-body methods: `Type name(args) => expr;`
+            if (trimmed.back() == ';' && trimmed.find('(') != std::string::npos &&
+                trimmed.find("=> ") != std::string::npos &&
+                trimmed.substr(0, 6) != "final " && trimmed.substr(0, 6) != "const " &&
+                trimmed.substr(0, 4) != "var " && trimmed.substr(0, 7) != "return ") {
+                size_t arrowPos = trimmed.find("=> ");
+                std::string sig = trim(trimmed.substr(0, arrowPos));
+                size_t parenPos = sig.find('(');
+                if (parenPos > 0) entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+        }
+        if (isCpp || isJava || isGo || isRust || isDart) {
             if (trimmed.find("struct ") != std::string::npos && trimmed.find("struct ") < 20) {
                 size_t bracePos = trimmed.find('{');
                 size_t parenPos = trimmed.find('(');
@@ -3406,7 +3430,7 @@ Json toolDiagnostics(const Json& args, const fs::path& baseDir) {
 Json toolVersion(const Json&, const fs::path&) {
     Json r = Json::Obj();
     r.set("name", Json::Str("tools"));
-    r.set("version", Json::Str("1.1.0-nexon"));
+    r.set("version", Json::Str("1.2.0-nexon"));
     r.set("protocol", Json::Num(1));
     r.set("tools", Json::Str("sh search read patch edit git list find outline recent undo create_file create_directory cut extract fileops diagnostics version py"));
     return r;
