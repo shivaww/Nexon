@@ -3093,21 +3093,104 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           }
         }
 
+        // JSON calls for tools the C++ binary doesn't own are collected here
+        // and dispatched through the existing Python-bridge HTTP path below.
+        final List<String> nativeHttpCalls = [];
+
         // ── Native C++ tools fast path (JSON tool calls) ──────────────────
         // Fenced ```json blocks shaped {"t","a"} or {"calls":[...]}. Tools the
-        // C++ binary owns run locally with no Python/HTTP hop. Non-cpp JSON
-        // calls fall through to the paths below until the JSON migration
-        // completes.
+        // C++ binary owns run locally with no Python/HTTP hop; web_search,
+        // read_url and memory run in-app; other JSON tools are translated to
+        // the Python bridge's {"method","params"} shape and queued for the
+        // existing HTTP dispatch below.
         if (_agenticEnabled) {
           final nativeCalls = _findNativeToolCalls(fullText);
           for (final nativeCall in nativeCalls) {
             final toolName = (nativeCall['t'] ?? '').toString();
-            if (toolName.isEmpty || !NativeToolsService.handles(toolName)) {
-              continue;
-            }
+            if (toolName.isEmpty) continue;
             Map<String, dynamic> toolArgs = const {};
             final rawArgs = nativeCall['a'];
             if (rawArgs is Map<String, dynamic>) toolArgs = rawArgs;
+
+            if (!NativeToolsService.handles(toolName)) {
+              // ── Non-cpp JSON tools ──────────────────────────────────────
+              if (toolName == 'web_search' || toolName == 'search_web') {
+                executedTools = true;
+                if (!_searchSettings.enabled) {
+                  toolOutputs.add(
+                    'Tool Result [$toolName]:\n\n{"error":"web search is disabled in settings"}',
+                  );
+                  continue;
+                }
+                final query =
+                    (toolArgs['q'] ?? toolArgs['query'] ?? '').toString();
+                if (mounted) {
+                  setState(() => _toolStatus = '🔍 Searching: "$query"');
+                }
+                String searchResult;
+                try {
+                  searchResult = await _executeWebSearchQuery(
+                    query,
+                    topic: toolArgs['topic']?.toString(),
+                    timeRange:
+                        (toolArgs['time_range'] ?? toolArgs['timeRange'])
+                            ?.toString(),
+                    startDate:
+                        (toolArgs['start_date'] ?? toolArgs['startDate'])
+                            ?.toString(),
+                    endDate:
+                        (toolArgs['end_date'] ?? toolArgs['endDate'])
+                            ?.toString(),
+                  );
+                } catch (e) {
+                  searchResult = 'Error running web search: $e';
+                }
+                if (mounted) setState(() => _toolStatus = '');
+                toolOutputs.add(
+                  "Web Search results for '$query':\n\n$searchResult",
+                );
+                continue;
+              }
+              if (toolName == 'read_url') {
+                executedTools = true;
+                final url = (toolArgs['url'] ?? '').toString();
+                final shortUrl =
+                    url.length > 50 ? '${url.substring(0, 47)}…' : url;
+                if (mounted) {
+                  setState(() => _toolStatus = '🌐 Fetching: $shortUrl');
+                }
+                final urlResult = url.isEmpty
+                    ? 'Error fetching URL: no url provided'
+                    : await _fetchUrlText(url);
+                if (mounted) setState(() => _toolStatus = '');
+                toolOutputs.add("Content of URL '$url':\n\n$urlResult");
+                continue;
+              }
+              if (toolName == 'memory') {
+                executedTools = true;
+                final action = (toolArgs['action'] ?? 'read')
+                    .toString()
+                    .toLowerCase()
+                    .trim();
+                final content = (toolArgs['content'] ?? '').toString();
+                if (mounted) {
+                  setState(() => _toolStatus = '🧠 Memory Tool: $action');
+                }
+                final result = await _handleMemoryTool(action, content);
+                if (mounted) setState(() => _toolStatus = '');
+                toolOutputs.add("Memory Tool [$action] Result:\n$result");
+                continue;
+              }
+              // Python-bridge passthrough (run_background, service_*, dart_*,
+              // workspace_*...). Translated to the bridge's method/params
+              // shape; the HTTP block below handles validation, permission
+              // gates, retries and result formatting exactly as it does for
+              // legacy calls.
+              nativeHttpCalls.add(
+                jsonEncode({'method': toolName, 'params': toolArgs}),
+              );
+              continue;
+            }
             executedTools = true;
 
             // Safety checkpoint before heavy file mutations (parity with the
@@ -3183,8 +3266,13 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           }
         }
 
-        if ((_agenticEnabled || _studyModeEnabled) && mcpMatch != null) {
-          final mcpMatches = [mcpMatch];
+        if ((_agenticEnabled || _studyModeEnabled) &&
+            (mcpMatch != null || nativeHttpCalls.isNotEmpty)) {
+          final mcpMatches = [
+            if (mcpMatch != null) mcpMatch,
+            for (final js in nativeHttpCalls)
+              RegExp(r'([\s\S]*)').firstMatch(js)!,
+          ];
           for (final match in mcpMatches) {
             executedTools = true;
             String jsonString = match.group(1)?.trim() ?? '';
