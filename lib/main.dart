@@ -7253,6 +7253,18 @@ CRITICAL: Always use direct tag format like `<path>/foo</path>`. Do NOT use `<PA
           onConfigureKey: (selectedProvId) {
             _openProviderSheet(selectedProvId);
           },
+          onDeleteCustomProvider: (id) async {
+            setState(() {
+              _customProviders = [
+                for (final p in _customProviders)
+                  if (p.id != id) p,
+              ];
+              if (_selectedProviderId == id) {
+                _selectedProviderId = 'custom';
+              }
+            });
+            await _saveSettings();
+          },
         );
       },
     );
@@ -12680,6 +12692,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onReasoningEnabledChanged,
     required this.onFetchModels,
     required this.onConfigureKey,
+    required this.onDeleteCustomProvider,
     required this.sessionId,
   });
 
@@ -12716,6 +12729,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<bool> onReasoningEnabledChanged;
   final Future<List<String>> Function() onFetchModels;
   final ValueChanged<String> onConfigureKey;
+  final ValueChanged<String> onDeleteCustomProvider;
   final String sessionId;
 
   @override
@@ -12727,6 +12741,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         ...providerCatalog,
         ...widget.customProviders,
       ];
+
+  late List<ProviderDefinition> _customLocal;
+
+  bool get _isCustomSel =>
+      _selectedProviderId == 'custom' ||
+      _selectedProviderId.startsWith('custom_');
 
   late bool _studyModeEnabled;
 
@@ -12774,6 +12794,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       }
     });
     _maxTokens = widget.settings.maxTokens;
+    _customLocal = List.of(widget.customProviders);
     _selectedProviderId = widget.provider.id;
     _selectedModel = widget.settings.model.isNotEmpty
         ? widget.settings.model
@@ -13747,6 +13768,127 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     }
   }
 
+  Widget _buildCustomProvidersCard() {
+    return LiquidGlassSurface(
+      padding: const EdgeInsets.all(14),
+      borderRadius: BorderRadius.circular(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.dns_outlined,
+                size: 18,
+                color: Color(0xFF7B4E2E),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'Saved providers',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  widget.onConfigureKey('custom');
+                },
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add provider'),
+              ),
+            ],
+          ),
+          if (_customLocal.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'No saved providers yet. Tap "Add provider" to create one.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+              ),
+            ),
+          for (final p in _customLocal)
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _selectedProviderId == p.id
+                      ? const Color(0xFF7B4E2E)
+                      : const Color(0xFFDCCBB8),
+                ),
+              ),
+              child: ListTile(
+                dense: true,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                leading: Radio<String>(
+                  value: p.id,
+                  groupValue: _selectedProviderId,
+                  onChanged: (val) {
+                    if (val == null) return;
+                    setState(() {
+                      _selectedProviderId = val;
+                      _selectedModel = p.models.isNotEmpty ? p.models.first : '';
+                    });
+                    widget.onProviderChanged(val);
+                  },
+                ),
+                title: Text(
+                  p.name,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+                subtitle: Text(
+                  p.baseUrl,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Edit',
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        widget.onConfigureKey(p.id);
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Delete',
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        size: 18,
+                        color: Color(0xFFB3261E),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _customLocal = [
+                            for (final x in _customLocal)
+                              if (x.id != p.id) x,
+                          ];
+                          if (_selectedProviderId == p.id) {
+                            _selectedProviderId = 'custom';
+                            widget.onProviderChanged('custom');
+                          }
+                        });
+                        widget.onDeleteCustomProvider(p.id);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildModelTab(List<String> models) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -13761,7 +13903,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
-                      value: _selectedProviderId,
+                      value: _isCustomSel ? 'custom' : _selectedProviderId,
                       dropdownColor: const Color(0xFFFFFBF2),
                       decoration: const InputDecoration(
                         labelText: 'AI Provider',
@@ -13789,7 +13931,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           size: 20,
                         ),
                       ),
-                      items: _allProviders.map((p) {
+                      items: providerCatalog.map((p) {
                         return DropdownMenuItem<String>(
                           value: p.id,
                           child: Text(
@@ -13803,7 +13945,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {
-                          final nextProvider = _allProviders.firstWhere(
+                          final nextProvider = providerCatalog.firstWhere(
                             (p) => p.id == val,
                             orElse: () => providerCatalog.first,
                           );
@@ -13844,6 +13986,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                 ],
               ),
+              if (_isCustomSel) ...[
+                const SizedBox(height: 12),
+                _buildCustomProvidersCard(),
+              ],
               const SizedBox(height: 16),
               Row(
                 children: [

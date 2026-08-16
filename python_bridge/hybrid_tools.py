@@ -1789,7 +1789,7 @@ _OUTLINE_PATTERNS: dict[str, list[tuple[str, re.Pattern]]] = {
 }
 
 
-def file_outline_rich(path: str, encoding: str = "utf-8") -> FileOutlineResult:
+def file_outline_rich(path: str, encoding: str = "utf-8", workspace_dir: str = "") -> FileOutlineResult:
     """
     Extract the structural outline of a source file.
 
@@ -2010,12 +2010,16 @@ async def search_files_rich(
 
 # ── File diff (two versions) ──────────────────────────────────────────
 
-def diff_files_rich(path_a: str, path_b: str, context: int = 5) -> dict[str, Any]:
+def diff_files_rich(path_a: str, path_b: str, context: int = 5, workspace_dir: str = "") -> dict[str, Any]:
     """
     Compute a unified diff between two files.
 
     Returns a human+AI readable diff block with statistics.
     """
+    if not _is_safe(path_a, workspace_dir):
+        return _unsafe_error(path_a)
+    if not _is_safe(path_b, workspace_dir):
+        return _unsafe_error(path_b)
     pa = Path(path_a).expanduser()
     pb = Path(path_b).expanduser()
 

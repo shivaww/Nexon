@@ -212,6 +212,15 @@ class TermuxForgeBridge:
                 try:
                     return await asyncio.to_thread(_h, **kw)
                 except TypeError as exc:
+                    # Retry once without optional injected params for tools
+                    # whose signatures don't accept them.
+                    optional = {k for k in ("workspace_dir", "dry_run") if k in kw}
+                    if optional:
+                        kw2 = {k: v for k, v in kw.items() if k not in optional}
+                        try:
+                            return await asyncio.to_thread(_h, **kw2)
+                        except TypeError:
+                            pass
                     return {
                         "stdout": f"ERROR: {_name}: {exc}",
                         "error": str(exc),
