@@ -376,6 +376,33 @@ std::string truncateOutput(const std::string& s, size_t maxLen = 6000) {
     std::string tail = s.substr(s.size() - tailLen);
     return head + "\n...[" + std::to_string(s.size() - headLen - tailLen) + " chars omitted]...\n" + tail;
 }
+// Forward declaration (defined later in file)
+bool writeFileAll(const std::string& path, const std::string& content);
+// F-2: Spill large outputs to disk. When output exceeds cap, writes full
+// payload to .nexon_logs/ and returns head+tail+path+byte counts.
+std::string spillOutput(const std::string& output, size_t maxLen, const fs::path& baseDir, const std::string& toolName) {
+    if (output.size() <= maxLen) return output;
+    fs::path logDir = baseDir / ".nexon_logs";
+    std::error_code ec;
+    fs::create_directories(logDir, ec);
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    char timeBuf[32];
+    struct tm tm_buf;
+    localtime_r(&time_t_now, &tm_buf);
+    strftime(timeBuf, sizeof(timeBuf), "%Y%m%d_%H%M%S", &tm_buf);
+    std::string filename = toolName + "_" + timeBuf + ".log";
+    fs::path logPath = logDir / filename;
+    writeFileAll(logPath.string(), output);
+    size_t headLen = std::min<size_t>(2000, output.size() / 4);
+    size_t tailLen = std::min<size_t>(2000, output.size() / 4);
+    std::string head = output.substr(0, headLen);
+    std::string tail = output.substr(output.size() - tailLen);
+    std::string relPath = ".nexon_logs/" + filename;
+    return head + "\n\n...[" + std::to_string(output.size() - headLen - tailLen) +
+           " bytes omitted; full output: " + relPath +
+           " (" + std::to_string(output.size()) + " bytes total)]...\n\n" + tail;
+}
 std::string shellQuote(const std::string& s) {
     std::string out = "'";
     for (char c : s) { if (c == '\'') out += "'\\''"; else out += c; }
@@ -1119,7 +1146,9 @@ Json toolShellCommand(const Json& args, const fs::path& baseDir) {
         r.set("err", Json::Str("'cmd' is required"));
         return r;
     }
-    long maxLen = args.getInt2("max", "max_output", 6000);
+    long maxLen = args.getInt2("max", "max_output", 24000);
+    if (maxLen < 100) maxLen = 100;
+    if (maxLen > 200000) maxLen = 200000;
     long timeout = args.getInt2("to", "timeout", 30);
     if (timeout < 1) timeout = 30;
     if (timeout > 600) timeout = 600;
@@ -1128,7 +1157,8 @@ Json toolShellCommand(const Json& args, const fs::path& baseDir) {
     r.set("rc", Json::Num(code));
     if (code == -1000) r.set("err", Json::Str("timeout"));
     else if (code == -1001) r.set("err", Json::Str("launch_failed"));
-    r.set("out", Json::Str(truncateOutput(output, maxLen)));
+    // F-2: spill large outputs to .nexon_logs/ with head+tail+path
+    r.set("out", Json::Str(spillOutput(output, maxLen, baseDir, "sh")));
     return r;
 }
 
