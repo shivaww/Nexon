@@ -11,7 +11,7 @@
 class SystemPromptEngine {
   // ── Stable sections (byte-identical across all turns/sessions) ──────────
 
-  static const String _identity =
+  static const String _defaultIdentity =
       'You are Nexon, an AI assistant. Answer clearly, accurately, and '
       'directly. Match depth to the complexity of the question.';
 
@@ -45,7 +45,10 @@ class SystemPromptEngine {
 
   // ── Mutable state ───────────────────────────────────────────────────────
 
+  String _identity = _defaultIdentity;
   String _userName = '';
+  String _cwd = '';
+  String _os = '';
   String _date = '';
   String _modelName = '';
   String _context = _defaultContext;
@@ -55,13 +58,20 @@ class SystemPromptEngine {
 
   // ── Public API ──────────────────────────────────────────────────────────
 
+  /// Override the <identity> section (e.g. when agentic mode is on).
+  void setIdentity(String identity) => _identity = identity;
+
   /// Set the variable user-info fields.
   void setUserInfo({
     String? userName,
+    String? cwd,
+    String? os,
     String? date,
     String? modelName,
   }) {
     if (userName != null) _userName = userName;
+    if (cwd != null) _cwd = cwd;
+    if (os != null) _os = os;
     if (date != null) _date = date;
     if (modelName != null) _modelName = modelName;
   }
@@ -72,8 +82,12 @@ class SystemPromptEngine {
   /// Override the <narration> section (e.g. when live voice is active).
   void setNarration(String narration) => _narration = narration;
 
-  /// Reset context/narration to defaults (all features off).
+  /// Reset all overrides to defaults (all features off).
   void resetToDefaults() {
+    _identity = _defaultIdentity;
+    _userName = '';
+    _cwd = '';
+    _os = '';
     _context = _defaultContext;
     _narration = _defaultNarration;
     _featureSections.clear();
@@ -112,8 +126,13 @@ class SystemPromptEngine {
 
     // Variable user info
     sb.writeln('<user_info>');
-    if (_userName.isNotEmpty) {
+    if (_cwd.isNotEmpty) {
+      sb.writeln('cwd: $_cwd');
+    } else if (_userName.isNotEmpty) {
       sb.writeln('cwd: $_userName');
+    }
+    if (_os.isNotEmpty) {
+      sb.writeln('os: $_os');
     }
     sb.writeln('date: $_date');
     sb.writeln('model: $_modelName');

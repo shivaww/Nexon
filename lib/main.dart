@@ -39,6 +39,7 @@ import 'package:nexon/services/deep_research/deep_research_helpers.dart';
 import 'package:nexon/services/slash_command/slash_command_service.dart';
 import 'package:nexon/services/context_compression/context_compression_service.dart';
 import 'package:nexon/services/system_prompt_engine.dart';
+import 'package:nexon/services/system_prompts.dart';
 import 'package:nexon/services/termux_bridge/native_tools_service.dart';
 import 'package:nexon/services/checkpoint/checkpoint_service.dart';
 import 'package:nexon/services/workspace/workspace_service.dart';
@@ -2415,10 +2416,20 @@ jobs:
           // Assemble system prompt via SystemPromptEngine
           _promptEngine.resetToDefaults();
           _promptEngine.setUserInfo(
+            cwd: _agenticWorkspace,
+            os: 'android/termux',
             date: currentDateStr,
             modelName: _settings[_selectedProviderId]?.model ?? '',
           );
-          // Feature addons injected here once redesigned by user
+
+          // ── Feature addons ──
+          if (_agenticEnabled && !_studyModeEnabled) {
+            _promptEngine.setIdentity(AgenticPrompts.identity);
+            _promptEngine.setNarration(AgenticPrompts.narration);
+            _promptEngine.setContext(AgenticPrompts.context);
+            _promptEngine.addFeature(AgenticPrompts.features);
+          }
+
           systemPromptText = _promptEngine.assemble();
         }
 
