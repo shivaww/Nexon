@@ -111,8 +111,9 @@ class SystemPromptEngine {
   void clearSkills() => _skillSections.clear();
 
   /// Assemble the final system prompt string.
-  /// Order: identity → user_info → context → narration → memory → safety
-  ///        → features → skills
+  /// Order: identity → context → narration → memory → safety → features
+  ///        → skills → user_info. Variable data (name/cwd/os/date/model)
+  ///        goes last so the behavioral prefix stays byte-stable for KV-cache reuse.
   /// The stable prefix (identity through safety) is byte-identical when
   /// features don't change, enabling KV cache prefix reuse.
   String assemble() {
@@ -122,21 +123,6 @@ class SystemPromptEngine {
     sb.writeln('<identity>');
     sb.writeln(_identity);
     sb.writeln('</identity>');
-    sb.writeln();
-
-    // Variable user info
-    sb.writeln('<user_info>');
-    if (_cwd.isNotEmpty) {
-      sb.writeln('cwd: $_cwd');
-    } else if (_userName.isNotEmpty) {
-      sb.writeln('cwd: $_userName');
-    }
-    if (_os.isNotEmpty) {
-      sb.writeln('os: $_os');
-    }
-    sb.writeln('date: $_date');
-    sb.writeln('model: $_modelName');
-    sb.writeln('</user_info>');
     sb.writeln();
 
     // Context (mode-specific)
@@ -184,6 +170,23 @@ class SystemPromptEngine {
       }
     }
     sb.writeln('</skills>');
+
+    // Variable user info — last, per Grok Build §8.7: stable constitution
+    // first, changing bits (date/name/device) last for prefix caching.
+    sb.writeln('<user_info>');
+    if (_userName.isNotEmpty) {
+      sb.writeln('name: $_userName');
+    }
+    if (_cwd.isNotEmpty) {
+      sb.writeln('cwd: $_cwd');
+    }
+    if (_os.isNotEmpty) {
+      sb.writeln('os: $_os');
+    }
+    sb.writeln('date: $_date');
+    sb.writeln('model: $_modelName');
+    sb.writeln('</user_info>');
+    sb.writeln();
 
     return sb.toString();
   }

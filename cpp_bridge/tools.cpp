@@ -4214,6 +4214,9 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    if (isTty && !termiosChanged) {
+        std::cout << YEL << "[tools] raw mode unavailable; press Enter after pasting if the last line has no newline." << RST << "\n";
+    }
 
     if (!isTty && !posArgs.empty()) {
         // Piped mode: no help banner, just process
@@ -4228,6 +4231,7 @@ int main(int argc, char* argv[]) {
     if (isTty && termiosChanged) {
         char buf[4096];
         std::string pendingInput;
+        bool skipEsc = false;
 
         while (true) {
             ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
@@ -4240,6 +4244,23 @@ int main(int argc, char* argv[]) {
             for (ssize_t k = 0; k < n; ++k) {
                 char c = buf[k];
                 if (!collecting) {
+                    if (c == '\x1b') { skipEsc = true; continue; } // swallow terminal escape sequences (bracketed paste markers etc.)
+                    if (skipEsc) {
+                        if ((unsigned char)c >= 0x40 && (unsigned char)c <= 0x7E) skipEsc = false;
+                        continue;
+                    }
+                    if (c == '{' || c == '[') {
+                        // Opener arrived: start collecting immediately so a paste
+                        // with no trailing newline executes without pressing Enter.
+                        collecting = true;
+                        acc.reset();
+                        pendingInput.clear();
+                        std::cout << "\n" << BG_CYAN << BOLD << " ▲ INPUT " << RST << " " << CYN << "(pasting JSON...)" << RST << "\n";
+                        std::cout << CYN << "┌────────────────────────────────────────────────────" << RST << "\n";
+                        std::cout << CYN << "│" << RST << c;
+                        acc.feed(c);
+                        continue;
+                    }
                     if (c == '\n' || c == '\r') {
                         std::string line = pendingInput;
                         pendingInput.clear();
@@ -4248,29 +4269,7 @@ int main(int argc, char* argv[]) {
                         std::string lower = toLower(trimmed);
                         if (lower == "exit" || lower == "quit") goto done;
                         if (lower == "help") { printHelp(); continue; }
-                        size_t bracePos = line.find('{');
-                        size_t bracketPos = line.find('[');
-                        if (bracePos == std::string::npos && bracketPos == std::string::npos) {
-                            std::cout << YEL << "[tools] Not JSON. Type 'help' or 'exit'." << RST << "\n";
-                            continue;
-                        }
-                        collecting = true;
-                        acc.reset();
-                        std::cout << "\n" << BG_CYAN << BOLD << " ▲ INPUT " << RST << " " << CYN << "(pasting JSON...)" << RST << "\n";
-                        std::cout << CYN << "┌────────────────────────────────────────────────────" << RST << "\n";
-                        std::cout << CYN << "│" << RST;
-                        size_t bp = std::min(bracePos, bracketPos); // whichever opener appears first
-                        for (size_t i = bp; i < line.size(); ++i) {
-                            acc.feed(line[i]);
-                            std::cout << line[i];
-                        }
-                        if (acc.complete) {
-                            std::cout << "\n" << CYN << "└────────────────────────────────────────────────────" << RST << "\n";
-                            std::cout.flush();
-                            handleCommand(acc.buffer, baseDir);
-                            collecting = false;
-                            acc.reset();
-                        }
+                        std::cout << YEL << "[tools] Not JSON. Type 'help' or 'exit'." << RST << "\n";
                         continue;
                     }
                     pendingInput += c;

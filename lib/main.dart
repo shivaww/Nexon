@@ -36,6 +36,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/screens/onboarding_screen.dart';
 import 'package:nexon/services/deep_research/deep_research_bridge_client.dart';
 import 'package:nexon/services/deep_research/deep_research_helpers.dart';
+import 'package:nexon/services/deep_research/deep_research_prompts.dart';
 import 'package:nexon/services/slash_command/slash_command_service.dart';
 import 'package:nexon/services/context_compression/context_compression_service.dart';
 import 'package:nexon/services/system_prompt_engine.dart';
@@ -599,103 +600,6 @@ class _ForgeChatAppState extends State<ForgeChatApp> {
   }
 }
 
-class DeepResearchPrompts {
-  static const String plannerSystemPrompt =
-      """ROLE: Planner. No searching, no fetching. Output XML only.
-Decide: complexity (STANDARD/COMPLEX), stage_count (5-15) based on user query.
-Generate a phase-by-phase research plan.
-Output format — ONE fenced json block, nothing else:
-```json
-{"research_plan": [
-  {"title": "Stage Title", "prompt": "Detailed goal and instructions for this phase"},
-  {"title": "Stage Title", "prompt": "Detailed goal and instructions for this phase"}
-]}
-```
-No text outside the code fence. Do not include reasoning or preamble outside the fence.""";
-
-
-  static const String researchSystemPrompt =
-      """ROLE: Research agent. You are running one phase of a multi-step research plan.
-Your task is to gather enough relevant information to fully address the phase's prompt.
-You have the following tools available, each emitted as ONE fenced ```json block:
-1. Web Search: {"t":"web_search","a":{"q":"your query"}} — returns a list of search results.
-   Optional args inside "a": "topic" ("general" default or "news"), "time_range" ("day"/"week"/"month"/"year"), "start_date"/"end_date" (YYYY-MM-DD), "search_depth" ("basic" default or "advanced").
-   Examples:
-   - Recent query: {"t":"web_search","a":{"q":"latest SWE-bench scores 2026","time_range":"month","topic":"news"}}
-   - Date-bounded query: {"t":"web_search","a":{"q":"termux release issues","start_date":"2026-07-01","end_date":"2026-07-15"}}
-   - Foundational query: {"t":"web_search","a":{"q":"how does symlink work in android termux"}}
-2. Fetch Page: {"t":"read_url","a":{"url":"https://example.com/git-guide"}} — fetches HTML page content in depth. PDFs are excluded to protect mobile memory and writer context.
-
-TOOL LIMITS PER PHASE:
-1. You may call web_search up to 20 times and read_url up to 5 times within a single research phase. These are hard limits enforced by the system — once reached, further calls will be rejected with a limit-reached message.
-2. Functional Difference:
-   - web_search returns short snippets across many sources cheaply. Use it for breadth/surveying to find candidate sources.
-   - read_url fetches and summarizes one full page in depth. It is expensive and capped low, so use it selectively for depth on your best 5 leads only. Do not treat them interchangeably.
-3. PDF Exclusions: PDFs are not supported by read_url and will be automatically skipped — prefer HTML sources when a choice exists.
-
-CRITICAL DIRECTIVES:
-1. You MUST invoke tools ONLY via fenced ```json blocks shaped {"t":"web_search","a":{...}} / {"t":"read_url","a":{...}} / {"t":"step_complete"}.
-2. Do NOT invent alternative tool-call syntaxes. No XML tags, no bare braces outside a fence.
-3. You must run searches and fetches iteratively.
-4. Selection of Search parameters:
-   - For recent/current-events-flavored queries (product releases, benchmark results, pricing, "latest", "current", "2026"), default to "time_range":"week" or "time_range":"day" or "topic":"news". Avoid "time_range":"month" for fast-changing topics.
-   - For general/foundational/definitional queries (explaining a concept, historical background), omit time_range entirely to avoid artificially excluding older-but-still-correct foundational sources.
-   - Do NOT rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.
-5. Once you have collected enough info for this phase, emit {"t":"step_complete"} in its own ```json block to finish the phase.
-6. You can batch multiple web_search calls in one response via {"calls":[{...},{...}]}. Do not mix web_search and read_url in the same message. Wait for the results after each action.
-
-7. RECENCY & ACCURACY: For time-sensitive queries (news, versions, releases), ALWAYS use "time_range":"week" or "time_range":"day". Do not rely on a single source. If the first search result is insufficient or outdated, refine your query and search again. Cross-reference multiple sources to verify accuracy and recency.""";
-
-  static const String summarizerSystemPrompt = """ROLE: Summarization agent.
-Extract information from the provided source. Output ONLY a valid JSON object matching the schema below.
-Rules:
-1. Extract only FACT records for numeric/named/comparable claims (such as benchmark scores, dates, prices, version numbers, named comparisons).
-   Format of each FACT record:
-   {
-     "metric": "<name>",
-     "subject": "<entity>",
-     "value": "<value>",
-     "date": "<date or null>",
-     "source": "<url>"
-   }
-2. Extract FINDING records for qualitative content (arguments, explanations, context). Each FINDING must be capped at 1-2 sentences, tightly compressed, citing the source URL.
-   Format of each FINDING record:
-   {
-     "text": "<1-2 sentences qualitative content>",
-     "source": "<url>"
-   }
-3. NEVER include a comparative claim ("better than", "outperforms", "leading", "the best", etc.) inside a single-source summary. Comparisons are only valid across multiple records sharing the exact same metric, and will be compiled later.
-4. Be strictly literal to what the source actually states — no inference, no filling gaps, no adding context.
-5. If the source is empty or has no relevant info, return empty arrays.
-
-Expected JSON output format:
-{
-  "facts": [ ... ],
-  "findings": [ ... ]
-}
-No other text, explanations, or Markdown code blocks outside the JSON.""";
-
-  static const String reflectorSystemPrompt =
-      """ROLE: Research Sufficiency Judger.
-You are given a research phase goal and the facts & findings gathered so far in this phase.
-Your task is to judge if the gathered information is sufficient to fully address the phase goal.
-Output ONLY a JSON object:
-{
-  "sufficient": true | false,
-  "reason": "<short explanation>"
-}
-Do not include any other text or Markdown code blocks.""";
-
-  static const String writerSystemPrompt = """ROLE: Writer.
-Input: full temp.json content (all phases containing phase_title, facts, findings, skipped_pdfs, failed_fetches).
-Read all facts and findings. Decide a hierarchical document structure: Chapter per stage, subsections (1.1, 1.2, ...) per sub-topic. Write the final research document as Markdown with proper chapter/subsection headers.
-
-CRITICAL GUARDRAIL:
-You may only state a comparison between two subjects if two or more FACT records in the evidence share the exact same metric name. In that case, state only the numeric comparison as given by the records (e.g. 'X scored 92% vs Y's 88% on SWE-bench-Verified') — do not add qualitative judgment language ('significantly better', 'clearly superior') beyond what the numbers themselves show. Never invent a comparison, ranking, or superiority claim not directly supported by two or more matching FACT records. If only one data point exists for a metric, state it standalone without comparison.
-
-Ensure you write detailed paragraphs for each section, citing the URLs in brackets (e.g. [https://example.com]). Do not create a Sources section: the application inserts the verified source list directly into the final artifact. Output plain Markdown only: do not generate SVG, HTML, Mermaid, or image-based visuals.""";
-}
-
 class ChatHomePage extends StatefulWidget {
   const ChatHomePage({super.key});
 
@@ -736,6 +640,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     ..connectionTimeout = const Duration(seconds: 30);
   bool _deepResearchEnabled = false;
   bool _studyModeEnabled = false;
+  String _userName = '';
 
   /// System prompt engine — assembles the XML-tagged prompt from base + features.
   final SystemPromptEngine _promptEngine = SystemPromptEngine();
@@ -1927,6 +1832,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _customMcpUrl = customMcpUrlRaw ?? '';
       _deepResearchEnabled = deepResearchRaw ?? false;
       _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
+      _userName = prefs.getString('user_name_v1') ?? '';
       SlashCommandService.agenticAccessEnabled = _agenticEnabled;
       _writerContextBudget = writerContextBudgetRaw ?? 32000;
       _customProviders = loadedCustom;
@@ -1990,6 +1896,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
     await prefs.setString('shell_permission_v1', _shellPermission);
     await prefs.setBool('deep_research_enabled_v1', _deepResearchEnabled);
     await prefs.setBool('study_mode_enabled_v1', _studyModeEnabled);
+    await prefs.setString('user_name_v1', _userName);
     await prefs.setInt('writer_context_budget_v1', _writerContextBudget);
     await prefs.setString('agentic_workspace_v1', _agenticWorkspace);
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
@@ -2225,14 +2132,6 @@ jobs:
     await _saveSessions();
   }
 
-  static const String mcpAndSearchSystemPrompt =
-      "Tools available: web search + Termux shell.\n\n"
-      "Web search: emit exactly one line then stop:\n"
-      "<search_request>query</search_request>\n\n"
-      "Run command: emit ONE block then stop:\n"
-      "<command>COMMAND</command>\n\n"
-      "Resume after results arrive.";
-
   void _stopResponse(String sessionId) {
     if (sessionId.isEmpty) return;
     final subscription = _activeSubscriptions[sessionId];
@@ -2416,18 +2315,52 @@ jobs:
           // Assemble system prompt via SystemPromptEngine
           _promptEngine.resetToDefaults();
           _promptEngine.setUserInfo(
+            userName: _userName,
             cwd: _agenticWorkspace,
-            os: 'android/termux',
+            os: 'android with termux',
             date: currentDateStr,
             modelName: _settings[_selectedProviderId]?.model ?? '',
           );
 
           // ── Feature addons ──
-          if (_agenticEnabled && !_studyModeEnabled) {
+          final bool isVoiceActive =
+              _liveVoiceEngine.state != LiveVoiceState.idle;
+
+          // Primary mode (mutually exclusive)
+          if (_studyModeEnabled) {
+            _promptEngine.setIdentity(StudyModePrompts.identity);
+            _promptEngine.setNarration(StudyModePrompts.narration);
+            _promptEngine.addFeature(StudyModePrompts.features);
+          } else if (_agenticEnabled) {
             _promptEngine.setIdentity(AgenticPrompts.identity);
             _promptEngine.setNarration(AgenticPrompts.narration);
             _promptEngine.setContext(AgenticPrompts.context);
             _promptEngine.addFeature(AgenticPrompts.features);
+          }
+
+          // Web search addon (compatible with all modes)
+          if (_searchSettings.enabled) {
+            _promptEngine.setContext(WebSearchPrompts.context(currentDateStr));
+            if (!_agenticEnabled && !_studyModeEnabled) {
+              _promptEngine.setNarration(WebSearchPrompts.narration);
+            }
+            _promptEngine.addFeature(WebSearchPrompts.features);
+          }
+
+          // Artifacts addon
+          if (_artifactsEnabled) {
+            _promptEngine.addFeature(ArtifactsPrompts.features);
+          }
+
+          // SVG visuals addon
+          if (_svgVisualsEnabled) {
+            _promptEngine.addFeature(SvgVisualsPrompts.features);
+          }
+
+          // Voice mode addon (overrides narration last)
+          if (isVoiceActive) {
+            _promptEngine.setNarration(VoiceModePrompts.narration);
+            _promptEngine.addFeature(VoiceModePrompts.features);
           }
 
           systemPromptText = _promptEngine.assemble();
@@ -6752,6 +6685,7 @@ jobs:
           svgVisualsEnabled: _svgVisualsEnabled,
           deepResearchEnabled: _deepResearchEnabled,
           studyModeEnabled: _studyModeEnabled,
+          userName: _userName,
           writerContextBudget: _writerContextBudget,
           agenticWorkspace: _agenticWorkspace,
           customMcpUrl: _customMcpUrl,
@@ -6789,6 +6723,12 @@ jobs:
           onStudyModeEnabledChanged: (val) async {
             setState(() {
               _studyModeEnabled = val;
+            });
+            await _saveSettings();
+          },
+          onUserNameChanged: (val) async {
+            setState(() {
+              _userName = val;
             });
             await _saveSettings();
           },
@@ -12494,6 +12434,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.svgVisualsEnabled,
     required this.deepResearchEnabled,
     required this.studyModeEnabled,
+    required this.userName,
     required this.writerContextBudget,
     required this.agenticWorkspace,
     required this.customMcpUrl,
@@ -12503,6 +12444,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onSvgVisualsEnabledChanged,
     required this.onDeepResearchEnabledChanged,
     required this.onStudyModeEnabledChanged,
+    required this.onUserNameChanged,
     required this.onWriterContextBudgetChanged,
     required this.onAgenticWorkspaceChanged,
     required this.onCustomMcpUrlChanged,
@@ -12531,6 +12473,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final bool svgVisualsEnabled;
   final bool deepResearchEnabled;
   final bool studyModeEnabled;
+  final String userName;
   final int writerContextBudget;
   final String agenticWorkspace;
   final String customMcpUrl;
@@ -12543,6 +12486,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<bool> onDeepResearchEnabledChanged;
   final ValueChanged<int> onWriterContextBudgetChanged;
   final ValueChanged<bool> onStudyModeEnabledChanged;
+  final ValueChanged<String> onUserNameChanged;
   final ValueChanged<String> onAgenticWorkspaceChanged;
   final ValueChanged<String> onCustomMcpUrlChanged;
   final ValueChanged<String> onImageAttached;
@@ -12594,6 +12538,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late bool _deepResearchEnabled;
   late int _writerContextBudget;
   late TextEditingController _writerContextBudgetController;
+  late TextEditingController _userNameController;
   late String _searchProvider;
   late final TextEditingController _searchKeyController;
   late final TextEditingController _searchCxController;
@@ -12632,6 +12577,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     _deepResearchEnabled = widget.deepResearchEnabled;
     _studyModeEnabled = widget.studyModeEnabled;
     _writerContextBudget = widget.writerContextBudget;
+    _userNameController = TextEditingController(text: widget.userName);
     _writerContextBudgetController = TextEditingController(
       text: widget.writerContextBudget.toString(),
     );
@@ -12931,6 +12877,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     ChatClient.liveSubscriptionCredits.removeListener(_onWalletChanged);
     ChatClient.liveTopupCredits.removeListener(_onWalletChanged);
     _walletSyncTimer?.cancel();
+    _userNameController.dispose();
     _searchKeyController.dispose();
     _searchCxController.dispose();
     _agenticWorkspaceController.dispose();
@@ -14104,6 +14051,43 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Personalization Card
+        LiquidGlassSurface(
+          padding: const EdgeInsets.all(16),
+          borderRadius: BorderRadius.circular(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Your Name',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D241C),
+                ),
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'Personalizes replies and the user_info block',
+                style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _userNameController,
+                onChanged: (val) => widget.onUserNameChanged(val.trim()),
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  hintText: 'e.g. Shiva',
+                  isDense: true,
+                  filled: true,
+                  fillColor: Color(0xFFFFFBF2),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
         // File Access Card
         LiquidGlassSurface(
           padding: const EdgeInsets.all(16),

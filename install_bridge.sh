@@ -139,6 +139,8 @@ modules = {
     "psutil": "psutil",
     "python-docx": "docx",
     "pypdf": "pypdf",
+    "aiofiles": "aiofiles",
+    "requests": "requests",
 }
 
 missing = [name for name, module in modules.items()
@@ -154,7 +156,7 @@ if ! python3 -c "import termux_forge_bridge" 2>"$TARGET_DIR/.import_check.err"; 
   echo "ERROR: bridge import failed. First lines of the traceback:" >&2
   head -25 "$TARGET_DIR/.import_check.err" >&2
   rm -f "$TARGET_DIR/.import_check.err"
-  fail "fix the error above (usually: pip install <missing module>) and re-run ./build.sh"
+  fail "fix the error above (usually: pip install <missing module>) and re-run install_bridge.sh"
 fi
 rm -f "$TARGET_DIR/.import_check.err"
 
@@ -179,6 +181,12 @@ else
   echo "  -> Agentic file tools will be unavailable (fix the errors above and re-run)."
 fi
 rm -f "$TARGET_DIR/.cpp_build.err"
+
+# ── Soft runtime-binary check: warn (never fail) on tools the bridges shell out to ──
+for b in git rg pdftotext curl python3; do
+  command -v "$b" >/dev/null 2>&1 || \
+    echo "  -> WARNING: '$b' not on PATH; some bridge tools degrade without it."
+done
 
 echo "=== Nexon Bridge environment ready! ==="
 echo "All components have been successfully configured."
