@@ -711,6 +711,19 @@ class _ChatHomePageState extends State<ChatHomePage> {
   String? _selectedVoiceName;
 
   void _openLiveVoiceMode() {
+    // Voice Mode only works in Normal Mode (no other mode/feature active)
+    if (_agenticEnabled || _searchSettings.enabled || _deepResearchEnabled ||
+        _studyModeEnabled || _svgVisualsEnabled || _artifactsEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Voice Mode requires Normal Mode. Disable all other features first.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
     showGeneralDialog(
       context: context,
       barrierDismissible: false,
@@ -2326,6 +2339,15 @@ jobs:
           final bool isVoiceActive =
               _liveVoiceEngine.state != LiveVoiceState.idle;
 
+          // Count active features for sub-addon prompt gating
+          int activeFeatureCount = 0;
+          if (_studyModeEnabled) activeFeatureCount++;
+          if (_agenticEnabled) activeFeatureCount++;
+          if (_searchSettings.enabled) activeFeatureCount++;
+          if (_artifactsEnabled) activeFeatureCount++;
+          if (_svgVisualsEnabled) activeFeatureCount++;
+          if (isVoiceActive) activeFeatureCount++;
+
           // Primary mode (mutually exclusive)
           if (_studyModeEnabled) {
             _promptEngine.setIdentity(StudyModePrompts.identity);
@@ -2338,29 +2360,32 @@ jobs:
             _promptEngine.addFeature(AgenticPrompts.features);
           }
 
-          // Web search addon (compatible with all modes)
-          if (_searchSettings.enabled) {
-            _promptEngine.setContext(WebSearchPrompts.context(currentDateStr));
-            if (!_agenticEnabled && !_studyModeEnabled) {
-              _promptEngine.setNarration(WebSearchPrompts.narration);
+          // Sub-addon prompts: only inject when 2+ features are simultaneously active
+          if (activeFeatureCount >= 2) {
+            // Web search addon
+            if (_searchSettings.enabled) {
+              _promptEngine.setContext(WebSearchPrompts.context(currentDateStr));
+              if (!_agenticEnabled && !_studyModeEnabled) {
+                _promptEngine.setNarration(WebSearchPrompts.narration);
+              }
+              _promptEngine.addFeature(WebSearchPrompts.features);
             }
-            _promptEngine.addFeature(WebSearchPrompts.features);
-          }
 
-          // Artifacts addon
-          if (_artifactsEnabled) {
-            _promptEngine.addFeature(ArtifactsPrompts.features);
-          }
+            // Artifacts addon
+            if (_artifactsEnabled) {
+              _promptEngine.addFeature(ArtifactsPrompts.features);
+            }
 
-          // SVG visuals addon
-          if (_svgVisualsEnabled) {
-            _promptEngine.addFeature(SvgVisualsPrompts.features);
-          }
+            // SVG visuals addon
+            if (_svgVisualsEnabled) {
+              _promptEngine.addFeature(SvgVisualsPrompts.features);
+            }
 
-          // Voice mode addon (overrides narration last)
-          if (isVoiceActive) {
-            _promptEngine.setNarration(VoiceModePrompts.narration);
-            _promptEngine.addFeature(VoiceModePrompts.features);
+            // Voice mode addon (overrides narration last)
+            if (isVoiceActive) {
+              _promptEngine.setNarration(VoiceModePrompts.narration);
+              _promptEngine.addFeature(VoiceModePrompts.features);
+            }
           }
 
           systemPromptText = _promptEngine.assemble();
@@ -12807,6 +12832,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     }
   }
 
+  void _showExclusivitySnackBar(String feature, String conflict) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$feature cannot be enabled while $conflict is active.',
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
   Future<Map<String, dynamic>> _checkBridgeAlive() async {
     final endpoint = widget.customMcpUrl.isNotEmpty
         ? widget.customMcpUrl
@@ -14229,13 +14265,30 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   Switch(
                     value: _agenticEnabled,
                     activeColor: const Color(0xFF7B4E2E),
-                    onChanged: (val) {
-                      setState(() {
-                        _agenticEnabled = val;
-                        if (val) _studyModeEnabled = false;
-                      });
+                    onChanged: (val) async {
+                      if (val) {
+                        if (_searchEnabled) {
+                          _showExclusivitySnackBar('Agentic File Access', 'Web Search');
+                          return;
+                        }
+                        if (_deepResearchEnabled) {
+                          _showExclusivitySnackBar('Agentic File Access', 'Deep Research');
+                          return;
+                        }
+                        if (_studyModeEnabled) {
+                          _showExclusivitySnackBar('Agentic File Access', 'Study Mode');
+                          return;
+                        }
+                        final result = await _checkBridgeAlive();
+                        if (!mounted) return;
+                        if (result['ok'] != true) {
+                          final reason = result['reason']?.toString() ?? 'bridge_unreachable';
+                          _showDeepResearchSetupDialog(reason: reason);
+                          return;
+                        }
+                      }
+                      setState(() => _agenticEnabled = val);
                       widget.onAgenticEnabledChanged(val);
-                      if (val) widget.onStudyModeEnabledChanged(false);
                     },
                   ),
                 ],
@@ -14311,6 +14364,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     value: _searchEnabled,
                     activeColor: const Color(0xFF7B4E2E),
                     onChanged: (val) {
+                      if (val && _agenticEnabled) {
+                        _showExclusivitySnackBar('Web Search', 'Agentic File Access');
+                        return;
+                      }
                       setState(() => _searchEnabled = val);
                       _updateSearchSettings();
                     },
@@ -14489,22 +14546,30 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               Switch(
                 value: _deepResearchEnabled,
                 activeColor: const Color(0xFF7B4E2E),
-                onChanged: (val) async {
-                  if (val) {
-                    final result = await _checkBridgeAlive();
-                    if (!mounted) return;
-                    if (result['ok'] != true) {
-                      final reason =
-                          result['reason']?.toString() ?? 'bridge_unreachable';
-                      _showDeepResearchSetupDialog(reason: reason);
-                      setState(() => _deepResearchEnabled = false);
-                      widget.onDeepResearchEnabledChanged(false);
-                      return;
+                  onChanged: (val) async {
+                    if (val) {
+                      if (_agenticEnabled) {
+                        _showExclusivitySnackBar('Deep Research', 'Agentic File Access');
+                        return;
+                      }
+                      if (_studyModeEnabled) {
+                        _showExclusivitySnackBar('Deep Research', 'Study Mode');
+                        return;
+                      }
+                      final result = await _checkBridgeAlive();
+                      if (!mounted) return;
+                      if (result['ok'] != true) {
+                        final reason =
+                            result['reason']?.toString() ?? 'bridge_unreachable';
+                        _showDeepResearchSetupDialog(reason: reason);
+                        setState(() => _deepResearchEnabled = false);
+                        widget.onDeepResearchEnabledChanged(false);
+                        return;
+                      }
                     }
-                  }
-                  setState(() => _deepResearchEnabled = val);
-                  widget.onDeepResearchEnabledChanged(val);
-                },
+                    setState(() => _deepResearchEnabled = val);
+                    widget.onDeepResearchEnabledChanged(val);
+                  },
               ),
             ],
           ),
@@ -14545,13 +14610,19 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 value: _studyModeEnabled,
                 activeColor: const Color(0xFF7B4E2E),
                 onChanged: (val) async {
-                  setState(() {
-                    _studyModeEnabled = val;
-                    if (val) _agenticEnabled = false;
-                  });
+                  if (val) {
+                    if (_agenticEnabled) {
+                      _showExclusivitySnackBar('Study Mode', 'Agentic File Access');
+                      return;
+                    }
+                    if (_deepResearchEnabled) {
+                      _showExclusivitySnackBar('Study Mode', 'Deep Research');
+                      return;
+                    }
+                  }
+                  setState(() => _studyModeEnabled = val);
                   await _saveStudyMode(val);
                   widget.onStudyModeEnabledChanged(val);
-                  if (val) widget.onAgenticEnabledChanged(false);
 
                   if (val) {
                     // Check backend dependencies for document extraction
