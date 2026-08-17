@@ -1608,6 +1608,8 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
                         for (auto mi : matches) {
                             Json m = Json::Obj();
                             m.set("line", Json::Num((double)(mi + 1)));
+                            std::string ctx = fileLines[mi].substr(0, std::min<size_t>(60, fileLines[mi].size()));
+                            m.set("ctx", Json::Str(ctx));
                             matchInfo.arr.push_back(m);
                         }
                         entry.set("r", Json::Str(reason));
@@ -1670,14 +1672,25 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
                 if (firstOldLine.size() > 80) firstOldLine = firstOldLine.substr(0, 80);
                 std::string reason = "old text not found. first line: [" + firstOldLine + "]";
                 auto fileLines = splitLines(normalizeLineEndings(content));
-                std::string key = firstOldLine.substr(0, std::min<size_t>(20, firstOldLine.size()));
-                for (size_t i = 0; i < fileLines.size(); ++i) {
-                    if (fileLines[i].find(key) != std::string::npos) {
-                        reason += "\nNear-match at line " + std::to_string(i + 1) + ": [" +
-                                  fileLines[i].substr(0, std::min<size_t>(60, fileLines[i].size())) + "]";
-                        break;
+                int nearCount = 0;
+                for (size_t keyLen = 20; keyLen >= 4 && nearCount == 0; keyLen -= 4) {
+                    std::string key = firstOldLine.substr(0, std::min(keyLen, firstOldLine.size()));
+                    if (key.empty()) break;
+                    for (size_t i = 0; i < fileLines.size() && nearCount < 3; ++i) {
+                        if (fileLines[i].find(key) != std::string::npos) {
+                            nearCount++;
+                            reason += "\nNear-match at line " + std::to_string(i + 1) + ":";
+                            size_t ctxStart = (i >= 2) ? i - 2 : 0;
+                            size_t ctxEnd = std::min(i + 3, fileLines.size());
+                            for (size_t ci = ctxStart; ci < ctxEnd; ++ci) {
+                                std::string marker = (ci == i) ? " -> " : "    ";
+                                reason += "\n" + marker + std::to_string(ci + 1) + ": " +
+                                          fileLines[ci].substr(0, std::min<size_t>(80, fileLines[ci].size()));
+                            }
+                        }
                     }
                 }
+                if (nearCount == 0) reason += "\nNo similar lines found in file.";
                 entry.set("r", Json::Str(reason));
                 results.arr.push_back(entry);
                 continue;
@@ -1691,9 +1704,11 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
                 for (auto ppos : positions) {
                     Json m = Json::Obj();
                     m.set("line", Json::Num((double)lineNumberAt(contentForSearch, ppos)));
-                    std::string ctx = contentForSearch.substr(ppos, std::min<size_t>(40, contentForSearch.size() - ppos));
-                    size_t nl = ctx.find('\n');
-                    if (nl != std::string::npos) ctx = ctx.substr(0, nl);
+                    size_t lineStart = contentForSearch.rfind('\n', ppos);
+                    lineStart = (lineStart == std::string::npos) ? 0 : lineStart + 1;
+                    size_t lineEnd = contentForSearch.find('\n', ppos);
+                    if (lineEnd == std::string::npos) lineEnd = contentForSearch.size();
+                    std::string ctx = contentForSearch.substr(lineStart, std::min<size_t>(80, lineEnd - lineStart));
                     m.set("ctx", Json::Str(ctx));
                     matchInfo.arr.push_back(m);
                 }
