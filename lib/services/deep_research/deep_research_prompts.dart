@@ -44,15 +44,14 @@ NON-NEGOTIABLE: you have no parametric knowledge for this task. State only infor
 </grounding_rule>
 
 <tools_policy>
-Emit tool calls using ONLY these XML tags, then stop and wait for results:
-1. Web Search: <search_request>your query</search_request>
-   Optional attributes: topic="general|news", time_range="day|week|month|year", start_date/end_date="YYYY-MM-DD", search_depth="basic|advanced".
-   Examples:
-   - <search_request time_range="month" topic="news">latest SWE-bench scores</search_request>
-   - <search_request>how does symlink work in android termux</search_request>
-2. Fetch Page: <read_url>https://example.com/guide</read_url>
-   Fetches one full page in depth. PDFs are excluded to protect mobile memory.
-Batching: you may emit several <search_request> tags (or several <read_url> tags) in one response to run in parallel. Never mix search and read_url tags in the same message.
+Emit tool calls as fenced json blocks; the app executes them and returns results. Then stop and wait:
+- Web Search: ```json
+{"t":"web_search","a":{"q":"your query","topic":"general|news","time_range":"day|week|month|year","search_depth":"basic|advanced"}}
+```
+- Fetch Page: ```json
+{"t":"read_url","a":{"url":"https://example.com/guide"}}
+```
+Batching: several web_search calls may share one block as {"calls":[{...},{...}]} to run in parallel. Never mix web_search and read_url in the same block. Use ONLY this JSON protocol for tools - no XML tool tags.
 </tools_policy>
 
 <tool_limits>
@@ -77,7 +76,7 @@ Batching: you may emit several <search_request> tags (or several <read_url> tags
 </verification_protocol>
 
 <stop_condition>
-After at least one successful read_url (when sources exist) and 2+ full pages read with specific facts/findings addressing the phase goal, emit <step_complete/> to finish. Do not over-search once you have solid evidence.
+After at least one successful read_url (when sources exist) and 2+ full pages read with specific facts/findings addressing the phase goal, emit {"t":"step_complete"} in its own fenced json block to finish. Do not over-search once you have solid evidence.
 </stop_condition>
 """;
 

@@ -2459,11 +2459,11 @@ jobs:
                 if (idx != -1) {
                   final msgs = List<ChatMessage>.from(_sessions[idx].messages);
                   if (assistantMessageIndex < msgs.length) {
-                    msgs[assistantMessageIndex] = ChatMessage(
-                      role: MessageRole.assistant,
-                      text: fullText,
-                      reasoning: reasoningText,
-                    );
+              msgs[assistantMessageIndex] = ChatMessage(
+                  role: MessageRole.assistant,
+                  text: _fenceBareToolCalls(fullText),
+                  reasoning: reasoningText,
+                );
                     _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
                   }
                 }
@@ -2514,10 +2514,10 @@ jobs:
             final msgs = List<ChatMessage>.from(_sessions[idx].messages);
             if (assistantMessageIndex < msgs.length) {
               msgs[assistantMessageIndex] = ChatMessage(
-                role: MessageRole.assistant,
-                text: fullText,
-                reasoning: reasoningText,
-              );
+                  role: MessageRole.assistant,
+                  text: _fenceBareToolCalls(fullText),
+                  reasoning: reasoningText,
+                );
               _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
             }
           }
@@ -2613,7 +2613,7 @@ jobs:
         // always-on XML regexes): web_search/read_url/memory must work in plain
         // chat too, and workspace tools + quiz in study mode. The cheap fence
         // prefilter skips replies that can't contain a JSON tool block.
-        if (fullText.contains('```')) {
+        if (fullText.contains('```') || fullText.contains('"t"')) {
           final nativeCalls = _findNativeToolCalls(fullText);
           for (final nativeCall in nativeCalls) {
             final toolName = (nativeCall['t'] ?? '').toString();
@@ -4282,7 +4282,127 @@ jobs:
         results.add(parsed);
       }
     }
+    if (results.isEmpty) {
+      results.addAll(_findBareToolCalls(fullText));
+    }
     return results;
+  }
+
+  /// Fallback for models that emit tool JSON without a ```json fence:
+  /// scans for bare {"t": ...} objects whose tool name is known. Plain JSON
+  /// code samples or prose braces never match: the 't' value must be a
+  /// registered tool name.
+  List<Map<String, dynamic>> _findBareToolCalls(String text) {
+    final results = <Map<String, dynamic>>[];
+    for (final m in RegExp(r'\{\s*"t"\s*:').allMatches(text)) {
+      final start = m.start;
+      int depth = 0;
+      bool inStr = false;
+      bool esc = false;
+      int end = -1;
+      for (int i = start; i < text.length; i++) {
+        final c = text[i];
+        if (inStr) {
+          if (esc) {
+            esc = false;
+          } else if (c == '\\') {
+            esc = true;
+          } else if (c == '"') {
+            inStr = false;
+          }
+        } else {
+          if (c == '"') {
+            inStr = true;
+          } else if (c == '{') {
+            depth++;
+          } else if (c == '}') {
+            depth--;
+            if (depth == 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+      }
+      if (end == -1) continue;
+      try {
+        final dynamic d = jsonDecode(text.substring(start, end + 1));
+        if (d is Map<String, dynamic> &&
+            _isKnownToolName(d['t']?.toString() ?? '')) {
+          results.add(d);
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return results;
+  }
+
+  bool _isKnownToolName(String t) {
+    const extra = {
+      'web_search', 'search_web', 'read_url', 'memory',
+      'quiz', 'quiz_request', 'step_complete',
+    };
+    return NativeToolsService.cppTools.contains(t) || extra.contains(t);
+  }
+
+  /// Wraps bare known-tool JSON objects in ```json fences so the existing
+  /// renderer shows them as tool cards instead of raw text.
+  String _fenceBareToolCalls(String text) {
+    if (!text.contains('"t"') || text.contains('```')) return text;
+    final sb = StringBuffer();
+    int last = 0;
+    bool wrapped = false;
+    for (final m in RegExp(r'\{\s*"t"\s*:').allMatches(text)) {
+      final start = m.start;
+      if (start < last) continue;
+      int depth = 0;
+      bool inStr = false;
+      bool esc = false;
+      int end = -1;
+      for (int i = start; i < text.length; i++) {
+        final c = text[i];
+        if (inStr) {
+          if (esc) {
+            esc = false;
+          } else if (c == '\\') {
+            esc = true;
+          } else if (c == '"') {
+            inStr = false;
+          }
+        } else {
+          if (c == '"') {
+            inStr = true;
+          } else if (c == '{') {
+            depth++;
+          } else if (c == '}') {
+            depth--;
+            if (depth == 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+      }
+      if (end == -1) continue;
+      final candidate = text.substring(start, end + 1);
+      bool known = false;
+      try {
+        final dynamic d = jsonDecode(candidate);
+        known = d is Map<String, dynamic> &&
+            _isKnownToolName(d['t']?.toString() ?? '');
+      } catch (_) {}
+      if (!known) continue;
+      sb.write(text.substring(last, start));
+      sb.write('\n```json\n');
+      sb.write(candidate);
+      sb.write('\n```\n');
+      last = end + 1;
+      wrapped = true;
+    }
+    if (!wrapped) return text;
+    sb.write(text.substring(last));
+    return sb.toString();
   }
 
   /// True when a native C++ tool call mutates files and therefore needs the
@@ -11209,6 +11329,31 @@ class MessageBubble extends StatelessWidget {
         );
       }
       if (block.language.toLowerCase() == 'svg') {
+        if (!block.content.contains('</svg>')) {
+          return Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFCF6),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE7D8C4)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                SizedBox(width: 10),
+                Text(
+                  'Rendering visual…',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+                ),
+              ],
+            ),
+          );
+        }
         return SvgDiagramWidget(svgString: block.content);
       }
       if (block.language.toLowerCase() == 'chart' ||
@@ -14051,43 +14196,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Personalization Card
-        LiquidGlassSurface(
-          padding: const EdgeInsets.all(16),
-          borderRadius: BorderRadius.circular(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Your Name',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF2D241C),
-                ),
-              ),
-              const SizedBox(height: 2),
-              const Text(
-                'Personalizes replies and the user_info block',
-                style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _userNameController,
-                onChanged: (val) => widget.onUserNameChanged(val.trim()),
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  hintText: 'e.g. Shiva',
-                  isDense: true,
-                  filled: true,
-                  fillColor: Color(0xFFFFFBF2),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
         // File Access Card
         LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
@@ -14764,6 +14872,43 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Personalization Card
+        LiquidGlassSurface(
+          padding: const EdgeInsets.all(16),
+          borderRadius: BorderRadius.circular(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Your Name',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF2D241C),
+                ),
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'Personalizes replies and the user_info block',
+                style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _userNameController,
+                onChanged: (val) => widget.onUserNameChanged(val.trim()),
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  hintText: 'e.g. Shiva',
+                  isDense: true,
+                  filled: true,
+                  fillColor: Color(0xFFFFFBF2),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
         // Cloud Sync & Backup Card
         LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
