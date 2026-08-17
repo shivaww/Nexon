@@ -3204,6 +3204,13 @@ NEVER read an entire large file blindly:
             // Shell permission gate (parity with run_command).
             if (toolName == 'sh') {
               final cmd = toolArgs['cmd']?.toString() ?? '';
+              // F-1: Hard-deny dangerous segments with a specific error
+              if (_classifyShellSegments(cmd) == 'deny') {
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"error":"Command denied by safety policy: contains a hard-denied segment (rm -rf, chmod 777/666, mkfs, dd if=, or force-push)."}',
+                );
+                continue;
+              }
               final allowed = await _askShellPermission(cmd);
               if (!allowed) {
                 toolOutputs.add(
@@ -3334,6 +3341,13 @@ NEVER read an entire large file blindly:
                 toolMethod == 'shell_rich' ||
                 toolMethod == 'run_background') {
               final cmd = toolParams['command']?.toString() ?? '';
+              // F-1: Hard-deny dangerous segments with a specific error
+              if (_classifyShellSegments(cmd) == 'deny') {
+                toolOutputs.add(
+                  'Tool Result [${toolMethod}]:\n\n{"error": "Command denied by safety policy: contains a hard-denied segment (rm -rf, chmod 777/666, mkfs, dd if=, or force-push)."}',
+                );
+                continue;
+              }
               final allowed = await _askShellPermission(cmd);
               if (!allowed) {
                 toolOutputs.add(
@@ -3688,15 +3702,78 @@ NEVER read an entire large file blindly:
     return compacted;
   }
 
+  /// F-1: Classify a shell command by splitting on chain operators and
+  /// checking each segment against deny/allow lists.
+  /// Returns 'deny', 'readonly', or 'ask'.
+  String _classifyShellSegments(String command) {
+    // Split on &&, ||, ;, |, and newlines
+    final segments = command
+        .split(RegExp(r'&&|\|\||;|\||\n'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    if (segments.isEmpty) return 'readonly';
+
+    // Hard-deny patterns — deny wins over everything, even always-allow
+    final denyPatterns = [
+      RegExp(r'\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)'),
+      RegExp(r'\bchmod\s+(777|666)'),
+      RegExp(r'\bmkfs\b'),
+      RegExp(r'\bdd\s+if='),
+      RegExp(r'\bgit\s+push\s+.*(--force|-f|--force-with-lease)'),
+    ];
+
+    for (final seg in segments) {
+      for (final pat in denyPatterns) {
+        if (pat.hasMatch(seg)) return 'deny';
+      }
+    }
+
+    // Read-only auto-approve: every segment must start with a known safe command
+    final readOnlyPatterns = [
+      RegExp(r'^\s*ls\b'),
+      RegExp(r'^\s*cat\b'),
+      RegExp(r'^\s*pwd\b'),
+      RegExp(r'^\s*head\b'),
+      RegExp(r'^\s*tail\b'),
+      RegExp(r'^\s*wc\b'),
+      RegExp(r'^\s*grep\b'),
+      RegExp(r'^\s*rg\b'),
+      RegExp(r'^\s*git\s+(status|diff|log|show|branch)\b'),
+      RegExp(r'^\s*echo\b'),
+      RegExp(r'^\s*which\b'),
+      RegExp(r'^\s*find\b'),
+      RegExp(r'^\s*file\b'),
+      RegExp(r'^\s*stat\b'),
+      RegExp(r'^\s*du\b'),
+      RegExp(r'^\s*df\b'),
+    ];
+
+    for (final seg in segments) {
+      final isReadOnly = readOnlyPatterns.any((pat) => pat.hasMatch(seg));
+      if (!isReadOnly) return 'ask';
+    }
+
+    return 'readonly';
+  }
+
   /// Show permission dialog before executing a shell command.
   /// Returns true if the command should proceed.
   Future<bool> _askShellPermission(String command) async {
+    // F-1: Segment-based safety (deny wins over everything)
+    final classification = _classifyShellSegments(command);
+    if (classification == 'deny') return false;
+
     // Already allowed globally
     if (_shellPermission == 'always') return true;
     // Already allowed for this session
     if (_shellSessionAllow) return true;
     // User previously denied always
     if (_shellPermission == 'never') return false;
+
+    // F-1: Auto-approve pure read-only chains without prompting
+    if (classification == 'readonly') return true;
 
     if (!mounted) return false;
 
