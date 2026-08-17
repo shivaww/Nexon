@@ -2495,8 +2495,17 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
                   ext == ".h" || ext == ".hpp" || ext == ".hh" || ext == ".hxx");
     bool isGo = (ext == ".go");
     bool isRust = (ext == ".rs");
-    bool isJava = (ext == ".java" || ext == ".kt" || ext == ".scala");
+    bool isJava = (ext == ".java" || ext == ".scala");
     bool isDart = (ext == ".dart");
+    bool isShell = (ext == ".sh" || ext == ".bash" || ext == ".zsh");
+    bool isRuby = (ext == ".rb");
+    bool isSwift = (ext == ".swift");
+    bool isPhp = (ext == ".php");
+    bool isCSharp = (ext == ".cs");
+    bool isKotlin = (ext == ".kt" || ext == ".kts");
+    bool isHtml = (ext == ".html" || ext == ".htm");
+    bool isLua = (ext == ".lua");
+    bool isSql = (ext == ".sql");
     for (size_t i = 0; i < lines.size() && i < 50000; ++i) {
         std::string line = lines[i];
         std::string trimmed = trim(line);
@@ -2564,7 +2573,143 @@ std::vector<OutlineEntry> extractOutline(const std::vector<std::string>& lines, 
                 continue;
             }
         }
-        if (isCpp || isJava || isGo || isRust || isDart) {
+        if (isShell) {
+            if (trimmed.substr(0, 9) == "function ") {
+                size_t bracePos = trimmed.find('{');
+                size_t parenPos = trimmed.find('(');
+                size_t endPos = std::min(bracePos, parenPos);
+                std::string sig = (endPos != std::string::npos) ? trim(trimmed.substr(0, endPos)) : trimmed;
+                entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+            if (trimmed.find("()") != std::string::npos && trimmed.back() == '{') {
+                size_t bracePos = trimmed.find('{');
+                std::string sig = trim(trimmed.substr(0, bracePos));
+                if (sig.find('(') != std::string::npos) {
+                    entries.push_back({(long)(i+1), "func", sig});
+                    continue;
+                }
+            }
+        }
+        if (isRuby) {
+            if (trimmed.substr(0, 4) == "def ") {
+                entries.push_back({(long)(i+1), "def", trimmed});
+                continue;
+            }
+            if (trimmed.substr(0, 6) == "class ") {
+                entries.push_back({(long)(i+1), "class", trimmed});
+                continue;
+            }
+            if (trimmed.substr(0, 7) == "module ") {
+                entries.push_back({(long)(i+1), "class", trimmed});
+                continue;
+            }
+        }
+        if (isSwift) {
+            if (trimmed.substr(0, 5) == "func ") {
+                size_t bracePos = trimmed.find('{');
+                std::string sig = (bracePos != std::string::npos) ? trim(trimmed.substr(0, bracePos)) : trimmed;
+                entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+            if (trimmed.substr(0, 9) == "protocol " || trimmed.substr(0, 10) == "extension ") {
+                size_t bracePos = trimmed.find('{');
+                std::string sig = (bracePos != std::string::npos) ? trim(trimmed.substr(0, bracePos)) : trimmed;
+                entries.push_back({(long)(i+1), "class", sig});
+                continue;
+            }
+        }
+        if (isPhp) {
+            if (trimmed.find("function ") != std::string::npos && trimmed.find("function ") < 30) {
+                size_t bracePos = trimmed.find('{');
+                std::string sig = (bracePos != std::string::npos) ? trim(trimmed.substr(0, bracePos)) : trimmed;
+                entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+            if (trimmed.substr(0, 10) == "interface " || trimmed.substr(0, 6) == "trait ") {
+                size_t bracePos = trimmed.find('{');
+                std::string sig = (bracePos != std::string::npos) ? trim(trimmed.substr(0, bracePos)) : trimmed;
+                entries.push_back({(long)(i+1), "class", sig});
+                continue;
+            }
+        }
+        if (isCSharp) {
+            if (trimmed.substr(0, 10) == "interface " || trimmed.substr(0, 5) == "enum " ||
+                trimmed.substr(0, 10) == "namespace ") {
+                size_t bracePos = trimmed.find('{');
+                std::string sig = (bracePos != std::string::npos) ? trim(trimmed.substr(0, bracePos)) : trimmed;
+                entries.push_back({(long)(i+1), "class", sig});
+                continue;
+            }
+        }
+        if (isKotlin) {
+            if (trimmed.substr(0, 4) == "fun ") {
+                size_t bracePos = trimmed.find('{');
+                size_t eqPos = trimmed.find('=');
+                size_t endPos = std::min(bracePos, eqPos);
+                std::string sig = (endPos != std::string::npos) ? trim(trimmed.substr(0, endPos)) : trimmed;
+                entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+            if (trimmed.substr(0, 7) == "object " || trimmed.substr(0, 10) == "interface ") {
+                size_t bracePos = trimmed.find('{');
+                size_t colonPos = trimmed.find(':');
+                size_t endPos = std::min(bracePos, colonPos);
+                std::string sig = (endPos != std::string::npos) ? trim(trimmed.substr(0, endPos)) : trimmed;
+                entries.push_back({(long)(i+1), "class", sig});
+                continue;
+            }
+            if (trimmed.find("data class ") != std::string::npos ||
+                trimmed.find("sealed class ") != std::string::npos ||
+                trimmed.find("enum class ") != std::string::npos) {
+                size_t parenPos = trimmed.find('(');
+                size_t bracePos = trimmed.find('{');
+                size_t endPos = std::min(parenPos, bracePos);
+                std::string sig = (endPos != std::string::npos) ? trim(trimmed.substr(0, endPos)) : trimmed;
+                entries.push_back({(long)(i+1), "class", sig});
+                continue;
+            }
+        }
+        if (isHtml) {
+            if (trimmed.substr(0, 7) == "<script") {
+                entries.push_back({(long)(i+1), "func", "<script>"});
+                continue;
+            }
+            if (trimmed.substr(0, 6) == "<style") {
+                entries.push_back({(long)(i+1), "func", "<style>"});
+                continue;
+            }
+            if (trimmed.size() > 3 && trimmed[0] == '<' && trimmed[1] == 'h' &&
+                trimmed[2] >= '1' && trimmed[2] <= '6') {
+                size_t closePos = trimmed.find('>');
+                if (closePos != std::string::npos && closePos < 100) {
+                    entries.push_back({(long)(i+1), "class", trimmed.substr(0, closePos + 1)});
+                }
+                continue;
+            }
+        }
+        if (isLua) {
+            if (trimmed.substr(0, 9) == "function " || trimmed.substr(0, 15) == "local function ") {
+                size_t parenPos = trimmed.find('(');
+                std::string sig = (parenPos != std::string::npos) ? trim(trimmed.substr(0, parenPos)) : trimmed;
+                entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+        }
+        if (isSql) {
+            std::string upper = trimmed;
+            for (size_t ci = 0; ci < upper.size() && ci < 20; ++ci) upper[ci] = toupper(upper[ci]);
+            if (upper.substr(0, 12) == "CREATE TABLE" || upper.substr(0, 15) == "CREATE FUNCTION" ||
+                upper.substr(0, 18) == "CREATE PROCEDURE" || upper.substr(0, 12) == "CREATE VIEW " ||
+                upper.substr(0, 12) == "CREATE INDEX" || upper.substr(0, 11) == "ALTER TABLE") {
+                size_t parenPos = trimmed.find('(');
+                std::string sig = (parenPos != std::string::npos) ? trim(trimmed.substr(0, parenPos)) : trimmed;
+                if (sig.size() > 120) sig = sig.substr(0, 120);
+                entries.push_back({(long)(i+1), "func", sig});
+                continue;
+            }
+        }
+        if (isCpp || isJava || isGo || isRust || isDart || isSwift || isCSharp || isKotlin || isPhp) {
             if (trimmed.find("struct ") != std::string::npos && trimmed.find("struct ") < 20) {
                 size_t bracePos = trimmed.find('{');
                 size_t parenPos = trimmed.find('(');
