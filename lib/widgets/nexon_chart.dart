@@ -949,13 +949,13 @@ class NexonChartWidget extends StatelessWidget {
     // Calculate bounds
     final xValues = spots.map((s) => s.x).toList();
     final yValues = spots.map((s) => s.y).toList();
-    final minX = data.rangeMin ?? xValues.reduce(math.min);
-    final maxX = data.rangeMax ?? xValues.reduce(math.max);
-    final minY = yValues.reduce(math.min);
-    final maxY = yValues.reduce(math.max);
+    final minX = (data.rangeMin ?? xValues.reduce(math.min)).toDouble();
+    final maxX = (data.rangeMax ?? xValues.reduce(math.max)).toDouble();
+    final minY = yValues.reduce(math.min).toDouble();
+    final maxY = yValues.reduce(math.max).toDouble();
     
-    final niceMaxX = maxX * 1.15 == 0 ? 10 : maxX * 1.15;
-    final niceMaxY = maxY * 1.15 == 0 ? 10 : maxY * 1.15;
+    final niceMaxX = maxX * 1.15 == 0 ? 10.0 : maxX * 1.15;
+    final niceMaxY = maxY * 1.15 == 0 ? 10.0 : maxY * 1.15;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
@@ -970,9 +970,11 @@ class NexonChartWidget extends StatelessWidget {
             touchTooltipData: ScatterTouchTooltipData(
               getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spot) {
-                final label = spot.spotIndex < data.labels.length 
-                    ? data.labels[spot.spotIndex] 
-                    : 'Point ${spot.spotIndex + 1}';
+                // Find label by matching spot coordinates
+                final spotIndex = spots.indexWhere((s) => s.x == spot.x && s.y == spot.y);
+                final label = spotIndex >= 0 && spotIndex < data.labels.length 
+                    ? data.labels[spotIndex] 
+                    : 'Point ${spotIndex >= 0 ? spotIndex + 1 : '?'}';
                 return ScatterTooltipItem(
                   '$label\n(${spot.x.toStringAsFixed(1)}, ${spot.y.toStringAsFixed(1)})',
                   textStyle: const TextStyle(color: Colors.white, fontSize: 11),
@@ -1252,13 +1254,13 @@ class NexonChartWidget extends StatelessWidget {
     // Calculate bounds
     final xValues = spots.map((s) => s.x).toList();
     final yValues = spots.map((s) => s.y).toList();
-    final minX = data.rangeMin ?? xValues.reduce(math.min);
-    final maxX = data.rangeMax ?? xValues.reduce(math.max);
-    final minY = yValues.reduce(math.min);
-    final maxY = yValues.reduce(math.max);
+    final minX = (data.rangeMin ?? xValues.reduce(math.min)).toDouble();
+    final maxX = (data.rangeMax ?? xValues.reduce(math.max)).toDouble();
+    final minY = yValues.reduce(math.min).toDouble();
+    final maxY = yValues.reduce(math.max).toDouble();
     
-    final niceMaxX = maxX * 1.15 == 0 ? 10 : maxX * 1.15;
-    final niceMaxY = maxY * 1.15 == 0 ? 10 : maxY * 1.15;
+    final niceMaxX = maxX * 1.15 == 0 ? 10.0 : maxX * 1.15;
+    final niceMaxY = maxY * 1.15 == 0 ? 10.0 : maxY * 1.15;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
@@ -1273,9 +1275,11 @@ class NexonChartWidget extends StatelessWidget {
             touchTooltipData: ScatterTouchTooltipData(
               getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spot) {
-                final label = spot.spotIndex < data.labels.length 
-                    ? data.labels[spot.spotIndex] 
-                    : 'Point ${spot.spotIndex + 1}';
+                // Find label by matching spot coordinates
+                final spotIndex = spots.indexWhere((s) => s.x == spot.x && s.y == spot.y);
+                final label = spotIndex >= 0 && spotIndex < data.labels.length 
+                    ? data.labels[spotIndex] 
+                    : 'Point ${spotIndex >= 0 ? spotIndex + 1 : '?'}';
                 return ScatterTooltipItem(
                   '$label\n(${spot.x.toStringAsFixed(1)}, ${spot.y.toStringAsFixed(1)})',
                   textStyle: const TextStyle(color: Colors.white, fontSize: 11),
