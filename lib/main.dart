@@ -2626,7 +2626,9 @@ jobs:
         // always-on XML regexes): web_search/read_url/memory must work in plain
         // chat too, and workspace tools + quiz in study mode. The cheap fence
         // prefilter skips replies that can't contain a JSON tool block.
-        if (fullText.contains('```') || fullText.contains('"t"')) {
+        if (fullText.contains('```') ||
+            fullText.contains('"t"') ||
+            fullText.contains('<invoke')) {
           final nativeCalls = _findNativeToolCalls(fullText);
           for (final nativeCall in nativeCalls) {
             final toolName = (nativeCall['t'] ?? '').toString();
@@ -4344,9 +4346,59 @@ jobs:
       }
     }
     if (results.isEmpty) {
+      results.addAll(_findXmlToolCalls(fullText));
+    }
+    if (results.isEmpty) {
       results.addAll(_findBareToolCalls(fullText));
     }
     return results;
+  }
+
+  /// Maps XML-style tool calls (<tool_calls><invoke name="x"><parameter
+  /// name="y">v</parameter></invoke></tool_calls>) emitted by some models onto
+  /// the native {"t","a"} shape so they execute instead of rendering as text.
+  List<Map<String, dynamic>> _findXmlToolCalls(String text) {
+    final results = <Map<String, dynamic>>[];
+    final invokeRegex = RegExp(
+      r'<invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)</invoke>',
+      caseSensitive: false,
+    );
+    final paramRegex = RegExp(
+      r'<parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)</parameter>',
+      caseSensitive: false,
+    );
+    String unescape(String s) => s
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&amp;', '&');
+    for (final m in invokeRegex.allMatches(text)) {
+      final name = unescape(m.group(1) ?? '').trim();
+      if (name.isEmpty) continue;
+      final body = m.group(2) ?? '';
+      final args = <String, dynamic>{};
+      for (final p in paramRegex.allMatches(body)) {
+        args[unescape(p.group(1) ?? '').trim()] = unescape(p.group(2) ?? '');
+      }
+      if (name == 'python3' || name == 'python') {
+        final code = (args['code'] ?? '').toString();
+        results.add({
+          't': 'sh',
+          'a': {'cmd': "python3 << 'NEXON_PY'\n$code\nNEXON_PY"},
+        });
+      } else {
+        results.add({'t': name, 'a': args});
+      }
+    }
+    return results;
+  }
+
+  String _xmlInvokesToJson(String xml) {
+    final calls = _findXmlToolCalls(xml);
+    if (calls.isEmpty) return xml;
+    if (calls.length == 1) return jsonEncode(calls.first);
+    return jsonEncode({'calls': calls});
   }
 
   /// Fallback for models that emit tool JSON without a ```json fence:
@@ -4414,6 +4466,25 @@ jobs:
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
   /// renderer shows them as tool cards instead of raw text.
   String _fenceBareToolCalls(String text) {
+    if (text.contains('<invoke')) {
+      text = text.replaceAllMapped(
+        RegExp(r'<tool_calls>([\s\S]*?)</tool_calls>', caseSensitive: false),
+        (m) => '\n```json\n${_xmlInvokesToJson(m.group(1) ?? '')}\n```\n',
+      );
+      if (text.contains('<invoke')) {
+        text = text.replaceAllMapped(
+          RegExp(
+            r'<invoke\s+name="[^"]+"[^>]*>[\s\S]*?</invoke>',
+            caseSensitive: false,
+          ),
+          (m) => '\n```json\n${_xmlInvokesToJson(m.group(0) ?? '')}\n```\n',
+        );
+      }
+      text = text.replaceAll(
+        RegExp(r'</?tool_calls>', caseSensitive: false),
+        '',
+      );
+    }
     if (!text.contains('"t"') || text.contains('```')) return text;
     final sb = StringBuffer();
     int last = 0;

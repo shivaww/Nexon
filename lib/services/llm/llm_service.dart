@@ -198,6 +198,7 @@ class LLMService {
     double temperature = 0.7,
     int? maxTokens,
     List<Map<String, dynamic>>? tools,
+    String? promptCacheKey,
   }) async {
     final model = _findModel(modelId);
     if (model == null) {
@@ -217,12 +218,18 @@ class LLMService {
       request.headers.set('Content-Type', 'application/json');
       _setProviderHeaders(request, provider);
 
+      final strategy = _resolveCacheStrategy(provider, modelId);
+      final sortedTools = tools != null ? _sortTools(tools) : null;
+      final preparedMessages = _prepareMessages(messages, strategy);
+
       final body = <String, dynamic>{
         'model': modelId,
-        'messages': messages.map((m) => m.toJson()).toList(),
+        'messages': preparedMessages,
         'temperature': temperature,
         if (maxTokens != null) 'max_tokens': maxTokens,
-        if (tools != null) 'tools': tools,
+        if (sortedTools != null) 'tools': sortedTools,
+        if (strategy == CacheStrategy.automaticPrefix && promptCacheKey != null)
+          'prompt_cache_key': promptCacheKey,
       };
 
       request.write(jsonEncode(body));
@@ -244,6 +251,10 @@ class LLMService {
 
       final inputTokens = (usage['prompt_tokens'] as int?) ?? 0;
       final outputTokens = (usage['completion_tokens'] as int?) ?? 0;
+      final cachedTokens = (usage['cached_tokens'] as int?) ??
+          (usage['cache_read_input_tokens'] as int?) ?? 0;
+      final cacheCreationTokens =
+          (usage['cache_creation_input_tokens'] as int?) ?? 0;
       final cost = model.estimateCost(inputTokens, outputTokens);
 
       _eventBus.publish(CostUpdated(
@@ -258,6 +269,8 @@ class LLMService {
         content: (message['content'] as String?) ?? '',
         inputTokens: inputTokens,
         outputTokens: outputTokens,
+        cachedTokens: cachedTokens,
+        cacheCreationTokens: cacheCreationTokens,
         toolCalls: message['tool_calls'] as List<Map<String, dynamic>>?,
         finishReason: (choice['finish_reason'] as String?) ?? 'stop',
         duration: stopwatch.elapsed,
@@ -277,6 +290,7 @@ class LLMService {
     required List<ChatMessage> messages,
     double temperature = 0.7,
     int? maxTokens,
+    String? promptCacheKey,
   }) async* {
     final model = _findModel(modelId);
     if (model == null) {
@@ -295,12 +309,17 @@ class LLMService {
       request.headers.set('Accept', 'text/event-stream');
       _setProviderHeaders(request, provider);
 
+      final strategy = _resolveCacheStrategy(provider, modelId);
+      final preparedMessages = _prepareMessages(messages, strategy);
+
       final body = <String, dynamic>{
         'model': modelId,
-        'messages': messages.map((m) => m.toJson()).toList(),
+        'messages': preparedMessages,
         'temperature': temperature,
         'stream': true,
         if (maxTokens != null) 'max_tokens': maxTokens,
+        if (strategy == CacheStrategy.automaticPrefix && promptCacheKey != null)
+          'prompt_cache_key': promptCacheKey,
       };
 
       request.write(jsonEncode(body));
@@ -367,6 +386,74 @@ class LLMService {
     final baseUrl = provider.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     if (baseUrl.endsWith('/chat/completions')) return baseUrl;
     return '$baseUrl/chat/completions';
+  }
+
+  /// Resolves the cache strategy for a provider/model combination.
+  ///
+  /// Order: provider override → provider ID → model name → base URL → default.
+  CacheStrategy _resolveCacheStrategy(LLMProvider provider, String modelId) {
+    if (provider.cacheStrategy != null) return provider.cacheStrategy!;
+
+    final id = provider.id.toLowerCase();
+    final modelLower = modelId.toLowerCase();
+    final baseUrl = provider.baseUrl.toLowerCase();
+
+    // Explicit breakpoint providers (Anthropic, Bedrock)
+    if (id.contains('anthropic') ||
+        id.contains('claude') ||
+        id.contains('bedrock') ||
+        baseUrl.contains('anthropic') ||
+        baseUrl.contains('bedrock')) {
+      return CacheStrategy.explicitBreakpoint;
+    }
+
+    // Implicit caching (Gemini)
+    if (id.contains('gemini') ||
+        id.contains('google') ||
+        baseUrl.contains('gemini')) {
+      return CacheStrategy.implicit;
+    }
+
+    // Explicit breakpoint by model name (Claude variants)
+    if (modelLower.contains('claude')) {
+      return CacheStrategy.explicitBreakpoint;
+    }
+
+    // Automatic prefix (OpenAI-compatible: OpenAI, Fireworks, Together, Groq, etc.)
+    return CacheStrategy.automaticPrefix;
+  }
+
+  /// Prepares messages with strategy-specific optimizations.
+  ///
+  /// For `explicitBreakpoint`, injects `cache_control: {"type": "ephemeral"}`
+  /// on the system message and tools (not handled here, caller must do).
+  List<Map<String, dynamic>> _prepareMessages(
+    List<ChatMessage> messages,
+    CacheStrategy strategy,
+  ) {
+    if (strategy != CacheStrategy.explicitBreakpoint) {
+      return messages.map((m) => m.toJson()).toList();
+    }
+
+    // Inject cache_control on system message for Anthropic-style providers
+    return messages.map((m) {
+      final json = m.toJson();
+      if (m.role == 'system') {
+        json['cache_control'] = {'type': 'ephemeral'};
+      }
+      return json;
+    }).toList();
+  }
+
+  /// Sorts tools alphabetically by name to ensure byte-identical prefix.
+  List<Map<String, dynamic>> _sortTools(List<Map<String, dynamic>> tools) {
+    final sorted = List<Map<String, dynamic>>.from(tools);
+    sorted.sort((a, b) {
+      final nameA = (a['function']?['name'] ?? a['name'] ?? '').toString();
+      final nameB = (b['function']?['name'] ?? b['name'] ?? '').toString();
+      return nameA.compareTo(nameB);
+    });
+    return sorted;
   }
 
   void _setProviderHeaders(HttpClientRequest request, LLMProvider provider) {

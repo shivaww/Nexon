@@ -121,6 +121,37 @@ class _Edge {
   _Edge({required this.from, required this.to});
 }
 
+// ── Helper Functions ────────────────────────────────────────────────────────
+
+/// Split labels respecting quoted strings (handles commas inside quotes)
+List<String> _splitLabels(String value) {
+  final result = <String>[];
+  final buffer = StringBuffer();
+  bool inQuotes = false;
+  
+  for (int i = 0; i < value.length; i++) {
+    final char = value[i];
+    if (char == '"' || char == "'") {
+      inQuotes = !inQuotes;
+    } else if (char == ',' && !inQuotes) {
+      final trimmed = buffer.toString().trim();
+      if (trimmed.isNotEmpty) {
+        result.add(trimmed);
+      }
+      buffer.clear();
+    } else {
+      buffer.write(char);
+    }
+  }
+  
+  final trimmed = buffer.toString().trim();
+  if (trimmed.isNotEmpty) {
+    result.add(trimmed);
+  }
+  
+  return result;
+}
+
 // ── Parser ───────────────────────────────────────────────────────────────────
 //
 // Simple line-based format:
@@ -138,6 +169,12 @@ class _Edge {
 // Android: 45
 // iOS: 30
 // Web: 25
+//
+// For X,Y coordinates (scatter/bubble/cartesian):
+// type: scatter
+// Point A: 10, 25
+// Point B: 20, 35
+// Point C: 15, 30
 //
 
 _ChartData _parseChartBlock(String raw) {
@@ -188,6 +225,8 @@ _ChartData _parseChartBlock(String raw) {
 
   // Collect lines that are simple key:value (for shorthand single-series)
   final shorthandEntries = <String, double>{};
+  // For X,Y pairs like "Point A: 10, 25"
+  final shorthandPairs = <String, (double, double)>{};
   int seriesColorIndex = 0;
 
   for (final line in lines) {
@@ -207,7 +246,8 @@ _ChartData _parseChartBlock(String raw) {
         rangeMax = double.tryParse(parts[1]);
       }
     } else if (key == 'labels') {
-      labels = value.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      // Quote-aware splitting to handle labels with commas
+      labels = _splitLabels(value);
     } else if (key == 'xlabels') {
       xLabels = value.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
     } else if (key == 'ylabels') {
@@ -251,26 +291,79 @@ _ChartData _parseChartBlock(String raw) {
         edges.add(_Edge(from: value.substring(0, arrowIdx).trim(), to: value.substring(arrowIdx + 2).trim()));
       }
     } else if (!['type', 'title', 'range', 'labels', 'series', 'row', 'xlabels', 'ylabels', 'gantt', 'task', 'value', 'max', 'label', 'node', 'edge', 'link'].contains(key)) {
-      // Shorthand: "Android: 45" or "Android: 45, 30" (for scatter x,y)
-      final numVal = double.tryParse(value.split(',').first.trim());
-      if (numVal != null) {
-        // Use the ORIGINAL key from the line (preserve casing)
-        final originalKey = line.substring(0, colonIdx).trim();
-        shorthandEntries[originalKey] = numVal;
+      // Shorthand: "Android: 45" (pie/donut) or "Point A: 10, 25" (scatter X,Y pairs)
+      final parts = value.split(',').map((s) => s.trim()).toList();
+      if (parts.length == 1) {
+        // Single value: "Android: 45"
+        final numVal = double.tryParse(parts[0]);
+        if (numVal != null) {
+          final originalKey = line.substring(0, colonIdx).trim();
+          shorthandEntries[originalKey] = numVal;
+        }
+      } else if (parts.length == 2) {
+        // X,Y pair: "Point A: 10, 25" -> create series entry for scatter/bubble/cartesian
+        final xVal = double.tryParse(parts[0]);
+        final yVal = double.tryParse(parts[1]);
+        if (xVal != null && yVal != null) {
+          final originalKey = line.substring(0, colonIdx).trim();
+          // For scatter/bubble, we need to store X,Y as separate series or handle specially
+          // Store as a special format that will be processed later
+          shorthandPairs[originalKey] = (xVal, yVal);
+        }
       }
     }
   }
 
-  // If no explicit series but have shorthand entries, build a single series
-  if (series.isEmpty && shorthandEntries.isNotEmpty && ganttItems.isEmpty) {
-    labels = shorthandEntries.keys.toList();
-    series = [
-      _Series(
-        name: 'Data',
-        values: shorthandEntries.values.toList(),
-        color: _paletteColor(0),
-      ),
-    ];
+  // If no explicit series but have shorthand entries, build appropriate series
+  if (series.isEmpty && ganttItems.isEmpty) {
+    if (shorthandEntries.isNotEmpty && shorthandPairs.isEmpty) {
+      // Pie/donut format: "Android: 45", "iOS: 30"
+      labels = shorthandEntries.keys.toList();
+      series = [
+        _Series(
+          name: 'Data',
+          values: shorthandEntries.values.toList(),
+          color: _paletteColor(0),
+        ),
+      ];
+    } else if (shorthandPairs.isNotEmpty) {
+      // X,Y pairs: "Point A: 10, 25", "Point B: 20, 35"
+      if (type.contains('scatter') || type.contains('bubble')) {
+        // For scatter/bubble, create two series: X values and Y values
+        // The painter will use X series for X coords and Y series for Y coords
+        labels = shorthandPairs.keys.toList();
+        final xValues = shorthandPairs.values.map((p) => p.$1).toList();
+        final yValues = shorthandPairs.values.map((p) => p.$2).toList();
+        series = [
+          _Series(name: 'X', values: xValues, color: _paletteColor(0)),
+          _Series(name: 'Y', values: yValues, color: _paletteColor(1)),
+        ];
+      } else if (type.contains('cartesian') || type.contains('geometry')) {
+        // For cartesian, flatten pairs into a single series: [x1,y1, x2,y2, x3,y3]
+        final flatValues = <double>[];
+        for (final pair in shorthandPairs.values) {
+          flatValues.add(pair.$1);
+          flatValues.add(pair.$2);
+        }
+        series = [
+          _Series(
+            name: 'Data',
+            values: flatValues,
+            color: _paletteColor(0),
+          ),
+        ];
+      } else {
+        // For other chart types, just use Y values
+        labels = shorthandPairs.keys.toList();
+        series = [
+          _Series(
+            name: 'Data',
+            values: shorthandPairs.values.map((p) => p.$2).toList(),
+            color: _paletteColor(0),
+          ),
+        ];
+      }
+    }
   }
 
   return _ChartData(
@@ -342,7 +435,29 @@ class NexonChartWidget extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
                 child: SizedBox(
                   height: 280,
-                  child: _buildChart(data),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final pointCount = math.max(
+                        data.labels.length,
+                        data.series.isNotEmpty
+                            ? data.series.first.values.length
+                            : 0,
+                      );
+                      final minWidth = pointCount * 56.0;
+                      final avail = constraints.maxWidth.isFinite
+                          ? constraints.maxWidth
+                          : minWidth;
+                      final width = math.max(avail, minWidth);
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: width,
+                          height: 280,
+                          child: _buildChart(data),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
               // Legend
@@ -787,52 +902,93 @@ class NexonChartWidget extends StatelessWidget {
   // ── Scatter Chart ───────────────────────────────────────────────────────
 
   static Widget _buildScatterChart(_ChartData data) {
-    // For scatter: each series has pairs. If only one series, pair labels (x indices) with values.
-    final allVals = data.series.expand((s) => s.values).toList();
-    if (allVals.isEmpty) return const SizedBox.shrink();
-    final maxVal = allVals.reduce(math.max);
-    final minVal = data.rangeMin ?? 0;
-    final niceMax = data.rangeMax ?? (maxVal * 1.15 == 0 ? 10 : maxVal * 1.15);
+    // For scatter: support both index-based and explicit X,Y coordinates
+    if (data.series.isEmpty) return const SizedBox.shrink();
+    
+    // Check if we have X,Y series (from shorthand pairs)
+    final hasExplicitXY = data.series.length == 2 && 
+                          data.series[0].name == 'X' && 
+                          data.series[1].name == 'Y' &&
+                          data.series[0].values.length == data.series[1].values.length;
+    
+    final spots = <ScatterSpot>[];
+    
+    if (hasExplicitXY) {
+      // Use explicit X,Y coordinates
+      final xSeries = data.series[0];
+      final ySeries = data.series[1];
+      for (int i = 0; i < xSeries.values.length; i++) {
+        spots.add(ScatterSpot(
+          xSeries.values[i],
+          ySeries.values[i],
+          dotPainter: FlDotCirclePainter(
+            radius: 5,
+            color: _paletteColor(i % 10).withOpacity(0.7),
+            strokeWidth: 1.5,
+            strokeColor: _paletteColor(i % 10),
+          ),
+        ));
+      }
+    } else {
+      // Use index-based X coordinates
+      spots.addAll(data.series.expand((s) {
+        return s.values.asMap().entries.map((e) => ScatterSpot(
+          e.key.toDouble(), e.value,
+          dotPainter: FlDotCirclePainter(
+            radius: 5,
+            color: s.color.withOpacity(0.7),
+            strokeWidth: 1.5,
+            strokeColor: s.color,
+          ),
+        ));
+      }));
+    }
+    
+    if (spots.isEmpty) return const SizedBox.shrink();
+    
+    // Calculate bounds
+    final xValues = spots.map((s) => s.x).toList();
+    final yValues = spots.map((s) => s.y).toList();
+    final minX = data.rangeMin ?? xValues.reduce(math.min);
+    final maxX = data.rangeMax ?? xValues.reduce(math.max);
+    final minY = yValues.reduce(math.min);
+    final maxY = yValues.reduce(math.max);
+    
+    final niceMaxX = maxX * 1.15 == 0 ? 10 : maxX * 1.15;
+    final niceMaxY = maxY * 1.15 == 0 ? 10 : maxY * 1.15;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
       child: ScatterChart(
         ScatterChartData(
-          minY: minVal,
-          maxY: niceMax,
-          minX: -0.5,
-          maxX: (data.series.isNotEmpty ? data.series.first.values.length.toDouble() : 10) - 0.5,
+          minY: minY,
+          maxY: niceMaxY,
+          minX: minX,
+          maxX: niceMaxX,
           scatterTouchData: ScatterTouchData(
             enabled: true,
             touchTooltipData: ScatterTouchTooltipData(
               getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spot) {
+                final label = spot.spotIndex < data.labels.length 
+                    ? data.labels[spot.spotIndex] 
+                    : 'Point ${spot.spotIndex + 1}';
                 return ScatterTooltipItem(
-                  '(${spot.x.toStringAsFixed(1)}, ${spot.y.toStringAsFixed(1)})',
+                  '$label\n(${spot.x.toStringAsFixed(1)}, ${spot.y.toStringAsFixed(1)})',
                   textStyle: const TextStyle(color: Colors.white, fontSize: 11),
                 );
               },
             ),
           ),
-          titlesData: _buildTitlesData(data, niceMax, minVal),
+          titlesData: _buildTitlesData(data, niceMaxY, minY),
           gridData: FlGridData(
             show: true,
-            horizontalInterval: _niceInterval(niceMax - minVal),
+            horizontalInterval: _niceInterval(niceMaxY - minY),
             getDrawingHorizontalLine: (v) => FlLine(color: _kGridColor, strokeWidth: 0.5),
             getDrawingVerticalLine: (v) => FlLine(color: _kGridColor, strokeWidth: 0.5),
           ),
           borderData: FlBorderData(show: false),
-          scatterSpots: data.series.expand((s) {
-            return s.values.asMap().entries.map((e) => ScatterSpot(
-              e.key.toDouble(), e.value,
-              dotPainter: FlDotCirclePainter(
-                radius: 5,
-                color: s.color.withOpacity(0.7),
-                strokeWidth: 1.5,
-                strokeColor: s.color,
-              ),
-            ));
-          }).toList(),
+          scatterSpots: spots,
         ),
       ),
     );
@@ -1038,55 +1194,104 @@ class NexonChartWidget extends StatelessWidget {
 
   static Widget _buildBubbleChart(_ChartData data) {
     // Uses scatter chart with varying dot sizes
-    // For bubble, series values are treated as: value = y, index = x, magnitude = size
-    final allVals = data.series.expand((s) => s.values).toList();
-    if (allVals.isEmpty) return const SizedBox.shrink();
-    final maxVal = allVals.reduce(math.max);
-    final minVal = data.rangeMin ?? 0;
-    final niceMax = data.rangeMax ?? (maxVal * 1.15 == 0 ? 10 : maxVal * 1.15);
+    // Support both index-based and explicit X,Y coordinates
+    if (data.series.isEmpty) return const SizedBox.shrink();
+    
+    // Check if we have X,Y series (from shorthand pairs)
+    final hasExplicitXY = data.series.length == 2 && 
+                          data.series[0].name == 'X' && 
+                          data.series[1].name == 'Y' &&
+                          data.series[0].values.length == data.series[1].values.length;
+    
+    final spots = <ScatterSpot>[];
+    double maxVal = 0;
+    
+    if (hasExplicitXY) {
+      // Use explicit X,Y coordinates
+      final xSeries = data.series[0];
+      final ySeries = data.series[1];
+      maxVal = ySeries.values.reduce(math.max);
+      
+      for (int i = 0; i < xSeries.values.length; i++) {
+        final yVal = ySeries.values[i];
+        final bubbleRadius = maxVal > 0 ? (yVal / maxVal * 18).clamp(4.0, 22.0) : 6.0;
+        spots.add(ScatterSpot(
+          xSeries.values[i],
+          yVal,
+          dotPainter: FlDotCirclePainter(
+            radius: bubbleRadius,
+            color: _paletteColor(i % 10).withOpacity(0.5),
+            strokeWidth: 2,
+            strokeColor: _paletteColor(i % 10),
+          ),
+        ));
+      }
+    } else {
+      // Use index-based X coordinates
+      final allVals = data.series.expand((s) => s.values).toList();
+      maxVal = allVals.reduce(math.max);
+      
+      spots.addAll(data.series.expand((s) {
+        return s.values.asMap().entries.map((e) {
+          final bubbleRadius = maxVal > 0 ? (e.value / maxVal * 18).clamp(4.0, 22.0) : 6.0;
+          return ScatterSpot(
+            e.key.toDouble(), e.value,
+            dotPainter: FlDotCirclePainter(
+              radius: bubbleRadius,
+              color: s.color.withOpacity(0.5),
+              strokeWidth: 2,
+              strokeColor: s.color,
+            ),
+          );
+        });
+      }));
+    }
+    
+    if (spots.isEmpty) return const SizedBox.shrink();
+    
+    // Calculate bounds
+    final xValues = spots.map((s) => s.x).toList();
+    final yValues = spots.map((s) => s.y).toList();
+    final minX = data.rangeMin ?? xValues.reduce(math.min);
+    final maxX = data.rangeMax ?? xValues.reduce(math.max);
+    final minY = yValues.reduce(math.min);
+    final maxY = yValues.reduce(math.max);
+    
+    final niceMaxX = maxX * 1.15 == 0 ? 10 : maxX * 1.15;
+    final niceMaxY = maxY * 1.15 == 0 ? 10 : maxY * 1.15;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
       child: ScatterChart(
         ScatterChartData(
-          minY: minVal,
-          maxY: niceMax,
-          minX: -0.5,
-          maxX: (data.series.isNotEmpty ? data.series.first.values.length.toDouble() : 10) - 0.5,
+          minY: minY,
+          maxY: niceMaxY,
+          minX: minX,
+          maxX: niceMaxX,
           scatterTouchData: ScatterTouchData(
             enabled: true,
             touchTooltipData: ScatterTouchTooltipData(
               getTooltipColor: (spot) => _kTooltipBg,
               getTooltipItems: (spot) {
+                final label = spot.spotIndex < data.labels.length 
+                    ? data.labels[spot.spotIndex] 
+                    : 'Point ${spot.spotIndex + 1}';
                 return ScatterTooltipItem(
-                  '${spot.y.toStringAsFixed(1)}',
+                  '$label\n(${spot.x.toStringAsFixed(1)}, ${spot.y.toStringAsFixed(1)})',
                   textStyle: const TextStyle(color: Colors.white, fontSize: 11),
                 );
               },
             ),
           ),
-          titlesData: _buildTitlesData(data, niceMax, minVal),
+          titlesData: _buildTitlesData(data, niceMaxY, minY),
           gridData: FlGridData(
             show: true,
-            horizontalInterval: _niceInterval(niceMax - minVal),
+            horizontalInterval: _niceInterval(niceMaxY - minY),
             getDrawingHorizontalLine: (v) => FlLine(color: _kGridColor, strokeWidth: 0.5),
             getDrawingVerticalLine: (v) => FlLine(color: _kGridColor, strokeWidth: 0.5),
           ),
           borderData: FlBorderData(show: false),
-          scatterSpots: data.series.expand((s) {
-            return s.values.asMap().entries.map((e) {
-              final bubbleRadius = maxVal > 0 ? (e.value / maxVal * 18).clamp(4.0, 22.0) : 6.0;
-              return ScatterSpot(
-                e.key.toDouble(), e.value,
-                dotPainter: FlDotCirclePainter(
-                  radius: bubbleRadius,
-                  color: s.color.withOpacity(0.5),
-                  strokeWidth: 2,
-                  strokeColor: s.color,
-                ),
-              );
-            });
-          }).toList(),
+          scatterSpots: spots,
         ),
       ),
     );

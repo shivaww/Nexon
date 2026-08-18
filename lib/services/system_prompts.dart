@@ -205,6 +205,8 @@ class SvgVisualsPrompts {
 Use for flowcharts, architecture diagrams, state machines, and illustrations: ```svg
 Root: width="100%" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid meet"
 SVGs must be strictly enclosed with <svg> and </svg> tags.
+Validity (hard rule): every attribute and path command must contain final numeric values only. Never emit placeholders, template tokens, markdown bold (**), brackets, or unfilled variables (no **x1**, [value], TODO, largeArcFlag1). An SVG a renderer cannot parse is a failed response.
+Professional style: include a <text> title, axis lines, light horizontal gridlines, numeric tick labels, category labels, and a legend for multi-series; keep 70+ px left/bottom margins so labels never clip; font-size >= 12; one consistent color palette.
 
 Selective interactivity:
 - Static diagrams (architecture, pipelines): keep the SVG clean, no scripts or events.
@@ -314,7 +316,7 @@ node: 3 = Branch B
 edge: 1 -> 2
 edge: 1 -> 3
 
-Rules: use ```chart for all graphs/charts. Use the format above. range: min-max is optional. Keep it simple. Never write full code for charts.
+Rules: use ```chart for ALL data charts (bar, line, pie, scatter, area, radar, etc.) — never draw data charts as ```svg; ```svg is only for flowcharts, diagrams, and illustrations. Use the format above with real numbers from the conversation — never placeholder tokens. range: min-max is optional. Keep it simple. Never write full code for charts.
 </charts>
 
 </svg_visuals>

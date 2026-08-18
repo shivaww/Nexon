@@ -3,6 +3,20 @@
 // Data models for multi-provider LLM routing and model management.
 // ============================================================================
 
+/// Cache strategy for prompt optimization.
+///
+/// Determines how the client should optimize caching for the provider:
+/// - `automaticPrefix`: Provider caches stable prefixes automatically (OpenAI, Fireworks, etc.)
+/// - `explicitBreakpoint`: Client must inject `cache_control` markers (Anthropic, Bedrock)
+/// - `implicit`: Provider caches implicitly, just keep prefix stable (Gemini)
+/// - `none`: No caching support or disabled
+enum CacheStrategy {
+  automaticPrefix,
+  explicitBreakpoint,
+  implicit,
+  none,
+}
+
 /// Capabilities that an LLM model may support.
 enum ModelCapability {
   /// Deep chain-of-thought reasoning.
@@ -156,6 +170,10 @@ class LLMProvider {
   /// Optional custom headers to send with every request.
   final Map<String, String> customHeaders;
 
+  /// Cache strategy override for this provider. If null, auto-detected from
+  /// provider ID and model.
+  final CacheStrategy? cacheStrategy;
+
   LLMProvider({
     required this.id,
     required this.name,
@@ -166,6 +184,7 @@ class LLMProvider {
     this.priority = 50,
     this.capabilities = const [],
     this.customHeaders = const {},
+    this.cacheStrategy,
   }) : models = models ?? [];
 
   /// Converts to a JSON-serializable map.
@@ -179,6 +198,7 @@ class LLMProvider {
         'isAvailable': isAvailable,
         'priority': priority,
         'capabilities': capabilities.map((c) => c.name).toList(),
+        if (cacheStrategy != null) 'cacheStrategy': cacheStrategy!.name,
       };
 }
 
@@ -229,6 +249,12 @@ class ChatResult {
   /// Number of output tokens generated.
   final int outputTokens;
 
+  /// Number of tokens read from cache (Fireworks, OpenAI, Anthropic).
+  final int cachedTokens;
+
+  /// Number of tokens written to cache (Anthropic cache_creation_input_tokens).
+  final int cacheCreationTokens;
+
   /// Any tool calls the model wants to make.
   final List<Map<String, dynamic>>? toolCalls;
 
@@ -246,6 +272,8 @@ class ChatResult {
     required this.content,
     this.inputTokens = 0,
     this.outputTokens = 0,
+    this.cachedTokens = 0,
+    this.cacheCreationTokens = 0,
     this.toolCalls,
     this.finishReason = 'stop',
     this.duration = Duration.zero,
@@ -257,6 +285,8 @@ class ChatResult {
         'content': content,
         'inputTokens': inputTokens,
         'outputTokens': outputTokens,
+        'cachedTokens': cachedTokens,
+        'cacheCreationTokens': cacheCreationTokens,
         'finishReason': finishReason,
         'durationMs': duration.inMilliseconds,
         'estimatedCostUsd': estimatedCostUsd,
