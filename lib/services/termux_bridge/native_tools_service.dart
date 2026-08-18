@@ -75,6 +75,12 @@ class NativeToolsService {
       '$home/nexon_bridge/tools',
       '$home/projects/termux_forge/cpp_bridge/tools',
       '$home/codetools/tools',
+      '$home/Nexon/cpp_bridge/tools',
+      '$home/nexon/cpp_bridge/tools',
+      '$home/projects/Nexon/cpp_bridge/tools',
+      '$home/projects/nexon/cpp_bridge/tools',
+      '$home/termux_forge/cpp_bridge/tools',
+      '$home/storage/shared/Download/tools',
     ];
     for (final candidate in candidates) {
       try {

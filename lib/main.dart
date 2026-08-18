@@ -2329,8 +2329,8 @@ jobs:
           _promptEngine.resetToDefaults();
           _promptEngine.setUserInfo(
             userName: _userName,
-            cwd: _agenticWorkspace,
-            os: 'android with termux',
+            cwd: (_agenticEnabled || _studyModeEnabled) ? _agenticWorkspace : null,
+            os: (_agenticEnabled || _studyModeEnabled) ? 'android with termux' : null,
             date: currentDateStr,
             modelName: _settings[_selectedProviderId]?.model ?? '',
           );
@@ -2338,15 +2338,6 @@ jobs:
           // ── Feature addons ──
           final bool isVoiceActive =
               _liveVoiceEngine.state != LiveVoiceState.idle;
-
-          // Count active features for sub-addon prompt gating
-          int activeFeatureCount = 0;
-          if (_studyModeEnabled) activeFeatureCount++;
-          if (_agenticEnabled) activeFeatureCount++;
-          if (_searchSettings.enabled) activeFeatureCount++;
-          if (_artifactsEnabled) activeFeatureCount++;
-          if (_svgVisualsEnabled) activeFeatureCount++;
-          if (isVoiceActive) activeFeatureCount++;
 
           // Primary mode (mutually exclusive)
           if (_studyModeEnabled) {
@@ -2360,32 +2351,29 @@ jobs:
             _promptEngine.addFeature(AgenticPrompts.features);
           }
 
-          // Sub-addon prompts: only inject when 2+ features are simultaneously active
-          if (activeFeatureCount >= 2) {
-            // Web search addon
-            if (_searchSettings.enabled) {
-              _promptEngine.setContext(WebSearchPrompts.context(currentDateStr));
-              if (!_agenticEnabled && !_studyModeEnabled) {
-                _promptEngine.setNarration(WebSearchPrompts.narration);
-              }
-              _promptEngine.addFeature(WebSearchPrompts.features);
+          // Web search addon
+          if (_searchSettings.enabled) {
+            _promptEngine.setContext(WebSearchPrompts.context(currentDateStr));
+            if (!_agenticEnabled && !_studyModeEnabled) {
+              _promptEngine.setNarration(WebSearchPrompts.narration);
             }
+            _promptEngine.addFeature(WebSearchPrompts.features);
+          }
 
-            // Artifacts addon
-            if (_artifactsEnabled) {
-              _promptEngine.addFeature(ArtifactsPrompts.features);
-            }
+          // Artifacts addon
+          if (_artifactsEnabled) {
+            _promptEngine.addFeature(ArtifactsPrompts.features);
+          }
 
-            // SVG visuals addon
-            if (_svgVisualsEnabled) {
-              _promptEngine.addFeature(SvgVisualsPrompts.features);
-            }
+          // SVG visuals addon
+          if (_svgVisualsEnabled) {
+            _promptEngine.addFeature(SvgVisualsPrompts.features);
+          }
 
-            // Voice mode addon (overrides narration last)
-            if (isVoiceActive) {
-              _promptEngine.setNarration(VoiceModePrompts.narration);
-              _promptEngine.addFeature(VoiceModePrompts.features);
-            }
+          // Voice mode addon (overrides narration last)
+          if (isVoiceActive) {
+            _promptEngine.setNarration(VoiceModePrompts.narration);
+            _promptEngine.addFeature(VoiceModePrompts.features);
           }
 
           systemPromptText = _promptEngine.assemble();
@@ -2724,15 +2712,45 @@ jobs:
                   continue;
                 }
                 executedTools = true;
-                // Hide the quiz's fenced JSON block from the visible bubble and
+                // Hide the quiz's JSON block from the visible bubble and
                 // from future API history so the answer key ("correct" indices)
                 // is not re-shown to the model on the next turn.
+                // Handles both fenced and bare (unfenced) quiz JSON.
                 final quizBlockRegex = RegExp(
                   r'```(?:json)?\s*\n[\s\S]*?"t"\s*:\s*"quiz(?:_request)?"[\s\S]*?```',
                   caseSensitive: false,
                 );
-                final rawQuizBlock =
+                String rawQuizBlock =
                     quizBlockRegex.firstMatch(fullText)?.group(0) ?? '';
+                // Fallback: find bare (unfenced) quiz JSON via brace matching
+                if (rawQuizBlock.isEmpty) {
+                  final bareStart = RegExp(
+                    r'\{\s*"t"\s*:\s*"quiz(?:_request)?"',
+                  ).firstMatch(fullText);
+                  if (bareStart != null) {
+                    int depth = 0;
+                    bool inStr = false;
+                    bool esc = false;
+                    for (int i = bareStart.start; i < fullText.length; i++) {
+                      final c = fullText[i];
+                      if (inStr) {
+                        if (esc) { esc = false; }
+                        else if (c == '\\') { esc = true; }
+                        else if (c == '"') { inStr = false; }
+                      } else {
+                        if (c == '"') { inStr = true; }
+                        else if (c == '{') { depth++; }
+                        else if (c == '}') {
+                          depth--;
+                          if (depth == 0) {
+                            rawQuizBlock = fullText.substring(bareStart.start, i + 1);
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
                 if (rawQuizBlock.isNotEmpty && mounted) {
                   setState(() {
                     final idx = _sessions.indexWhere(
@@ -2793,7 +2811,7 @@ jobs:
                       );
                     }
                     sb.writeln(
-                      'Explain every WRONG verdict clearly, then repeat the understanding check before the next concept.',
+                      'For each WRONG answer: first explain why the chosen answer is incorrect, then clearly state the correct answer with a brief explanation. After addressing all wrong answers, continue to the next concept.',
                     );
                     toolOutputs.add(sb.toString());
                   }
@@ -3192,6 +3210,16 @@ jobs:
     final List<ChatMessage> rawHistory = messages
         .take(assistantMessageIndex)
         .toList();
+    // Filter out welcome/new-chat placeholder messages — they aren't real responses
+    const _welcomeTexts = [
+      'Select a provider, add its API key, fetch or type a model, then start chatting.',
+      'New chat ready. Choose any configured provider and model.',
+    ];
+    rawHistory.removeWhere(
+      (m) =>
+          m.role == MessageRole.assistant &&
+          _welcomeTexts.any((w) => m.text.trim() == w),
+    );
     if (rawHistory.length <= 4) {
       return rawHistory;
     }
@@ -4305,6 +4333,14 @@ jobs:
         }
       } else if (parsed['t'] != null) {
         results.add(parsed);
+      } else if (parsed['method'] != null) {
+        // Python bridge format: {"method": "...", "params": {...}}
+        final method = parsed['method'].toString();
+        final params = parsed['params'];
+        results.add({
+          't': method,
+          'a': params is Map<String, dynamic> ? params : <String, dynamic>{},
+        });
       }
     }
     if (results.isEmpty) {
@@ -4367,8 +4403,12 @@ jobs:
     const extra = {
       'web_search', 'search_web', 'read_url', 'memory',
       'quiz', 'quiz_request', 'step_complete',
+      'run_background',
     };
-    return NativeToolsService.cppTools.contains(t) || extra.contains(t);
+    if (NativeToolsService.cppTools.contains(t) || extra.contains(t)) return true;
+    // Python bridge tools: workspace_*, service_*, dart_*
+    if (t.startsWith('workspace_') || t.startsWith('service_') || t.startsWith('dart_')) return true;
+    return false;
   }
 
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
@@ -7124,7 +7164,7 @@ jobs:
       final maxScroll = position.maxScrollExtent;
       final currentScroll = position.pixels;
 
-      if (force || (maxScroll - currentScroll) <= 150.0) {
+      if (force || (maxScroll - currentScroll) <= 400.0) {
         _scrollController.animateTo(
           maxScroll,
           duration: const Duration(milliseconds: 280),
@@ -11678,8 +11718,8 @@ class _StreamingCodeBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const visualLangs = {'svg', 'chart', 'json-chart', 'html', 'artifact', 'react', 'docx'};
-    final visual = visualLangs.contains(language.toLowerCase());
+    const svgLangs = {'svg', 'chart', 'json-chart'};
+    final visual = svgLangs.contains(language.toLowerCase());
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 8),
