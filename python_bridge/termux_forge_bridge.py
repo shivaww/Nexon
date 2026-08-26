@@ -1781,15 +1781,14 @@ class TermuxForgeBridge:
                     
                 method = "run_command"
             else:
-                # 2. JSON Payload
                 try:
                     data = json.loads(body)
-            except json.JSONDecodeError:
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32700, "message": "Invalid request format"},
-                }, status=400)
+                except json.JSONDecodeError:
+                    return web.json_response({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Invalid request format"},
+                    }, status=400)
                     
                 method = data.get("method")
                 params = data.get("params", {})
