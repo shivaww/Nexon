@@ -3,6 +3,7 @@
 
 import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
+import 'package:nexon/widgets/glass_widgets.dart';
 
 /// Custom painter for Liquid Glass rim highlights.
 /// Traces a thin specular edge highlight line along the top/outer boundary of a pill or circle shape.

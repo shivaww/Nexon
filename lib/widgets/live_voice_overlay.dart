@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../services/voice/live_voice_engine.dart';
-import '../main.dart' show LiquidGlassSurface;
+import 'package:nexon/widgets/liquid_glass_widgets.dart';
 
 class LiveVoiceOverlay extends StatefulWidget {
   const LiveVoiceOverlay({
