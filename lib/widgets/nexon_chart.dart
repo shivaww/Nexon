@@ -494,7 +494,7 @@ class NexonChartWidget extends StatelessWidget {
           alignment: Alignment.center,
           child: Text(
             'Chart data is empty',
-            style: TextStyle(fontSize: 13, color: t.secondary),
+            style: TextStyle(fontSize: 13, color: t.muted),
           ),
         );
       }
@@ -1116,14 +1116,13 @@ class NexonChartWidget extends StatelessWidget {
             title: showTxt ? '${pctVal.toStringAsFixed(0)}%' : '',
             showTitle: showTxt,
             radius: donut ? 40 : 84,
-            borderColor: t.surface,
-            borderWidth: 2,
+            borderSide: BorderSide(color: t.surface, width: 2),
             titleStyle: donut
                 ? TextStyle(fontFamily: _kMono, fontSize: 9.5, fontWeight: FontWeight.w600, color: c)
                 : TextStyle(fontFamily: _kMono, fontSize: 10, fontWeight: FontWeight.w600, color: t.textOn(c)),
             titlePositionPercentageOffset: donut ? 1.45 : 0.62,
           );
-        }).toList(),
+        }).toList().cast<PieChartSectionData>(),
       ),
       duration: t.anim,
       curve: Curves.easeOutCubic,
