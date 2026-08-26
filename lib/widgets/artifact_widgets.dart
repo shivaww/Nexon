@@ -142,7 +142,7 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(
         NavigationDelegate(
-          navigationRequest: (request) {
+          onNavigationRequest: (request) {
             if (request.url.startsWith('http')) {
               return NavigationDecision.prevent;
             }
@@ -354,15 +354,15 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
       (m) => m.group(1)!,
     );
     s = s.replaceAllMapped(
-      RegExp(r'<use\s+[^>]*href=["\']https?://[^"\']*["\'][^>]*/>', caseSensitive: false),
+      RegExp(r'''<use\s+[^>]*href=["']https?://[^"']*["'][^>]*/>''', caseSensitive: false),
       (_) => '',
     );
     s = s.replaceAllMapped(
-      RegExp(r'<image\s+[^>]*href=["\']https?://[^"\']*["\'][^>]*/?>', caseSensitive: false),
+      RegExp(r'''<image\s+[^>]*href=["']https?://[^"']*["'][^>]*/?>''', caseSensitive: false),
       (_) => '',
     );
     s = s.replaceAllMapped(
-      RegExp(r'xlink:href=["\']https?://[^"\']*["\']', caseSensitive: false),
+      RegExp(r'''xlink:href=["']https?://[^"']*["']''', caseSensitive: false),
       (_) => 'xlink:href=""',
     );
     s = s.replaceAllMapped(
@@ -378,7 +378,7 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
       (_) => '',
     );
     s = s.replaceAllMapped(
-      RegExp(r'\son\w+\s*=\s*["\'][^"\']*["\']', caseSensitive: false),
+      RegExp(r'''\son\w+\s*=\s*["'][^"']*["']''', caseSensitive: false),
       (_) => '',
     );
     s = s.replaceAllMapped(
