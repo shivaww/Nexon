@@ -1752,7 +1752,11 @@ class TermuxForgeBridge:
     async def _handle_http_post(self, request: web.Request) -> web.Response:
         """Handle HTTP POST requests to /mcp from the legacy Dart client."""
         if request.path != '/mcp':
-            return web.json_response({"error": "Endpoint not found. Use /mcp"}, status=404)
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Endpoint not found. Use /mcp"},
+            }, status=404)
             
         try:
             body = await request.text()
@@ -1780,14 +1784,22 @@ class TermuxForgeBridge:
                 # 2. JSON Payload
                 try:
                     data = json.loads(body)
-                except json.JSONDecodeError:
-                    return web.json_response({"error": "Invalid request format"}, status=400)
+            except json.JSONDecodeError:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32700, "message": "Invalid request format"},
+                }, status=400)
                     
                 method = data.get("method")
                 params = data.get("params", {})
                 
             if not method:
-                return web.json_response({"error": "Method is required"}, status=400)
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": "Method is required"},
+                }, status=400)
                 
             # Make paths absolute
             params = self.resolve_params_paths(params)
@@ -1800,10 +1812,15 @@ class TermuxForgeBridge:
                 if method == "deep_research.ingest":
                     return web.json_response(
                         {
-                            "error": (
-                                "deep_research.ingest is no longer supported. "
-                                "Use read_url + deep_research.update_phase instead."
-                            )
+                            "jsonrpc": "2.0",
+                            "id": "http-req",
+                            "error": {
+                                "code": -32008,
+                                "message": (
+                                    "deep_research.ingest is no longer supported. "
+                                    "Use read_url + deep_research.update_phase instead."
+                                ),
+                            },
                         },
                         status=410,
                     )
@@ -1814,19 +1831,44 @@ class TermuxForgeBridge:
             except asyncio.TimeoutError:
                 logger.error("MCP HTTP request timed out: method=%s", method)
                 return web.json_response(
-                    {"error": f"MCP request timed out after {MCP_HTTP_TIMEOUT_SECONDS:g}s"},
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "http-req",
+                        "error": {
+                            "code": -32002,
+                            "message": f"MCP request timed out after {MCP_HTTP_TIMEOUT_SECONDS:g}s",
+                        },
+                    },
                     status=504,
                 )
             
             if rpc_resp.error:
-                error_msg = rpc_resp.error.get("message", "Unknown RPC error") if isinstance(rpc_resp.error, dict) else str(rpc_resp.error)
-                return web.json_response({"error": error_msg}, status=500)
-                
-            # Keep legacy response format {"result": ...}
-            return web.json_response({"result": rpc_resp.result})
+                return web.json_response(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "http-req",
+                        "error": rpc_resp.error,
+                    },
+                    status=200,
+                )
+
+            return web.json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "http-req",
+                    "result": rpc_resp.result,
+                },
+            )
             
         except Exception as e:
-            return web.json_response({"error": str(e)}, status=500)
+            return web.json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "http-req",
+                    "error": {"code": -32603, "message": str(e)},
+                },
+                status=500,
+            )
 
     async def _process_message(self, raw: str) -> str | None:
         """Parse and dispatch a JSON-RPC message."""

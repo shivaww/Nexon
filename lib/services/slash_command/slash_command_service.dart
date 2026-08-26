@@ -13,6 +13,7 @@ class SlashCommandCallbacks {
     required this.listCheckpoints,
     required this.clearCurrent,
     required this.showSystemMessage,
+    required this.planPrompt,
   });
 
   final Future<String> Function(String? title) createNew;
@@ -26,6 +27,7 @@ class SlashCommandCallbacks {
   final Future<String> Function() listCheckpoints;
   final Future<String> Function() clearCurrent;
   final Future<void> Function(String message) showSystemMessage;
+  final Future<String> Function(String prompt) planPrompt;
 }
 
 class SlashCommandService {
@@ -55,6 +57,7 @@ class SlashCommandService {
     '/restore <id>',
     '/list_ckpt',
     '/clear',
+    '/plan <prompt>',
     '/help',
   ];
 
@@ -140,6 +143,13 @@ class SlashCommandService {
         break;
       case '/clear':
         output = await callbacks.clearCurrent();
+        break;
+      case '/plan':
+        if (args.isEmpty) {
+          output = 'Usage: /plan <prompt>\nExample: /plan refactor auth module and add tests';
+        } else {
+          output = await callbacks.planPrompt(args.join(' ').trim());
+        }
         break;
       case '/help':
         output = 'Slash commands:\n${availableCatalog().map((c) => '- $c').join('\n')}';

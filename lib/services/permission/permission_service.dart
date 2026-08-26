@@ -223,8 +223,6 @@ class PermissionService {
       decision: decision,
       timestamp: DateTime.now().toUtc(),
     ));
-
-    // TODO: Persist audit log to memory service / Isar for long-term storage.
   }
 
   /// Resets all internal state. Intended for testing only.

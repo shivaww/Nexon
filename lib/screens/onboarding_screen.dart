@@ -183,7 +183,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                   subtitle: Text(
-                    'We do not store your chats on central servers. All your conversations, API keys, and memory are stored entirely on your local device and securely backed up to your personal Google Drive.',
+                    'We do not store your chats on central servers. All your conversations, API keys, and settings are stored entirely on your local device and securely backed up to your personal Google Drive.',
                   ),
                 ),
                 ListTile(
@@ -307,7 +307,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
           const SizedBox(height: 24),
           const Text(
-            'WARNING: If you do not enable backups, you WILL lose all your chats, API keys, AI memory, artifacts, and SVGs if you uninstall the app or lose your device.',
+            'WARNING: If you do not enable backups, you WILL lose all your chats, API keys, artifacts, and SVGs if you uninstall the app or lose your device.',
             style: TextStyle(
               fontSize: 16,
               color: Colors.red,

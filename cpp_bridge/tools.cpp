@@ -42,7 +42,9 @@ namespace fs = std::filesystem;
 static bool g_colorOut = false;
 static bool g_colorIn  = false;
 static bool g_plainMode = false;      // --plain / TOOLS_PLAIN / NO_COLOR: no ANSI, no box-drawing decoration
-static size_t g_maxOutputChars = 0;   // --max-output=N / TOOLS_MAX_OUTPUT: 0 = unlimited
+static size_t g_maxOutputChars = 0;
+static size_t g_maxInputBytes = 64 * 1024 * 1024;
+static constexpr size_t ECHO_LIMIT = 64 * 1024;   // --max-output=N / TOOLS_MAX_OUTPUT: 0 = unlimited
 
 struct C { const char* s; };
 static const C RST  {"\033[0m"};
@@ -77,7 +79,7 @@ struct Json {
     static Json Null_() { return Json(); }
     static Json Bool(bool v) { Json j; j.type = Type::Bool; j.b = v; return j; }
     static Json Num(double v) { Json j; j.type = Type::Number; j.num = v; return j; }
-    static Json Str(const std::string& v) { Json j; j.type = Type::String; j.str = v; return j; }
+    static Json Str(std::string v) { Json j; j.type = Type::String; j.str = std::move(v); return j; }
     static Json Arr() { Json j; j.type = Type::Array; return j; }
     static Json Obj() { Json j; j.type = Type::Object; return j; }
 
@@ -149,7 +151,7 @@ struct JsonParser {
             std::string key = parseString();
             skipWs(); expect(':');
             Json val = parseValue();
-            j.obj.emplace_back(key, val);
+            j.obj.emplace_back(std::move(key), std::move(val));
             skipWs();
             if (peek() == ',') { i++; continue; }
             if (peek() == '}') { i++; break; }
@@ -163,7 +165,7 @@ struct JsonParser {
         if (peek() == ']') { i++; return j; }
         while (true) {
             Json val = parseValue();
-            j.arr.push_back(val);
+            j.arr.push_back(std::move(val));
             skipWs();
             if (peek() == ',') { i++; continue; }
             if (peek() == ']') { i++; break; }
@@ -420,6 +422,13 @@ std::vector<std::string> splitLines(const std::string& content) {
     out.push_back(cur);
     if (!out.empty() && out.back().empty() && !content.empty() && content.back() == '\n') out.pop_back();
     return out;
+}
+size_t countLines(const std::string& content) {
+    if (content.empty()) return 0;
+    size_t n = 0;
+    for (char c : content) if (c == '\n') n++;
+    if (content.back() != '\n') n++;
+    return n;
 }
 std::string joinLines(const std::vector<std::string>& lines) {
     std::string out;
@@ -1758,7 +1767,7 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
                 content = newContent;
                 size_t originStartPreview = (size_t)std::max<long>(0, lineNumberAt(contentForSearch, chosenPos) - 1);
                 auto replacementLinesPreview = splitLines(normalizeLineEndings(newText));
-                size_t oldLineCountPreview = splitLines(normalizeLineEndings(oldForSearch)).size();
+                size_t oldLineCountPreview = countLines(normalizeLineEndings(oldForSearch));
                 if (originStartPreview < origins.size() && originStartPreview + oldLineCountPreview <= origins.size()) {
                     std::vector<long> nextOrigins;
                     for (size_t oi=0; oi<originStartPreview; ++oi) nextOrigins.push_back(origins[oi]);
@@ -1777,7 +1786,7 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
                 // as an original coordinate after earlier mutations in the same batch.
                 size_t originStart = (size_t)std::max<long>(0, lineNumberAt(contentForSearch, chosenPos) - 1);
                 auto replacementLines = splitLines(normalizeLineEndings(newText));
-                size_t oldLineCount = splitLines(normalizeLineEndings(oldForSearch)).size();
+                size_t oldLineCount = countLines(normalizeLineEndings(oldForSearch));
                 if (originStart < origins.size() && originStart + oldLineCount <= origins.size()) {
                     std::vector<long> nextOrigins;
                     for (size_t oi=0; oi<originStart; ++oi) nextOrigins.push_back(origins[oi]);
@@ -1908,7 +1917,7 @@ Json toolMultiPatch(const Json& args, const fs::path& baseDir) {
                     auditAppend(baseDir, "patch", relFile, (long)state.currentContent.size(), fnv1a64Hex(state.currentContent));
                     fentry.set("written", Json::Bool(true));
                     fentry.set("chk", Json::Str(fnv1a64Hex(state.currentContent)));
-                    fentry.set("lines", Json::Num((double)splitLines(normalizeLineEndings(state.currentContent)).size()));
+                    fentry.set("lines", Json::Num((double)countLines(normalizeLineEndings(state.currentContent))));
                     fentry.set("bytes", Json::Num((double)state.currentContent.size()));
                     filesSummary.arr.push_back(fentry);
                 }
@@ -2951,7 +2960,7 @@ Json toolUndo(const Json& args, const fs::path& baseDir) {
     } else {
         r.set("restored_backup", Json::Num((double)n));
         r.set("chk", Json::Str(fnv1a64Hex(restoredContent)));
-        r.set("lines", Json::Num((double)splitLines(normalizeLineEndings(restoredContent)).size()));
+        r.set("lines", Json::Num((double)countLines(normalizeLineEndings(restoredContent))));
         r.set("bytes", Json::Num((double)restoredContent.size()));
         r.set("note", Json::Str("pre-undo state was also snapshotted; call undo again with n=1 to redo"));
     }
@@ -3037,7 +3046,7 @@ Json toolCreateFile(const Json& args, const fs::path& baseDir) {
         } else {
             entry.set("overwrote", Json::Bool(existed));
             entry.set("chk", Json::Str(fnv1a64Hex(content)));
-            entry.set("lines", Json::Num((double)splitLines(normalizeLineEndings(content)).size()));
+            entry.set("lines", Json::Num((double)countLines(normalizeLineEndings(content))));
             entry.set("bytes", Json::Num((double)content.size()));
         }
         results.arr.push_back(entry);
@@ -3246,7 +3255,7 @@ Json toolCut(const Json& args, const fs::path& baseDir) {
     Json dstEntry = Json::Obj();
     dstEntry.set("f", Json::Str(relTo));
     dstEntry.set("chk", Json::Str(fnv1a64Hex(finalDstContent)));
-    dstEntry.set("lines", Json::Num((double)splitLines(finalDstContent).size()));
+    dstEntry.set("lines", Json::Num((double)countLines(finalDstContent)));
     dstEntry.set("bytes", Json::Num((double)finalDstContent.size()));
     r.set("dst", dstEntry);
 
@@ -3743,16 +3752,14 @@ Json dispatchSingle(const Json& call, const fs::path& baseDir, std::string& tool
 void printResult(const Json& j, const std::string& toolName) {
     std::string dumped = j.dump();
     if (g_maxOutputChars > 0 && dumped.size() > g_maxOutputChars) {
-        std::string esc;
-        jsonEscape(dumped.substr(0, g_maxOutputChars), esc);
-        std::ostringstream wrapped;
-        wrapped << "{\"trunc\":true,\"orig_chars\":" << dumped.size()
-                << ",\"cap\":" << g_maxOutputChars
-                << ",\"note\":\"Output exceeded the configured paste-size cap and was cut off "
-                   "(this JSON is a wrapper, not the tool's real shape). Ask for a narrower line "
-                   "range (s/e), fewer files per call, or raise --max-output/TOOLS_MAX_OUTPUT.\","
-                << "\"partial\":\"" << esc << "\"}";
-        dumped = wrapped.str();
+        std::string head = dumped.substr(0, std::min<size_t>(g_maxOutputChars, dumped.size()));
+        Json truncWrap = Json::Obj();
+        truncWrap.set("err", Json::Str("output_truncated"));
+        truncWrap.set("orig_chars", Json::Num((double)dumped.size()));
+        truncWrap.set("cap", Json::Num((double)g_maxOutputChars));
+        truncWrap.set("note", Json::Str("Output exceeded cap. Narrow the request (fewer lines/files) or raise --max-output."));
+        truncWrap.set("head", Json::Str(head.substr(0, std::min<size_t>(2000, head.size()))));
+        dumped = truncWrap.dump();
     }
     if (g_plainMode) {
         std::cout << dumped << "\n";
@@ -3814,7 +3821,7 @@ void handleCommand(const std::string& text, const fs::path& baseDir) {
             std::string tn;
             Json r = dispatchSingle(c, baseDir, tn);
             lastTool = tn;
-            results.arr.push_back(r);
+            results.arr.push_back(std::move(r));
         }
         out = Json::Obj();
         out.set("r", results);
@@ -3836,7 +3843,6 @@ struct JsonAccumulator {
     bool complete = false;
     bool overflow = false;
     size_t startByte = 0;
-    static constexpr size_t MAX_BUFFER = 16 * 1024 * 1024;  // 16 MB cap
 
     void reset() {
         buffer.clear(); depth = 0; started = false; inString = false;
@@ -3862,7 +3868,7 @@ struct JsonAccumulator {
                 if (depth < 0) depth = 0;
             }
         }
-        if (buffer.size() > MAX_BUFFER) overflow = true;
+        if (buffer.size() > g_maxInputBytes) overflow = true;
     }
 };
 
@@ -4129,6 +4135,10 @@ int main(int argc, char* argv[]) {
             try { g_maxOutputChars = (size_t)std::stoul(a.substr(13)); } catch (...) {}
             continue;
         }
+        if (a.rfind("--max-input=", 0) == 0) {
+            try { g_maxInputBytes = (size_t)std::stoul(a.substr(12)); } catch (...) {}
+            continue;
+        }
         if (a == "--selftest") { selfTest = true; continue; }
         posArgs.push_back(a);
     }
@@ -4144,6 +4154,9 @@ int main(int argc, char* argv[]) {
     if (const char* envMax = std::getenv("TOOLS_MAX_OUTPUT")) {
         try { g_maxOutputChars = (size_t)std::stoul(envMax); } catch (...) {}
     }
+    if (const char* envIn = std::getenv("TOOLS_MAX_INPUT")) {
+        try { g_maxInputBytes = (size_t)std::stoul(envIn); } catch (...) {}
+    }
     if (g_plainMode) g_colorOut = false;
 
     fs::path baseDir;
@@ -4154,8 +4167,10 @@ int main(int argc, char* argv[]) {
                          "  PROJECT_DIR     - project directory (skips interactive prompt)\n"
                          "  --plain         - no ANSI colors / box-drawing decoration, raw JSON only\n"
                          "                    (also: TOOLS_PLAIN=1 or NO_COLOR env var)\n"
-                         "  --max-output=N  - cap a single result at N chars, wrapped with paging\n"
-                         "                    guidance if exceeded (also: TOOLS_MAX_OUTPUT=N env var)\n"
+                          "  --max-output=N  - cap a single result at N chars, wrapped with paging\n"
+                          "                    guidance if exceeded (also: TOOLS_MAX_OUTPUT=N env var)\n"
+                          "  --max-input=N   - cap input buffer at N bytes (default 64MB)\n"
+                          "                    (also: TOOLS_MAX_INPUT=N env var)\n"
                          "  If PROJECT_DIR is omitted, prompts interactively.\n"
                          "\n"
                          "  For large payloads (>4KB), pipe via file or redirect:\n"
@@ -4273,18 +4288,29 @@ int main(int argc, char* argv[]) {
                         continue;
                     }
                     pendingInput += c;
+                    if (pendingInput.size() > g_maxInputBytes) {
+                        printError("Pre-parse line buffer exceeded " + std::to_string(g_maxInputBytes / (1024*1024)) + "MB",
+                                  "Input before JSON start was too large. Pipe via file: ./tools " +
+                                  baseDir.string() + " < request.json");
+                        pendingInput.clear();
+                        collecting = false;
+                    }
                     continue;
                 }
                 if (!acc.started && (c == '\n' || c == '\r' || c == ' ' || c == '\t')) {
                     continue;
                 }
                 acc.feed(c);
-                if (c == '\n') std::cout << "\n" << CYN << "│" << RST;
-                else if ((unsigned char)c >= 32 || c == '\t') std::cout << c;
+                if (acc.buffer.size() <= ECHO_LIMIT) {
+                    if (c == '\n') std::cout << "\n" << CYN << "│" << RST;
+                    else if ((unsigned char)c >= 32 || c == '\t') std::cout << c;
+                } else if (acc.buffer.size() % 8192 == 0) {
+                    std::cout << "\r" << CYN << "│ " << RST << std::to_string(acc.buffer.size()) << " bytes…" << std::flush;
+                }
 
                 if (acc.overflow) {
                     std::cout << "\n" << CYN << "└────────────────────────────────────────────────────" << RST << "\n";
-                    printError("Input buffer exceeded 16MB without completing",
+                    printError("Input buffer exceeded " + std::to_string(g_maxInputBytes / (1024*1024)) + "MB without completing",
                               "The input was likely truncated (tty canonical-mode limit, dropped paste, or memory). "
                               "Fix: write the JSON to a file and pipe it in:\n  ./tools " +
                               baseDir.string() + " < request.json");
@@ -4341,7 +4367,7 @@ int main(int argc, char* argv[]) {
 
             if (acc.overflow) {
                 if (isTty) std::cout << CYN << "└────────────────────────────────────────────────────" << RST << "\n";
-                printError("Input buffer exceeded 16MB without completing",
+                printError("Input buffer exceeded " + std::to_string(g_maxInputBytes / (1024*1024)) + "MB without completing",
                           "The input was likely truncated. Pipe via file: ./tools " +
                           baseDir.string() + " < request.json");
                 collecting = false;

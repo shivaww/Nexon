@@ -870,61 +870,6 @@ class ToolRegistry {
       ],
     );
 
-    // -- Memory tools (category: memory) ------------------------------------
-    _reg(
-      'fetch_memory',
-      'Fetch Memory',
-      'Retrieve a value from the project memory store.',
-      ToolCategory.memory,
-      0,
-      [
-        const ToolParameter(name: 'key', description: 'Memory key'),
-        const ToolParameter(
-          name: 'namespace',
-          description: 'Memory namespace',
-          required: false,
-          defaultValue: 'project',
-        ),
-      ],
-    );
-    _reg(
-      'save_memory',
-      'Save Memory',
-      'Store a value in the project memory.',
-      ToolCategory.memory,
-      1,
-      [
-        const ToolParameter(name: 'key', description: 'Memory key'),
-        const ToolParameter(name: 'value', description: 'Value to store'),
-        const ToolParameter(
-          name: 'namespace',
-          description: 'Memory namespace',
-          required: false,
-          defaultValue: 'project',
-        ),
-      ],
-    );
-    _reg(
-      'semantic_search',
-      'Semantic Search',
-      'Search memory using semantic similarity.',
-      ToolCategory.memory,
-      1,
-      [
-        const ToolParameter(
-          name: 'query',
-          description: 'Natural language search query',
-        ),
-        const ToolParameter(
-          name: 'limit',
-          description: 'Max results',
-          type: 'int',
-          required: false,
-          defaultValue: '10',
-        ),
-      ],
-    );
-
     // -- Model tools (category: model) --------------------------------------
     _reg(
       'compare_models',

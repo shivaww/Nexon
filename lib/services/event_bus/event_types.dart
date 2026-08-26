@@ -171,25 +171,6 @@ class ShellCommandExecuted extends AppEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Memory Events
-// ---------------------------------------------------------------------------
-
-/// Emitted when the project/agent memory store is updated.
-class MemoryUpdated extends AppEvent {
-  /// The memory key that was updated.
-  final String key;
-
-  /// The namespace of the memory entry (e.g., 'project', 'agent', 'user').
-  final String namespace;
-
-  MemoryUpdated({
-    required this.key,
-    this.namespace = 'project',
-    required super.source,
-  }) : super(type: 'MemoryUpdated');
-}
-
-// ---------------------------------------------------------------------------
 // MCP Events
 // ---------------------------------------------------------------------------
 

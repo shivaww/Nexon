@@ -1,9 +1,8 @@
 /// Knowledge Base service for curated reference material.
 ///
-/// [KnowledgeBaseService] manages a separate knowledge store from
-/// [MemoryService] — this is for imported PDFs, web pages, research notes,
-/// and other reference material that agents and users can query with RAG
-/// indexing and citation tracking.
+/// [KnowledgeBaseService] manages a knowledge store for imported PDFs,
+/// web pages, research notes, and other reference material that agents
+/// and users can query with RAG indexing and citation tracking.
 library;
 
 import 'package:logger/logger.dart';

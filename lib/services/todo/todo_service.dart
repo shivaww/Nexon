@@ -1,8 +1,8 @@
 /// Todo tracking service for managing lightweight to-do items.
 ///
 /// [TodoService] provides full CRUD, progress tracking, filtering by
-/// status / priority / agent, timeline views, and linking to files,
-/// memory entries, and artifacts. Completion percentages are auto-calculated
+/// status / priority / agent, timeline views, and linking to files
+/// and artifacts. Completion percentages are auto-calculated
 /// from progress notes when subtask granularity is available.
 library;
 
@@ -218,19 +218,6 @@ class TodoService {
     final files = List<String>.from(existing.linkedFiles)..add(filePath);
     final updated = existing.copyWith(
       linkedFiles: files,
-      updatedAt: DateTime.now(),
-    );
-    await _repo.save(updated);
-    return updated;
-  }
-
-  /// Link a memory entry to an existing todo.
-  Future<TodoModel?> linkToMemory(String id, String memoryId) async {
-    final existing = await _repo.get(id);
-    if (existing == null) return null;
-    final refs = List<String>.from(existing.linkedMemoryRefs)..add(memoryId);
-    final updated = existing.copyWith(
-      linkedMemoryRefs: refs,
       updatedAt: DateTime.now(),
     );
     await _repo.save(updated);

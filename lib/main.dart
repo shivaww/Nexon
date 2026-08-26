@@ -34,6 +34,7 @@ import 'package:nexon/services/drive_sync_service.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/screens/onboarding_screen.dart';
+import 'package:nexon/screens/kaggle_scripts.dart';
 import 'package:nexon/services/deep_research/deep_research_bridge_client.dart';
 import 'package:nexon/services/deep_research/deep_research_helpers.dart';
 import 'package:nexon/services/deep_research/deep_research_prompts.dart';
@@ -138,6 +139,18 @@ class NexonTts {
   static final FlutterTts _flutterTts = FlutterTts();
   static String? _speakingText;
   static bool _isSpeaking = false;
+  static Map<String, String>? _selectedVoice;
+
+  static Future<void> init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('tts_voice_name');
+      if (saved != null && saved.isNotEmpty) {
+        final locale = prefs.getString('tts_voice_locale') ?? 'en-US';
+        _selectedVoice = {'name': saved, 'locale': locale};
+      }
+    } catch (_) {}
+  }
 
   static Future<void> toggleSpeak(
     String text,
@@ -178,6 +191,9 @@ class NexonTts {
       await _flutterTts.setLanguage("en-US");
       await _flutterTts.setSpeechRate(0.48);
       await _flutterTts.setVolume(1.0);
+      if (_selectedVoice != null) {
+        await _flutterTts.setVoice(_selectedVoice!);
+      }
       await _flutterTts.speak(text);
     } catch (_) {
       _isSpeaking = false;
@@ -199,10 +215,16 @@ class NexonTts {
   }
 
   static Future<void> setVoice(Map<String, String> voice) async {
+    _selectedVoice = voice;
     try {
       await _flutterTts.setVoice(voice);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('tts_voice_name', voice['name'] ?? '');
+      await prefs.setString('tts_voice_locale', voice['locale'] ?? 'en-US');
     } catch (_) {}
   }
+
+  static String? get selectedVoiceName => _selectedVoice?['name'];
 }
 
 /// Custom painter for Liquid Glass rim highlights.
@@ -607,7 +629,7 @@ class ChatHomePage extends StatefulWidget {
   State<ChatHomePage> createState() => _ChatHomePageState();
 }
 
-class _ChatHomePageState extends State<ChatHomePage> {
+class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver {
   static final _secureStorage = const FlutterSecureStorage();
   static const _settingsKey = 'provider_settings_v1';
   static const _selectedProviderKey = 'selected_provider_id';
@@ -626,8 +648,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
-  bool _artifactsEnabled = true;
-  bool _svgVisualsEnabled = true;
+  bool _artifactsEnabled = false;
+  bool _svgVisualsEnabled = false;
   // Shell command permission: 'ask', 'session', 'always', 'never'
   String _shellPermission = 'ask';
   // Per-session always-allow flag (reset when app restarts)
@@ -656,13 +678,24 @@ class _ChatHomePageState extends State<ChatHomePage> {
   final Map<String, Map<String, dynamic>> _runUrlCache = {};
   CheckpointService? _checkpointService;
 
-  DeepResearchBridgeClient get _deepResearchBridge => DeepResearchBridgeClient(
-    endpoint: _customMcpUrl.isNotEmpty
+  DeepResearchBridgeClient? _cachedBridge;
+  String _cachedBridgeUrl = '';
+  DeepResearchBridgeClient get _deepResearchBridge {
+    final url = _customMcpUrl.isNotEmpty
         ? _customMcpUrl
-        : 'http://127.0.0.1:8390/mcp',
-  );
+        : 'http://127.0.0.1:8390/mcp';
+    if (_cachedBridge != null && _cachedBridgeUrl == url) return _cachedBridge!;
+    _cachedBridge = DeepResearchBridgeClient(endpoint: url);
+    _cachedBridgeUrl = url;
+    return _cachedBridge!;
+  }
 
   String _normalizeQueryOrUrl(String input) {
+    if (input.startsWith('http://') || input.startsWith('https://')) {
+      var s = input.toLowerCase();
+      if (s.endsWith('/') && s.length > 12) s = s.substring(0, s.length - 1);
+      return s;
+    }
     return input
         .toLowerCase()
         .replaceAll(RegExp(r'[^\w\s\-\.\:\/]'), '')
@@ -750,7 +783,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
     );
   }
 
-  String _toolStatus = ''; // live tool status shown in UI banner
+  String _toolStatus = '';
+
+  List<_TodoItem> _activeTodos = [];
+  bool _todoListVisible = false;
+
+  String _promptSig = '';
+  int _promptUseCount = 0;
+  static const int _promptCacheMaxUses = 5;
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -857,9 +897,18 @@ class _ChatHomePageState extends State<ChatHomePage> {
     );
     _sessions = [newSession];
     _activeSessionId = newSession.id;
-    _agenticEnabled = false; // Default off for new chat
-    _deepResearchEnabled = false; // Default off for new chat
-    _studyModeEnabled = false; // Default off for new chat
+    _agenticEnabled = false;
+    _deepResearchEnabled = false;
+    _studyModeEnabled = false;
+    _searchSettings = SearchSettings(
+      enabled: false,
+      provider: _searchSettings.provider,
+      apiKey: _searchSettings.apiKey,
+      fallbackApiKeys: _searchSettings.fallbackApiKeys,
+      googleCx: _searchSettings.googleCx,
+    );
+    _promptSig = '';
+    _promptUseCount = 0;
     _clearWorkspaceBucket();
   }
 
@@ -901,9 +950,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
             if (userMsgs.isEmpty &&
                 (first.title == 'New Chat' || first.title == 'Welcome Chat')) {
               _activeSessionId = first.id;
-              _agenticEnabled = false; // Default off for new chat
-              _deepResearchEnabled = false; // Default off for new chat
-              _studyModeEnabled = false; // Default off for new chat
+              _agenticEnabled = false;
+              _deepResearchEnabled = false;
+              _studyModeEnabled = false;
+              _promptSig = '';
+              _promptUseCount = 0;
               _clearWorkspaceBucket();
               hasEmptySession = true;
             }
@@ -927,9 +978,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
             );
             _sessions.insert(0, newSession);
             _activeSessionId = newId;
-            _agenticEnabled = false; // Default off for new chat
-            _deepResearchEnabled = false; // Default off for new chat
-            _studyModeEnabled = false; // Default off for new chat
+            _agenticEnabled = false;
+            _deepResearchEnabled = false;
+            _studyModeEnabled = false;
+            _promptSig = '';
+            _promptUseCount = 0;
             _clearWorkspaceBucket();
           }
           _editingMessageIndex = null;
@@ -1034,10 +1087,16 @@ class _ChatHomePageState extends State<ChatHomePage> {
   }
 
   Future<void> _resetDeepResearch() async {
-    try {
-      await _deepResearchBridge.reset();
-    } catch (e) {
-      throw StateError('Deep Research bridge reset failed: $e');
+    for (int attempt = 0; attempt < 2; attempt++) {
+      try {
+        await _deepResearchBridge.reset();
+        return;
+      } catch (e) {
+        if (attempt == 1) {
+          throw StateError('Deep Research bridge reset failed: $e');
+        }
+        await Future.delayed(const Duration(seconds: 2));
+      }
     }
   }
 
@@ -1067,62 +1126,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
   }
 
-  Future<Map<String, dynamic>> _summarizeSourceInline({
-    required String sourceUrl,
-    required String content,
-    required ProviderDefinition provider,
-    required ProviderSettings settings,
-    required String model,
-  }) async {
-    // Keep head + tail so long pages retain both lede and late conclusions.
-    final String truncatedContent;
-    if (content.length > 12000) {
-      final head = content.substring(0, 12000);
-      final tailStart = content.length > 2000 ? content.length - 2000 : 0;
-      final tail = content.substring(tailStart);
-      truncatedContent = '$head\n...[middle truncated]...\n$tail';
-    } else {
-      truncatedContent = content;
-    }
-    final summarizerMessages = [
-      const ChatMessage(
-        role: MessageRole.system,
-        text: DeepResearchPrompts.summarizerSystemPrompt,
-      ),
-      ChatMessage(
-        role: MessageRole.user,
-        text: "Source URL: $sourceUrl\n\nSource Content:\n$truncatedContent",
-      ),
-    ];
-    try {
-      final responseText = await _retryLlmCall(
-        messages: summarizerMessages,
-        provider: provider,
-        settings: settings,
-        model: model,
-      );
-      final cleanResp = responseText
-          .replaceAll(RegExp(r"```json"), "")
-          .replaceAll("```", "")
-          .trim();
-      final jsonMatch = RegExp(r"\{[\s\S]*\}").firstMatch(cleanResp);
-      if (jsonMatch != null) {
-        final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-        // Preserve confidence via shared normalizer (facts + findings).
-        return DeepResearchHelpers.normalizeEvidence(
-          parsed,
-          sourceUrl: sourceUrl,
-        );
-      }
-    } catch (e) {
-      debugPrint("Inline summarization failed for $sourceUrl: $e");
-    }
-    return {
-      'facts': <Map<String, dynamic>>[],
-      'findings': <Map<String, dynamic>>[],
-    };
-  }
-
   /// Normalize batch evidence with per-source attribution.
   /// Unlike single-source normalization, this preserves the source field from
   /// each fact/finding record instead of overwriting with a single URL.
@@ -1139,31 +1142,37 @@ class _ChatHomePageState extends State<ChatHomePage> {
     final rawFindings =
         parsed['findings'] is List ? parsed['findings'] as List : const [];
     
+    String _normUrl(String u) {
+      var s = u.trim().toLowerCase();
+      if (s.endsWith('/') && s.length > 8) s = s.substring(0, s.length - 1);
+      s = s.replaceAll('http://', 'https://');
+      return s;
+    }
+    String _matchSource(String url) {
+      final norm = _normUrl(url);
+      for (final expected in expectedSources) {
+        if (_normUrl(expected) == norm) return expected;
+      }
+      return expectedSources.first;
+    }
     for (final item in rawFacts) {
       if (item is! Map) continue;
       final sourceUrl = item['source']?.toString() ?? '';
-      // Validate source is one of the expected URLs to catch hallucinations
-      final normalizedSource = expectedSources.contains(sourceUrl)
-          ? sourceUrl
-          : expectedSources.first; // Fallback to first if LLM hallucinated
       facts.add({
         'metric': item['metric']?.toString() ?? '',
         'subject': item['subject']?.toString() ?? '',
         'value': item['value']?.toString() ?? '',
         'date': item['date']?.toString() ?? '',
-        'source': normalizedSource,
+        'source': _matchSource(sourceUrl),
         'confidence': item['confidence']?.toString() ?? 'high',
       });
     }
     for (final item in rawFindings) {
       if (item is! Map) continue;
       final sourceUrl = item['source']?.toString() ?? '';
-      final normalizedSource = expectedSources.contains(sourceUrl)
-          ? sourceUrl
-          : expectedSources.first;
       findings.add({
         'text': item['text']?.toString() ?? '',
-        'source': normalizedSource,
+        'source': _matchSource(sourceUrl),
         'confidence': item['confidence']?.toString() ?? 'high',
       });
     }
@@ -1222,8 +1231,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
       combinedContent.writeln('=== SOURCE: ${entry.key} ===');
       final content = entry.value;
       if (content.length > 8000) {
-        combinedContent.writeln(content.substring(0, 8000));
-        combinedContent.writeln('...[truncated]');
+        combinedContent.writeln(content.substring(0, 6000));
+        combinedContent.writeln('\n...[${content.length - 7000} chars omitted]...\n');
+        combinedContent.writeln(content.substring(content.length - 1000));
       } else {
         combinedContent.writeln(content);
       }
@@ -1273,56 +1283,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
       'facts': <Map<String, dynamic>>[],
       'findings': <Map<String, dynamic>>[],
     };
-  }
-
-  Future<bool> _checkResearchSufficiency({
-    required String phaseGoal,
-    required List<Map<String, dynamic>> facts,
-    required List<Map<String, dynamic>> findings,
-    required ProviderDefinition provider,
-    required ProviderSettings settings,
-    required String model,
-  }) async {
-    if (facts.isEmpty && findings.isEmpty) return false;
-    final factsText = facts
-        .map(
-          (f) =>
-              "Fact: metric=${f['metric']} | subject=${f['subject']} | value=${f['value']} | source=${f['source']}",
-        )
-        .join("\n");
-    final findingsText = findings
-        .map((f) => "Finding: ${f['text']} (source=${f['source']})")
-        .join("\n");
-    final prompt =
-        "Phase Goal/Prompt: $phaseGoal\n\n"
-        "Facts gathered so far:\n$factsText\n\n"
-        "Findings gathered so far:\n$findingsText\n\n"
-        "Based ONLY on the facts and findings above, have we gathered sufficient information to address the phase goal/prompt?\n"
-        "Respond with a JSON object: {\"sufficient\": true | false, \"reason\": \"<short explanation>\"}";
-    final messages = [
-      const ChatMessage(
-        role: MessageRole.system,
-        text: DeepResearchPrompts.reflectorSystemPrompt,
-      ),
-      ChatMessage(role: MessageRole.user, text: prompt),
-    ];
-    try {
-      final responseText = await _chatClient.sendChat(
-        provider: provider,
-        settings: settings,
-        model: model,
-        messages: messages,
-        studyModeEnabled: _studyModeEnabled,
-      );
-      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(responseText);
-      if (jsonMatch != null) {
-        final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-        return parsed['sufficient'] == true;
-      }
-    } catch (e) {
-      debugPrint("Sufficiency reflection check failed: $e");
-    }
-    return false;
   }
 
   Future<Map<String, dynamic>> _exportDeepResearchForWriter(
@@ -1411,10 +1371,17 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
   String _unwrapMarkdownArtifact(String text) {
     final match = RegExp(
-      r'^\s*```(?:markdown|md)\s*\n([\s\S]*?)\n?```\s*$',
+      r'```(?:markdown|md)\s*\n([\s\S]*?)\n```',
       caseSensitive: false,
     ).firstMatch(text);
-    return match?.group(1)?.trim() ?? text.trim();
+    if (match != null) {
+      final before = text.substring(0, match.start).trim();
+      final after = text.substring(match.end).trim();
+      final content = match.group(1)?.trim() ?? '';
+      if (before.isEmpty && after.isEmpty) return content;
+      return '${before.isNotEmpty ? '$before\n\n' : ''}$content${after.isNotEmpty ? '\n\n$after' : ''}';
+    }
+    return text.trim();
   }
 
   void _switchSession(String sessionId) {
@@ -1436,6 +1403,15 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _agenticEnabled = false;
       _deepResearchEnabled = false;
       _studyModeEnabled = false;
+      _searchSettings = SearchSettings(
+        enabled: false,
+        provider: _searchSettings.provider,
+        apiKey: _searchSettings.apiKey,
+        fallbackApiKeys: _searchSettings.fallbackApiKeys,
+        googleCx: _searchSettings.googleCx,
+      );
+      _promptSig = '';
+      _promptUseCount = 0;
     });
     _saveSettings();
     _saveSessions();
@@ -1534,12 +1510,34 @@ class _ChatHomePageState extends State<ChatHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _messageController.addListener(_handleMessageTextChanged);
     _loadSettings();
+    NexonTts.init();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _autoBackup();
+    }
+  }
+
+  Future<void> _autoBackup() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final backupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
+      if (!backupEnabled) return;
+      final rawSessions = prefs.getString('chat_sessions_v1');
+      if (rawSessions == null) return;
+      final sessions = jsonDecode(rawSessions) as List<dynamic>;
+      await DriveSyncService.syncToDrive(sessions, force: true);
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _messageController.removeListener(_handleMessageTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
@@ -1718,6 +1716,23 @@ class _ChatHomePageState extends State<ChatHomePage> {
         );
       } catch (_) {}
     }
+    String? savedSearchKey;
+    List<String> savedFallbackKeys = const [];
+    try {
+      savedSearchKey = await _secureStorage.read(key: 'search_api_key');
+      final savedFallbacks = await _secureStorage.read(key: 'search_fallback_keys');
+      if (savedFallbacks != null && savedFallbacks.trim().isNotEmpty) {
+        savedFallbackKeys = (jsonDecode(savedFallbacks) as List).map((e) => e.toString()).toList();
+      }
+    } catch (_) {}
+    loadedSearchSettings = SearchSettings(
+      enabled: loadedSearchSettings.enabled,
+      provider: loadedSearchSettings.provider,
+      apiKey: savedSearchKey ?? loadedSearchSettings.apiKey,
+      fallbackApiKeys: savedFallbackKeys.isNotEmpty ? savedFallbackKeys : loadedSearchSettings.fallbackApiKeys,
+      googleCx: loadedSearchSettings.googleCx,
+      customProviders: loadedSearchSettings.customProviders,
+    );
 
     if (raw != null && raw.trim().isNotEmpty) {
       try {
@@ -1837,8 +1852,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _settings = nextSettings;
       _searchSettings = loadedSearchSettings;
       _agenticEnabled = agenticRaw ?? true;
-      _artifactsEnabled = artifactsRaw ?? true;
-      _svgVisualsEnabled = svgVisualsRaw ?? true;
+      _artifactsEnabled = artifactsRaw ?? false;
+      _svgVisualsEnabled = svgVisualsRaw ?? false;
       _shellPermission = prefs.getString('shell_permission_v1') ?? 'ask';
       _agenticWorkspace =
           agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
@@ -1899,10 +1914,34 @@ class _ChatHomePageState extends State<ChatHomePage> {
           },
       ]),
     );
+    final searchSettingsToSave = SearchSettings(
+      enabled: _searchSettings.enabled,
+      provider: _searchSettings.provider,
+      apiKey: '',
+      fallbackApiKeys: const [],
+      googleCx: _searchSettings.googleCx,
+      customProviders: _searchSettings.customProviders,
+    );
     await prefs.setString(
       'search_settings_v1',
-      jsonEncode(_searchSettings.toJson()),
+      jsonEncode(searchSettingsToSave.toJson()),
     );
+    if (_searchSettings.apiKey.isNotEmpty) {
+      try {
+        await _secureStorage.write(
+          key: 'search_api_key',
+          value: _searchSettings.apiKey,
+        );
+      } catch (_) {}
+    }
+    if (_searchSettings.fallbackApiKeys.isNotEmpty) {
+      try {
+        await _secureStorage.write(
+          key: 'search_fallback_keys',
+          value: jsonEncode(_searchSettings.fallbackApiKeys),
+        );
+      } catch (_) {}
+    }
     await prefs.setBool('agentic_enabled_v1', _agenticEnabled);
     await prefs.setBool('artifacts_enabled_v1', _artifactsEnabled);
     await prefs.setBool('svg_visuals_enabled_v1', _svgVisualsEnabled);
@@ -2188,6 +2227,7 @@ jobs:
           listCheckpoints: _slashListCheckpoints,
           clearCurrent: _slashClear,
           showSystemMessage: _appendSystemMessage,
+          planPrompt: _slashPlan,
         ),
       );
       return;
@@ -2325,7 +2365,6 @@ jobs:
             )) {
           systemPromptText = DeepResearchPrompts.plannerSystemPrompt;
         } else {
-          // Assemble system prompt via SystemPromptEngine
           _promptEngine.resetToDefaults();
           _promptEngine.setUserInfo(
             userName: _userName,
@@ -2335,11 +2374,9 @@ jobs:
             modelName: _settings[_selectedProviderId]?.model ?? '',
           );
 
-          // ── Feature addons ──
           final bool isVoiceActive =
               _liveVoiceEngine.state != LiveVoiceState.idle;
 
-          // Primary mode (mutually exclusive)
           if (_studyModeEnabled) {
             _promptEngine.setIdentity(StudyModePrompts.identity);
             _promptEngine.setNarration(StudyModePrompts.narration);
@@ -2351,7 +2388,6 @@ jobs:
             _promptEngine.addFeature(AgenticPrompts.features);
           }
 
-          // Web search addon
           if (_searchSettings.enabled) {
             _promptEngine.setContext(WebSearchPrompts.context(currentDateStr));
             if (!_agenticEnabled && !_studyModeEnabled) {
@@ -2360,29 +2396,40 @@ jobs:
             _promptEngine.addFeature(WebSearchPrompts.features);
           }
 
-          // Artifacts addon
           if (_artifactsEnabled) {
             _promptEngine.addFeature(ArtifactsPrompts.features);
           }
 
-          // SVG visuals addon
           if (_svgVisualsEnabled) {
             _promptEngine.addFeature(SvgVisualsPrompts.features);
           }
 
-          // Voice mode addon (overrides narration last)
           if (isVoiceActive) {
             _promptEngine.setNarration(VoiceModePrompts.narration);
             _promptEngine.addFeature(VoiceModePrompts.features);
           }
 
-          systemPromptText = _promptEngine.assemble();
+          final newSig = _promptEngine.signature();
+          if (newSig != _promptSig) {
+            _promptSig = newSig;
+            _promptUseCount = 0;
+          }
+
+          systemPromptText = _promptEngine.assembleClean();
         }
 
-        if (systemPromptText.isNotEmpty) {
+        final bool shouldSendSystemPrompt = _deepResearchEnabled ||
+            systemPromptText.isEmpty ||
+            _promptUseCount == 0 ||
+            _promptUseCount >= _promptCacheMaxUses;
+
+        if (shouldSendSystemPrompt && systemPromptText.isNotEmpty) {
           historyForApi.add(
             ChatMessage(role: MessageRole.system, text: systemPromptText),
           );
+          _promptUseCount = 1;
+        } else {
+          _promptUseCount++;
         }
 
         final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
@@ -2407,6 +2454,8 @@ jobs:
         var reasoningText = '';
         var isThinking = false;
         final updateStopwatch = Stopwatch()..start();
+        final streamStopwatch = Stopwatch()..start();
+        var streamCharCount = 0;
 
         final subscription = stream.listen(
           (chunk) {
@@ -2451,6 +2500,7 @@ jobs:
                 reasoningText += textChunk;
               } else {
                 fullText += textChunk;
+                streamCharCount += textChunk.length;
                 if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
                     _liveVoiceEngine.state == LiveVoiceState.speaking) {
                   // Skip tool-call / SSML tag chunks so they are not spoken
@@ -2472,11 +2522,17 @@ jobs:
                 if (idx != -1) {
                   final msgs = List<ChatMessage>.from(_sessions[idx].messages);
                   if (assistantMessageIndex < msgs.length) {
-              msgs[assistantMessageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: _fenceBareToolCalls(fullText),
-                  reasoning: reasoningText,
-                );
+                    final elapsedSec = streamStopwatch.elapsedMilliseconds / 1000.0;
+                    final estTokens = (streamCharCount / 4).ceil();
+                    final tps = elapsedSec > 0.1 ? (estTokens / elapsedSec) : 0.0;
+                    final maxTok = settings.maxTokens;
+                    msgs[assistantMessageIndex] = ChatMessage(
+                      role: MessageRole.assistant,
+                      text: _fenceBareToolCalls(fullText),
+                      reasoning: reasoningText,
+                      tokensPerSec: tps > 0 ? tps.toStringAsFixed(1) : '',
+                      tokenUsage: _formatTokenUsage(estTokens, maxTok),
+                    );
                     _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
                   }
                 }
@@ -2521,6 +2577,13 @@ jobs:
         }
 
         // Final state update after stream completes
+        streamStopwatch.stop();
+        final finalElapsedSec = streamStopwatch.elapsedMilliseconds / 1000.0;
+        final finalEstTokens = (streamCharCount / 4).ceil();
+        final finalTps = finalElapsedSec > 0.1 ? (finalEstTokens / finalElapsedSec) : 0.0;
+        final finalMaxTok = settings.maxTokens;
+        final finalUsage = _formatTokenUsage(finalEstTokens, finalMaxTok);
+
         setState(() {
           final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
           if (idx != -1) {
@@ -2528,8 +2591,12 @@ jobs:
             if (assistantMessageIndex < msgs.length) {
               msgs[assistantMessageIndex] = ChatMessage(
                   role: MessageRole.assistant,
-                  text: _fenceBareToolCalls(fullText),
+                  text: _svgVisualsEnabled
+                      ? _stripSvgVisuals(_fenceBareToolCalls(fullText))
+                      : _fenceBareToolCalls(fullText),
                   reasoning: reasoningText,
+                  tokensPerSec: finalTps > 0 ? finalTps.toStringAsFixed(1) : '',
+                  tokenUsage: finalUsage,
                 );
               _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
             }
@@ -2556,12 +2623,11 @@ jobs:
               if (entry is! Map) continue;
               final textContent = (entry['prompt'] ?? '').toString().trim();
               var title = (entry['title'] ?? '').toString().trim();
-              var prompt = textContent;
+              final prompt = textContent;
               if (title.isEmpty) {
-                final separatorIndex = textContent.indexOf(RegExp(r'[:\-]'));
+                final separatorIndex = textContent.indexOf(RegExp(r' - | \| | success:', caseSensitive: false));
                 if (separatorIndex != -1 && separatorIndex < 35) {
                   title = textContent.substring(0, separatorIndex).trim();
-                  prompt = textContent.substring(separatorIndex + 1).trim();
                 } else {
                   title = 'Phase $phaseNum';
                 }
@@ -2618,13 +2684,13 @@ jobs:
 
         // ── Native C++ tools fast path (JSON tool calls) ──────────────────
         // Fenced ```json blocks shaped {"t","a"} or {"calls":[...]}. Tools the
-        // C++ binary owns run locally with no Python/HTTP hop; web_search,
-        // read_url and memory run in-app; other JSON tools are translated to
-        // the Python bridge's {"method","params"} shape and queued for the
-        // existing HTTP dispatch below.
+        // C++ binary owns run locally with no Python/HTTP hop; web_search and
+        // read_url run in-app; other JSON tools are translated to the Python
+        // bridge's {"method","params"} shape and queued for the existing HTTP
+        // dispatch below.
         // JSON tool-call extraction runs in every mode (parity with the old
-        // always-on XML regexes): web_search/read_url/memory must work in plain
-        // chat too, and workspace tools + quiz in study mode. The cheap fence
+        // always-on XML regexes): web_search/read_url must work in plain chat
+        // too, and workspace tools + quiz in study mode. The cheap fence
         // prefilter skips replies that can't contain a JSON tool block.
         if (fullText.contains('```') ||
             fullText.contains('"t"') ||
@@ -2647,32 +2713,64 @@ jobs:
                   );
                   continue;
                 }
-                final query =
-                    (toolArgs['q'] ?? toolArgs['query'] ?? '').toString();
-                if (mounted) {
-                  setState(() => _toolStatus = '🔍 Searching: "$query"');
+                final List<String> searchQueries = [];
+                final qList = toolArgs['queries'] ?? toolArgs['q_list'];
+                if (qList is List) {
+                  for (final item in qList) {
+                    final s = item.toString().trim();
+                    if (s.isNotEmpty) searchQueries.add(s);
+                  }
                 }
-                String searchResult;
-                try {
-                  searchResult = await _executeWebSearchQuery(
-                    query,
-                    topic: toolArgs['topic']?.toString(),
-                    timeRange:
-                        (toolArgs['time_range'] ?? toolArgs['timeRange'])
-                            ?.toString(),
-                    startDate:
-                        (toolArgs['start_date'] ?? toolArgs['startDate'])
-                            ?.toString(),
-                    endDate:
-                        (toolArgs['end_date'] ?? toolArgs['endDate'])
-                            ?.toString(),
+                final singleQ =
+                    (toolArgs['q'] ?? toolArgs['query'] ?? '').toString().trim();
+                if (searchQueries.isEmpty && singleQ.isNotEmpty) {
+                  searchQueries.add(singleQ);
+                }
+                if (searchQueries.length > 4) {
+                  searchQueries.removeRange(4, searchQueries.length);
+                }
+                if (searchQueries.isEmpty) {
+                  toolOutputs.add(
+                    'Tool Result [$toolName]:\n\n{"error":"no query provided"}',
                   );
-                } catch (e) {
-                  searchResult = 'Error running web search: $e';
+                  continue;
                 }
+                final topic = toolArgs['topic']?.toString();
+                final timeRange =
+                    (toolArgs['time_range'] ?? toolArgs['timeRange'])
+                        ?.toString();
+                final startDate =
+                    (toolArgs['start_date'] ?? toolArgs['startDate'])
+                        ?.toString();
+                final endDate =
+                    (toolArgs['end_date'] ?? toolArgs['endDate'])
+                        ?.toString();
+                if (mounted) {
+                  setState(() => _toolStatus =
+                      searchQueries.length == 1
+                          ? '🔍 Searching: "${searchQueries.first}"'
+                          : '🔍 Searching ${searchQueries.length} queries…');
+                }
+                final results = await Future.wait(
+                  searchQueries.map(
+                    (q) => _executeWebSearchQuery(
+                      q,
+                      topic: topic,
+                      timeRange: timeRange,
+                      startDate: startDate,
+                      endDate: endDate,
+                    ).catchError((e) => 'Error running web search: $e'),
+                  ),
+                );
                 if (mounted) setState(() => _toolStatus = '');
+                final buf = StringBuffer();
+                for (var i = 0; i < searchQueries.length; i++) {
+                  buf.writeln(
+                    "Search results for '${searchQueries[i]}':\n${results[i]}\n",
+                  );
+                }
                 toolOutputs.add(
-                  "Web Search results for '$query':\n\n$searchResult",
+                  "Web Search results for ${searchQueries.length == 1 ? "'${searchQueries.first}'" : '${searchQueries.length} queries'}:\n\n${buf.toString().trim()}",
                 );
                 continue;
               }
@@ -2691,23 +2789,79 @@ jobs:
                 toolOutputs.add("Content of URL '$url':\n\n$urlResult");
                 continue;
               }
-              if (toolName == 'memory') {
+              if (toolName == 'todo_create') {
                 executedTools = true;
-                final action = (toolArgs['action'] ?? 'read')
-                    .toString()
-                    .toLowerCase()
-                    .trim();
-                final content = (toolArgs['content'] ?? '').toString();
-                if (mounted) {
-                  setState(() => _toolStatus = '🧠 Memory Tool: $action');
+                final tasks = toolArgs['tasks'];
+                final List<_TodoItem> items = [];
+                if (tasks is List) {
+                  for (var i = 0; i < tasks.length; i++) {
+                    final item = tasks[i];
+                    String title;
+                    if (item is String) {
+                      title = item;
+                    } else if (item is Map) {
+                      title = item['title']?.toString() ??
+                          item['t']?.toString() ??
+                          'Task ${i + 1}';
+                    } else {
+                      title = item.toString();
+                    }
+                    if (title.trim().isNotEmpty) {
+                      items.add(_TodoItem(n: items.length + 1, title: title.trim()));
+                    }
+                  }
                 }
-                final result = await _handleMemoryTool(action, content);
-                if (mounted) setState(() => _toolStatus = '');
-                toolOutputs.add("Memory Tool [$action] Result:\n$result");
+                if (items.isEmpty) {
+                  toolOutputs.add(
+                    'Tool Result [todo_create]:\n\n{"error":"no tasks provided"}',
+                  );
+                  continue;
+                }
+                if (mounted) {
+                  setState(() {
+                    _activeTodos = items;
+                    _todoListVisible = true;
+                  });
+                }
+                toolOutputs.add(
+                  'Tool Result [todo_create]:\n\n{"ok":true,"n":${items.length},"tasks":[${items.map((t) => '{"n":${t.n},"title":"${t.title.replaceAll('"', '\\"')}"').join(',')}]}',
+                );
+                continue;
+              }
+              if (toolName == 'todo_done') {
+                executedTools = true;
+                final doneN = toolArgs['n'];
+                final doneList = toolArgs['done'];
+                final List<int> completed = [];
+                if (doneN is int) {
+                  completed.add(doneN);
+                } else if (doneN is String) {
+                  final parsed = int.tryParse(doneN);
+                  if (parsed != null) completed.add(parsed);
+                }
+                if (doneList is List) {
+                  for (final d in doneList) {
+                    final parsed = d is int ? d : int.tryParse(d.toString());
+                    if (parsed != null) completed.add(parsed);
+                  }
+                }
+                if (mounted) {
+                  setState(() {
+                    for (final n in completed) {
+                      final idx = _activeTodos.indexWhere((t) => t.n == n);
+                      if (idx != -1) _activeTodos[idx].done = true;
+                    }
+                  });
+                }
+                final remaining = _activeTodos.where((t) => !t.done).length;
+                toolOutputs.add(
+                  'Tool Result [todo_done]:\n\n{"ok":true,"completed":${completed.length},"remaining":$remaining}',
+                );
                 continue;
               }
               if (toolName == 'quiz' || toolName == 'quiz_request') {
                 if (!_studyModeEnabled) {
+                  executedTools = true;
                   toolOutputs.add(
                     'Tool Result [$toolName]:\n\n{"error":"the quiz tool is only available in study mode"}',
                   );
@@ -2852,9 +3006,14 @@ jobs:
             }
 
             // Shell permission gate (parity with run_command).
-            if (toolName == 'sh') {
-              final cmd = toolArgs['cmd']?.toString() ?? '';
-              // F-1: Hard-deny dangerous segments with a specific error
+            if (toolName == 'sh' ||
+                toolName == 'diagnostics' ||
+                toolName == 'py') {
+              final cmd = toolName == 'sh'
+                  ? (toolArgs['cmd']?.toString() ?? '')
+                  : toolName == 'diagnostics'
+                      ? (toolArgs['cmd']?.toString() ?? '')
+                      : 'py:${toolArgs['m'] ?? ''}';
               if (_classifyShellSegments(cmd) == 'deny') {
                 toolOutputs.add(
                   'Tool Result [$toolName]:\n\n{"error":"Command denied by safety policy: contains a hard-denied segment (rm -rf, chmod 777/666, mkfs, dd if=, or force-push)."}',
@@ -2874,15 +3033,18 @@ jobs:
             // legacy tools (f/to vs path/src/dest), so map them onto the keys
             // the existing permission dialog understands.
             if (_nativeIsFileMutation(toolName, toolArgs)) {
-              final allowed = await _askFileMutationPermission(
-                toolName,
-                _nativePermParams(toolName, toolArgs),
-              );
-              if (!allowed) {
-                toolOutputs.add(
-                  'Tool Result [$toolName]:\n\n{"error":"User denied file operation."}',
+              final permParams = _nativePermParams(toolName, toolArgs);
+              if (!_allPathsTrusted(permParams)) {
+                final allowed = await _askFileMutationPermission(
+                  toolName,
+                  permParams,
                 );
-                continue;
+                if (!allowed) {
+                  toolOutputs.add(
+                    'Tool Result [$toolName]:\n\n{"error":"User denied file operation."}',
+                  );
+                  continue;
+                }
               }
             }
 
@@ -2906,10 +3068,47 @@ jobs:
             }
 
             if (mounted) setState(() => _toolStatus = '');
+            final resultJson = jsonEncode(result);
+            toolOutputs.add('Tool Result [$toolName]:\n\n$resultJson');
+
+            if (toolName == 'patch' || toolName == 'edit' || toolName == 'create_file') {
+              String? filePath;
+              if (toolArgs['f'] is String) {
+                filePath = toolArgs['f'] as String;
+              } else if (toolArgs['p'] is List && (toolArgs['p'] as List).isNotEmpty) {
+                final first = (toolArgs['p'] as List).first;
+                if (first is Map && first['f'] is String) filePath = first['f'] as String;
+              } else if (toolArgs['e'] is List && (toolArgs['e'] as List).isNotEmpty) {
+                final first = (toolArgs['e'] as List).first;
+                if (first is Map && first['f'] is String) filePath = first['f'] as String;
+              }
+              if (filePath != null && filePath.endsWith('.dart') && !resultJson.contains('"err"')) {
+                try {
+                  final diagResult = await NativeToolsService().call(
+                    workspace: _agenticWorkspace,
+                    tool: 'diagnostics',
+                    args: {'cmd': 'dart analyze ${_verifyShellQuote(filePath)} 2>&1 | head -20', 'to': 30},
+                  );
+                  if (diagResult['out'] != null && (diagResult['out'] as String).contains('error')) {
+                    toolOutputs.add(
+                      'Tool Result [auto_verify]:\n\n${diagResult['out']}',
+                    );
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        }
+
+        if (nativeHttpCalls.isNotEmpty &&
+            !_agenticEnabled &&
+            !_studyModeEnabled) {
+          for (final js in nativeHttpCalls) {
             toolOutputs.add(
-              'Tool Result [$toolName]:\n\n${jsonEncode(result)}',
+              'Tool Result [bridge]:\n\n{"error":"Python bridge tools require Agentic File Access or Study Mode to be enabled."}',
             );
           }
+          executedTools = true;
         }
 
         if ((_agenticEnabled || _studyModeEnabled) &&
@@ -3050,31 +3249,39 @@ jobs:
 
                 String cleanResult = body;
                 try {
-                  final parsed = jsonDecode(body) as Map<String, dynamic>;
-                  final resultData =
-                      parsed['result'] as Map<String, dynamic>? ?? parsed;
-
-                  if (resultData.containsKey('aiBlock')) {
-                    cleanResult = resultData['aiBlock'].toString();
-                  } else if (resultData.containsKey('stdout')) {
-                    cleanResult = resultData['stdout'].toString();
-                    if (resultData.containsKey('diff') &&
-                        resultData['diff'].toString().isNotEmpty) {
-                      cleanResult +=
-                          '\n\n--- DIFF ---\n' + resultData['diff'].toString();
-                    }
-                    if (resultData.containsKey('stderr') &&
-                        resultData['stderr'].toString().trim().isNotEmpty) {
-                      cleanResult +=
-                          '\n\n--- STDERR ---\n' +
-                          resultData['stderr'].toString();
-                    }
-                  } else if (resultData.containsKey('error')) {
-                    cleanResult = 'Error: ' + resultData['error'].toString();
+                  final parsed = jsonDecode(body);
+                  dynamic resultData;
+                  if (parsed is Map<String, dynamic>) {
+                    resultData = parsed['result'] ?? parsed;
+                  } else {
+                    resultData = parsed;
                   }
-                } catch (_) {
-                  // Fallback to raw body if not JSON
-                }
+
+                  if (resultData is Map<String, dynamic>) {
+                    if (resultData.containsKey('aiBlock')) {
+                      cleanResult = resultData['aiBlock'].toString();
+                    } else if (resultData.containsKey('stdout')) {
+                      cleanResult = resultData['stdout'].toString();
+                      if (resultData.containsKey('diff') &&
+                          resultData['diff'].toString().isNotEmpty) {
+                        cleanResult +=
+                            '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                      }
+                      if (resultData.containsKey('stderr') &&
+                          resultData['stderr'].toString().trim().isNotEmpty) {
+                        cleanResult +=
+                            '\n\n--- STDERR ---\n' +
+                            resultData['stderr'].toString();
+                      }
+                    } else if (resultData.containsKey('error')) {
+                      cleanResult = 'Error: ' + resultData['error'].toString();
+                    } else {
+                      cleanResult = jsonEncode(resultData);
+                    }
+                  } else if (resultData is List) {
+                    cleanResult = jsonEncode(resultData);
+                  }
+                } catch (_) {}
 
                 mcpResult = cleanResult;
                 if (mcpResult.length > 32000) {
@@ -3253,20 +3460,12 @@ jobs:
           final mcpMatch = newText.contains('MCP Result:\n');
           final method = toolResultMatch?.group(1)?.trim();
           const keepRichToolMethods = {
-            'read_file_rich',
-            'file_outline',
-            'file_outline_rich',
-            'search_rich',
-            'tree',
-            'tree_rich',
-            'multi_read_rich',
-            'find_files',
-            'symbol_search',
-            'symbol_references',
-            'workspace_list',
-            'workspace_search',
-            'workspace_read_page',
-            'workspace_get_outline',
+            'read_file_rich', 'file_outline', 'file_outline_rich',
+            'search_rich', 'tree', 'tree_rich', 'multi_read_rich',
+            'find_files', 'symbol_search', 'symbol_references',
+            'workspace_list', 'workspace_search', 'workspace_read_page',
+            'workspace_get_outline', 'workspace_cross_compare',
+            'read', 'search', 'outline', 'list', 'find', 'recent',
           };
 
           if (toolResultMatch != null &&
@@ -3330,6 +3529,11 @@ jobs:
             (match) =>
                 '<patches>... [Patches data of length ${match.group(1)!.length} characters omitted] ...</patches>',
           );
+          newText = newText.replaceAllMapped(
+            RegExp(r'```(?:html|markdown|md|react|json-chart|docx)\s*\n([\s\S]{800,}?)\n```'),
+            (match) =>
+                '```[Artifact of ${match.group(1)!.length} chars omitted for context space]```',
+          );
         }
 
         compacted.add(
@@ -3344,16 +3548,25 @@ jobs:
           ),
         );
       } else if (msg.role == MessageRole.user) {
+        String userText = msg.text;
+        if (userText.length > 4000) {
+          if (userText.startsWith('Search results for') ||
+              userText.startsWith('Content of URL') ||
+              userText.startsWith('Web Search results')) {
+            userText = userText.substring(0, 2000) +
+                '\n\n...[${userText.length - 3000} chars omitted for context space]...\n\n' +
+                userText.substring(userText.length - 1000);
+          }
+        }
         compacted.add(
           ChatMessage(
             role: msg.role,
-            text: msg.text,
+            text: userText,
             isError: msg.isError,
             reasoning: msg.reasoning,
             images: msg.images,
             videos: msg.videos,
-            files:
-                const [], // Strip attached files from intermediate user messages to avoid re-sending large base64 contents
+            files: const [],
           ),
         );
       }
@@ -4119,16 +4332,19 @@ jobs:
     String? startDate,
     String? endDate,
   }) async {
-    final searchResultRaw = await _chatClient.searchWeb(
-      query,
-      _searchSettings.provider,
-      [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
-      googleCx: _searchSettings.googleCx,
-      topic: topic,
-      timeRange: timeRange,
-      startDate: startDate,
-      endDate: endDate,
-    );
+    final searchResultRaw = await _chatClient
+        .searchWeb(
+          query,
+          _searchSettings.provider,
+          [_searchSettings.apiKey, ..._searchSettings.fallbackApiKeys],
+          googleCx: _searchSettings.googleCx,
+          topic: topic,
+          timeRange: timeRange,
+          startDate: startDate,
+          endDate: endDate,
+          customProviders: _searchSettings.customProviders,
+        )
+        .timeout(const Duration(seconds: 30));
     String searchResult = searchResultRaw;
     if (searchResult.length > 4000) {
       searchResult =
@@ -4313,74 +4529,122 @@ jobs:
   // valid JSON object with a 't' key or a 'calls' array of such objects.
   List<Map<String, dynamic>> _findNativeToolCalls(String fullText) {
     final results = <Map<String, dynamic>>[];
-    final fenceRegex = RegExp(
-      r'```(?:json)?\s*\n([\s\S]*?)```',
-      caseSensitive: false,
-    );
-    for (final match in fenceRegex.allMatches(fullText)) {
-      final block = match.group(1)?.trim() ?? '';
-      if (block.isEmpty || !block.startsWith('{')) continue;
+    int searchFrom = 0;
+    while (true) {
+      final fenceStart = fullText.indexOf('```', searchFrom);
+      if (fenceStart == -1) break;
+      final lineEnd = fullText.indexOf('\n', fenceStart);
+      if (lineEnd == -1) break;
+      final contentStart = lineEnd + 1;
+      int depth = 0;
+      bool inStr = false;
+      bool esc = false;
+      int braceEnd = -1;
+      for (int i = contentStart; i < fullText.length; i++) {
+        final c = fullText[i];
+        if (inStr) {
+          if (esc) {
+            esc = false;
+          } else if (c == '\\') {
+            esc = true;
+          } else if (c == '"') {
+            inStr = false;
+          }
+        } else {
+          if (c == '"') {
+            inStr = true;
+          } else if (c == '{' || c == '[') {
+            depth++;
+          } else if (c == '}' || c == ']') {
+            depth--;
+            if (depth == 0) {
+              braceEnd = i;
+              break;
+            }
+          }
+        }
+      }
+      if (braceEnd == -1) {
+        searchFrom = lineEnd + 1;
+        continue;
+      }
+      final block = fullText.substring(contentStart, braceEnd + 1).trim();
+      if (block.isEmpty) {
+        searchFrom = braceEnd + 1;
+        continue;
+      }
+      if (!block.startsWith('{') && !block.startsWith('[')) {
+        searchFrom = braceEnd + 1;
+        continue;
+      }
       Map<String, dynamic>? parsed;
       try {
         final dynamic decoded = jsonDecode(block);
         if (decoded is Map<String, dynamic>) parsed = decoded;
-      } catch (_) {
-        continue; // not valid JSON — a prose code block, leave it alone
-      }
-      if (parsed == null) continue;
-      final calls = parsed['calls'];
-      if (calls is List) {
-        for (final c in calls) {
-          if (c is Map<String, dynamic> && c['t'] != null) results.add(c);
+        else if (decoded is List) {
+          for (final item in decoded) {
+            if (item is Map<String, dynamic> && item['t'] != null) results.add(item);
+          }
         }
-      } else if (parsed['t'] != null) {
-        results.add(parsed);
-      } else if (parsed['method'] != null) {
-        // Python bridge format: {"method": "...", "params": {...}}
-        final method = parsed['method'].toString();
-        final params = parsed['params'];
-        results.add({
-          't': method,
-          'a': params is Map<String, dynamic> ? params : <String, dynamic>{},
-        });
+      } catch (_) {
+        searchFrom = braceEnd + 1;
+        continue;
       }
+      if (parsed != null) {
+        final calls = parsed['calls'];
+        if (calls is List) {
+          for (final c in calls) {
+            if (c is Map<String, dynamic> && c['t'] != null) {
+              results.add(c);
+            } else if (c is Map<String, dynamic>) {
+              results.add({'t': 'error', 'a': {'err': 'batch entry missing "t" field'}});
+            }
+          }
+        } else if (parsed['t'] != null) {
+          results.add(parsed);
+        } else if (parsed['method'] != null) {
+          final method = parsed['method'].toString();
+          final params = parsed['params'];
+          results.add({
+            't': method,
+            'a': params is Map<String, dynamic> ? params : <String, dynamic>{},
+          });
+        }
+      }
+      searchFrom = braceEnd + 1;
     }
-    if (results.isEmpty) {
-      results.addAll(_findXmlToolCalls(fullText));
+    final xmlCalls = _findXmlToolCalls(fullText);
+    if (xmlCalls.isNotEmpty && results.isEmpty) {
+      results.addAll(xmlCalls);
     }
-    if (results.isEmpty) {
-      results.addAll(_findBareToolCalls(fullText));
+    final bareCalls = _findBareToolCalls(fullText);
+    final existingTools = results.map((r) => r['t']?.toString()).toSet();
+    for (final bc in bareCalls) {
+      if (!existingTools.contains(bc['t']?.toString())) results.add(bc);
     }
     return results;
   }
 
-  /// Maps XML-style tool calls (<tool_calls><invoke name="x"><parameter
-  /// name="y">v</parameter></invoke></tool_calls>) emitted by some models onto
-  /// the native {"t","a"} shape so they execute instead of rendering as text.
+  /// Maps XML-style tool calls emitted by some models onto the native
+  /// {"t","a"} shape so they execute instead of rendering as text.
+  /// Handles multiple XML conventions:
+  ///   <invoke name="x"><parameter name="y">v</parameter></invoke>
+  ///   <tool_call>{"name":"x","arguments":{...}}</tool_call>
+  ///   <function_call>{"name":"x","arguments":{...}}</function_call>
+  ///   <tool_use>{"name":"x","input":{...}}</tool_use>
+  ///   <function name="x"><param name="y">v</param></function>
   List<Map<String, dynamic>> _findXmlToolCalls(String text) {
     final results = <Map<String, dynamic>>[];
-    final invokeRegex = RegExp(
-      r'<invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)</invoke>',
-      caseSensitive: false,
-    );
-    final paramRegex = RegExp(
-      r'<parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)</parameter>',
-      caseSensitive: false,
-    );
+
     String unescape(String s) => s
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
         .replaceAll('&amp;', '&');
-    for (final m in invokeRegex.allMatches(text)) {
-      final name = unescape(m.group(1) ?? '').trim();
-      if (name.isEmpty) continue;
-      final body = m.group(2) ?? '';
-      final args = <String, dynamic>{};
-      for (final p in paramRegex.allMatches(body)) {
-        args[unescape(p.group(1) ?? '').trim()] = unescape(p.group(2) ?? '');
-      }
+
+    void addCall(String name, Map<String, dynamic> args) {
+      if (name.isEmpty) return;
       if (name == 'python3' || name == 'python') {
         final code = (args['code'] ?? '').toString();
         results.add({
@@ -4391,6 +4655,134 @@ jobs:
         results.add({'t': name, 'a': args});
       }
     }
+
+    // Format 1: <invoke name="x"><parameter name="y">v</parameter></invoke>
+    final invokeRegex = RegExp(
+      r'<invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)</invoke>',
+      caseSensitive: false,
+    );
+    final paramRegex = RegExp(
+      r'<parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)</parameter>',
+      caseSensitive: false,
+    );
+    for (final m in invokeRegex.allMatches(text)) {
+      final name = unescape(m.group(1) ?? '').trim();
+      if (name.isEmpty) continue;
+      final body = m.group(2) ?? '';
+      final args = <String, dynamic>{};
+      for (final p in paramRegex.allMatches(body)) {
+        args[unescape(p.group(1) ?? '').trim()] = unescape(p.group(2) ?? '');
+      }
+      addCall(name, args);
+    }
+    if (results.isNotEmpty) return results;
+
+    // Format 2: <tool_call>{"name":"x","arguments":{...}}</tool_call>
+    final toolCallRegex = RegExp(
+      r'<tool_call>([\s\S]*?)</tool_call>',
+      caseSensitive: false,
+    );
+    for (final m in toolCallRegex.allMatches(text)) {
+      try {
+        final dynamic d = jsonDecode(unescape(m.group(1) ?? '').trim());
+        if (d is Map<String, dynamic>) {
+          final name = (d['name'] ?? d['function'] ?? d['tool'] ?? '').toString();
+          final rawArgs = d['arguments'] ?? d['parameters'] ?? d['input'] ?? d['params'] ?? d['a'] ?? {};
+          final args = rawArgs is Map<String, dynamic> ? rawArgs : <String, dynamic>{};
+          addCall(name, args);
+        }
+      } catch (_) {}
+    }
+    if (results.isNotEmpty) return results;
+
+    // Format 3: <function_call>{"name":"x","arguments":{...}}</function_call>
+    final funcCallRegex = RegExp(
+      r'<function_call>([\s\S]*?)</function_call>',
+      caseSensitive: false,
+    );
+    for (final m in funcCallRegex.allMatches(text)) {
+      try {
+        final dynamic d = jsonDecode(unescape(m.group(1) ?? '').trim());
+        if (d is Map<String, dynamic>) {
+          final name = (d['name'] ?? d['function'] ?? d['tool'] ?? '').toString();
+          final rawArgs = d['arguments'] ?? d['parameters'] ?? d['input'] ?? d['params'] ?? d['a'] ?? {};
+          final args = rawArgs is Map<String, dynamic> ? rawArgs : <String, dynamic>{};
+          addCall(name, args);
+        }
+      } catch (_) {}
+    }
+    if (results.isNotEmpty) return results;
+
+    // Format 4: <tool_use>{"name":"x","input":{...}}</tool_use>
+    final toolUseRegex = RegExp(
+      r'<tool_use>([\s\S]*?)</tool_use>',
+      caseSensitive: false,
+    );
+    for (final m in toolUseRegex.allMatches(text)) {
+      try {
+        final dynamic d = jsonDecode(unescape(m.group(1) ?? '').trim());
+        if (d is Map<String, dynamic>) {
+          final name = (d['name'] ?? d['function'] ?? d['tool'] ?? '').toString();
+          final rawArgs = d['arguments'] ?? d['parameters'] ?? d['input'] ?? d['params'] ?? d['a'] ?? {};
+          final args = rawArgs is Map<String, dynamic> ? rawArgs : <String, dynamic>{};
+          addCall(name, args);
+        }
+      } catch (_) {}
+    }
+    if (results.isNotEmpty) return results;
+
+    // Format 5: <function name="x"><param name="y">v</param></function>
+    final functionRegex = RegExp(
+      r'<function\s+name="([^"]+)"[^>]*>([\s\S]*?)</function>',
+      caseSensitive: false,
+    );
+    final paramAltRegex = RegExp(
+      r'<param(?:eter)?\s+name="([^"]+)"[^>]*>([\s\S]*?)</param(?:eter)?>',
+      caseSensitive: false,
+    );
+    for (final m in functionRegex.allMatches(text)) {
+      final name = unescape(m.group(1) ?? '').trim();
+      if (name.isEmpty) continue;
+      final body = m.group(2) ?? '';
+      final args = <String, dynamic>{};
+      for (final p in paramAltRegex.allMatches(body)) {
+        args[unescape(p.group(1) ?? '').trim()] = unescape(p.group(2) ?? '');
+      }
+      addCall(name, args);
+    }
+
+    // Format 6: <tool_name><args>{"k":"v"}</args></tool_name> or bare
+    // <tool_name>{...}</tool_name> — the tag itself is the tool name
+    // (e.g. <web_search><args>{"q":"..."}</args></web_search>). Stray
+    // closers like </q> inside the body are trimmed; a non-JSON body
+    // becomes q/url for search/read tools.
+    final argsTagRegex = RegExp(
+      r'<([a-zA-Z_][a-zA-Z0-9_]*)[^>]*>\s*(?:<args>)?([\s\S]*?)(?:</args>)?\s*</\1>',
+      caseSensitive: false,
+    );
+    for (final m in argsTagRegex.allMatches(text)) {
+      final tagName = unescape(m.group(1) ?? '').trim();
+      if (!_isKnownToolName(tagName)) continue;
+      final body = unescape(m.group(2) ?? '').trim();
+      final lb = body.indexOf('{');
+      final rb = body.lastIndexOf('}');
+      Map<String, dynamic> tagArgs = {};
+      if (lb != -1 && rb > lb) {
+        try {
+          final dynamic d = jsonDecode(body.substring(lb, rb + 1));
+          if (d is Map<String, dynamic>) tagArgs = d;
+        } catch (_) {}
+      }
+      if (tagArgs.isEmpty && body.isNotEmpty) {
+        if (tagName == 'web_search' || tagName == 'search_web') {
+          tagArgs = {'q': body};
+        } else if (tagName == 'read_url') {
+          tagArgs = {'url': body};
+        }
+      }
+      addCall(tagName, tagArgs);
+    }
+
     return results;
   }
 
@@ -4451,17 +4843,7 @@ jobs:
     return results;
   }
 
-  bool _isKnownToolName(String t) {
-    const extra = {
-      'web_search', 'search_web', 'read_url', 'memory',
-      'quiz', 'quiz_request', 'step_complete',
-      'run_background',
-    };
-    if (NativeToolsService.cppTools.contains(t) || extra.contains(t)) return true;
-    // Python bridge tools: workspace_*, service_*, dart_*
-    if (t.startsWith('workspace_') || t.startsWith('service_') || t.startsWith('dart_')) return true;
-    return false;
-  }
+  bool _isKnownToolName(String t) => _isKnownToolNameGlobal(t);
 
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
   /// renderer shows them as tool cards instead of raw text.
@@ -4485,7 +4867,8 @@ jobs:
         '',
       );
     }
-    if (!text.contains('"t"') || text.contains('```')) return text;
+    if (!text.contains('"t"')) return text;
+    if (text.contains('```json')) return text;
     final sb = StringBuffer();
     int last = 0;
     bool wrapped = false;
@@ -4576,10 +4959,45 @@ jobs:
     Map<String, dynamic> args,
   ) {
     final perm = Map<String, dynamic>.from(args);
-    final f = args['f'];
-    if (f != null && !perm.containsKey('path')) perm['path'] = f;
-    final to = args['to'];
-    if (to != null && !perm.containsKey('dest')) perm['dest'] = to;
+    String? f;
+    String? to;
+    if (toolName == 'patch' && args['p'] is List) {
+      final first = (args['p'] as List).firstWhere(
+        (e) => e is Map && e['f'] != null,
+        orElse: () => <String, dynamic>{},
+      );
+      if (first is Map) {
+        f = first['f']?.toString();
+        to = first['to']?.toString();
+      }
+    } else if (toolName == 'edit' && args['e'] is List) {
+      final first = (args['e'] as List).firstWhere(
+        (e) => e is Map && e['f'] != null,
+        orElse: () => <String, dynamic>{},
+      );
+      if (first is Map) {
+        f = first['f']?.toString();
+        to = first['to']?.toString();
+      }
+    } else if (toolName == 'fileops' && args['ops'] is List) {
+      final first = (args['ops'] as List).firstWhere(
+        (e) => e is Map && e['f'] != null,
+        orElse: () => <String, dynamic>{},
+      );
+      if (first is Map) {
+        f = first['f']?.toString();
+        to = first['to']?.toString();
+      }
+    } else {
+      f = args['f']?.toString();
+      to = args['to']?.toString();
+    }
+    if (f != null && f.isNotEmpty) perm['path'] = f;
+    if (to != null && to.isNotEmpty) perm['dest'] = to;
+    if (toolName == 'create_directory') {
+      final p = args['p']?.toString();
+      if (p != null && p.isNotEmpty) perm['path'] = p;
+    }
     return perm;
   }
 
@@ -4783,6 +5201,71 @@ jobs:
         final target = p('pid') ?? p('id') ?? '';
         final secs = p('time_limit_seconds') ?? '15';
         return '⏳ Waiting for background process $target (${secs}s limit)';
+      case 'read':
+        final r = params['r'];
+        if (r is List && r.isNotEmpty) {
+          final first = r.first;
+          if (first is Map) return '📖 Reading ${shortPath(first['f']?.toString() ?? '')}';
+        }
+        return '📖 Reading…';
+      case 'search':
+        final q = params['q'] ?? params['queries'];
+        if (q is List && q.isNotEmpty) return '🔎 Searching: "${q.first}"';
+        return '🔎 Searching…';
+      case 'patch':
+        final patches = params['p'];
+        if (patches is List && patches.isNotEmpty) {
+          final first = patches.first;
+          if (first is Map) return '✏️ Patching ${shortPath(first['f']?.toString() ?? '')}';
+        }
+        return '✏️ Patching…';
+      case 'edit':
+        final edits = params['e'];
+        if (edits is List && edits.isNotEmpty) {
+          final first = edits.first;
+          if (first is Map) return '✏️ Editing ${shortPath(first['f']?.toString() ?? '')}';
+        }
+        return '✏️ Editing…';
+      case 'sh':
+        final cmd = p('cmd');
+        final short = cmd.length > 45 ? '${cmd.substring(0, 42)}…' : cmd;
+        return '🔧 Running: $short';
+      case 'git':
+        final action = p('a');
+        return '📊 Git $action…';
+      case 'list':
+        return '📂 Listing ${shortPath(p('p'))}';
+      case 'find':
+        return '🔎 Finding: ${p('glob') ?? p('g')}';
+      case 'outline':
+        return '🗂️ Outline: ${shortPath(p('f'))}';
+      case 'recent':
+        return '🕒 Recent files…';
+      case 'undo':
+        return '↩️ Undoing ${shortPath(p('f'))}';
+      case 'create_file':
+        return '📝 Creating ${shortPath(p('f'))}';
+      case 'create_directory':
+      case 'mkdir':
+        return '📁 Creating dir ${shortPath(p('p'))}';
+      case 'cut':
+        return '✂️ Cutting ${shortPath(p('f'))}';
+      case 'extract':
+        return '🔧 Extracting ${p('name')} from ${shortPath(p('f'))}';
+      case 'fileops':
+        return '📂 File operations…';
+      case 'diagnostics':
+        final dcmd = p('cmd');
+        final dshort = dcmd.length > 45 ? '${dcmd.substring(0, 42)}…' : dcmd;
+        return '🔍 Diagnostics: $dshort';
+      case 'py':
+        return '🐍 Python: ${p('m')}';
+      case 'todo_create':
+        return '📋 Creating todo list…';
+      case 'todo_done':
+        return '✅ Task ${p('n')} done';
+      case 'version':
+        return 'ℹ️ Version check…';
       default:
         return '⚙️  Tool: $method';
     }
@@ -4805,6 +5288,28 @@ jobs:
           (stateFence['json'] as Map<String, dynamic>)['research_state']
               as Map<String, dynamic>;
       stateMap['status'] = 'running';
+
+      if (!_searchSettings.enabled) {
+        setState(() {
+          _sendingSessionIds.add(_sessions[sessionIndex].id);
+          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+          msgs[messageIndex] = ChatMessage(
+            role: MessageRole.assistant,
+            text: message.text.replaceRange(
+              stateFence['start'] as int,
+              stateFence['end'] as int,
+              _researchStateFence(stateMap),
+            ),
+            reasoning: message.reasoning,
+          );
+          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
+        });
+        _appendSystemMessage(
+          'Deep Research requires Web Search to be enabled. Enable it in Settings → Features → Web Search.',
+        );
+        _sendingSessionIds.remove(_sessions[sessionIndex].id);
+        return;
+      }
 
       setState(() {
         _sendingSessionIds.add(_sessions[sessionIndex].id);
@@ -5027,11 +5532,14 @@ jobs:
         final rawPlan = planFence == null
             ? null
             : (planFence['json'] as Map<String, dynamic>)['research_plan'];
-        final phaseList = rawPlan is List
+        final phaseListRaw = rawPlan is List
             ? rawPlan
             : (rawPlan is Map<String, dynamic> && rawPlan['phases'] is List
                   ? rawPlan['phases'] as List
                   : const <dynamic>[]);
+        final phaseList = phaseListRaw.length > 12
+            ? phaseListRaw.sublist(0, 12)
+            : phaseListRaw;
 
         int stepIdx = 1;
         for (final entry in phaseList) {
@@ -5062,14 +5570,29 @@ jobs:
         }
 
         if (plannedSteps.isEmpty) {
-          plannedSteps.add({
-            'id': 'step_1',
-            'title': 'General Research',
-            'query_text': prompt,
-            'status': 'pending',
-            'content': '',
-            'events': <Map<String, dynamic>>[],
-          });
+          final parts = prompt.split(RegExp(r'[;,\n]'));
+          for (var i = 0; i < parts.length && i < 6; i++) {
+            final p = parts[i].trim();
+            if (p.isEmpty) continue;
+            plannedSteps.add({
+              'id': 'step_${i + 1}',
+              'title': p.length > 50 ? '${p.substring(0, 47)}…' : p,
+              'query_text': p,
+              'status': 'pending',
+              'content': '',
+              'events': <Map<String, dynamic>>[],
+            });
+          }
+          if (plannedSteps.isEmpty) {
+            plannedSteps.add({
+              'id': 'step_1',
+              'title': 'General Research',
+              'query_text': prompt,
+              'status': 'pending',
+              'content': '',
+              'events': <Map<String, dynamic>>[],
+            });
+          }
         }
 
         steps = plannedSteps;
@@ -5083,6 +5606,8 @@ jobs:
       final int maxConcurrentFetchCalls = 6;
       final Duration globalTimeBudget = const Duration(minutes: 60);
       final DateTime startTime = DateTime.now();
+      int cumulativeFacts = 0;
+      int cumulativeFindings = 0;
 
       DateTime getGlobalElapsed() {
         return DateTime.now();
@@ -5158,6 +5683,9 @@ jobs:
                   stateMap['steps'][idx]['events'] ?? [],
                 );
                 evts.add(newEvent);
+                if (evts.length > 50) {
+                  evts.removeRange(0, evts.length - 50);
+                }
                 stateMap['steps'][idx]['events'] = evts;
               }
               _publishResearchState(sessionIndex, messageIndex, stateMap);
@@ -5245,7 +5773,7 @@ jobs:
             text:
                 "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
-                "${crossPhaseContext.length > 0 ? '━━ PREVIOUS PHASE RESULTS (USE AS RESEARCH TARGETS) ━━\nThese entities and findings were discovered in earlier phases. When your current phase requires specific subjects (models, products, tools, etc.), you MUST use ONLY these discovered entities as your search targets. Do NOT substitute or guess entities from your training data.\n$crossPhaseContext\n\n' : ''}"
+                "${crossPhaseContext.length > 0 ? '━━ PREVIOUS PHASE RESULTS (MANDATORY RESEARCH TARGETS) ━━\nBelow are the entities, facts, and sources discovered in earlier phases. Your current phase MUST build on these:\n- Use the EXACT entity names listed below as your search queries (e.g. search \"[model name] specs\" not \"coding model specs\").\n- Use read_url on the source URLs listed below if they contain information relevant to your current phase.\n- NEVER search for generic terms when specific entities were already discovered. Search for the specific entity + your phase\'s focus.\n- If a previous phase found models A, B, C, your phase about specs should search \"A specs\", \"B specs\", \"C specs\" — not \"coding model specs\".\n\n$crossPhaseContext\n' : ''}"
                 "━━ RECENCY MANDATE ━━\n"
                 "Current date and time: $phaseCurrentTime.\n"
                 "You are researching for a reader who needs CURRENT information. "
@@ -5270,7 +5798,7 @@ jobs:
         final Map<String, String> stepSearchCache = {};
         String stepContent = '';
 
-        while (!stepDone && loopCount < 30) {
+        while (!stepDone && loopCount < 20) {
           if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
             stepDone = true;
             stepFailed = true;
@@ -5278,8 +5806,6 @@ jobs:
                 'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
             break;
           }
-          // IMPROVEMENT: Per-phase timeout — prevents a single phase from hanging
-          // the entire run. Partial results are still passed to the writer.
           if (phaseStartTime.add(phaseTimeout).isBefore(DateTime.now())) {
             stepDone = true;
             stepFailure =
@@ -5287,12 +5813,18 @@ jobs:
             break;
           }
           if (!mounted) return;
+          if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
+            stepDone = true;
+            stepFailed = true;
+            stepFailure = 'Research cancelled by user.';
+            break;
+          }
           loopCount++;
 
-          final turnWatch = Stopwatch()..start();
           String responseText = '';
           String reasoningText = '';
           var isThinking = false;
+          var researchStreamCharCount = 0;
 
           try {
             final stream = _chatClient.sendChatStream(
@@ -5307,9 +5839,10 @@ jobs:
             );
 
             await for (final chunk in stream) {
-              if (chunk.startsWith('[REASONING]')) {
-                reasoningText += chunk.substring(11);
-              } else {
+            if (chunk.startsWith('[REASONING]')) {
+              reasoningText += chunk.substring(11);
+              researchStreamCharCount += chunk.length - 11;
+            } else {
                 var textChunk = chunk;
                 if (!isThinking &&
                     (textChunk.contains('<think>') ||
@@ -5359,7 +5892,6 @@ jobs:
                 reasoning: reasoningText,
               ),
             );
-            turnWatch.stop();
 
             final unrecognizedErrors = <Map<String, dynamic>>[];
             // JSON tool calls are extracted directly from fenced ```json blocks
@@ -5422,10 +5954,19 @@ jobs:
             }
 
             if (stepCompleteRequested) {
+              if (phaseFacts.isEmpty && phaseFindings.isEmpty && webSearchCount == 0) {
+                stepMessages.add(
+                  const ChatMessage(
+                    role: MessageRole.user,
+                    text: 'You emitted step_complete without any searches or evidence. The grounding rule is non-negotiable: you must search and read at least one source before completing a phase. Emit a web_search call now.',
+                  ),
+                );
+                continue;
+              }
               final contentClean = responseText
                   .replaceAll(
                     RegExp(
-                      r'```json\s*\n\s*\{\s*"t"\s*:\s*"step_complete"\s*(,\s*"a"\s*:\s*\{\s*\})?\s*\}\s*\n```',
+                      r'```json\s*\n\s*\{\s*"t"\s*:\s*"step_complete"\s*(,\s*"a"\s*:\s*\{[\s\S]*?\})?\s*\}\s*\n```',
                       caseSensitive: false,
                     ),
                     '',
@@ -5446,9 +5987,22 @@ jobs:
                 final a = call['a'] is Map<String, dynamic>
                     ? call['a'] as Map<String, dynamic>
                     : <String, dynamic>{};
-                final query = (a['q'] ?? a['query'] ?? '').toString().trim();
-                queries.add(query);
-                searchAttrsList.add({
+                final List<String> callQueries = [];
+                final qList = a['queries'] ?? a['q_list'];
+                if (qList is List) {
+                  for (final item in qList) {
+                    final s = item.toString().trim();
+                    if (s.isNotEmpty) callQueries.add(s);
+                  }
+                }
+                final singleQ = (a['q'] ?? a['query'] ?? '').toString().trim();
+                if (callQueries.isEmpty && singleQ.isNotEmpty) {
+                  callQueries.add(singleQ);
+                }
+                if (callQueries.length > 4) {
+                  callQueries.removeRange(4, callQueries.length);
+                }
+                final attrs = {
                   for (final key in const [
                     'topic',
                     'time_range',
@@ -5457,16 +6011,19 @@ jobs:
                     'search_depth',
                   ])
                     if (a[key] != null) key: a[key].toString(),
-                });
-
-                final eventWatch = Stopwatch()..start();
-                stopwatches.add(eventWatch);
-                final eventId = beginResearchEvent(
-                  kind: 'search',
-                  tool: 'web_search',
-                  query: query,
-                );
-                eventIds.add(eventId);
+                };
+                for (final cq in callQueries) {
+                  queries.add(cq);
+                  searchAttrsList.add(attrs);
+                  final eventWatch = Stopwatch()..start();
+                  stopwatches.add(eventWatch);
+                  final eventId = beginResearchEvent(
+                    kind: 'search',
+                    tool: 'web_search',
+                    query: cq,
+                  );
+                  eventIds.add(eventId);
+                }
                 final trailEntry = jsonEncode({'t': 'web_search', 'a': a});
                 stepContent = stepContent.isEmpty
                     ? trailEntry
@@ -5477,12 +6034,11 @@ jobs:
               _publishResearchState(sessionIndex, messageIndex, stateMap);
 
               bool searchCapHit = false;
-              for (var k = 0; k < searchCalls.length; k++) {
+              for (var k = 0; k < queries.length; k++) {
                 final query = queries[k];
                 final attrs = searchAttrsList[k];
                 final normQuery = _normalizeQueryOrUrl(query);
 
-                // IMPROVEMENT: Skip duplicate queries already executed in this run
                 if (executedQueries.contains(normQuery)) {
                   searchFutures.add(Future.value(
                     'This exact query was already executed earlier in this research run. '
@@ -5499,10 +6055,6 @@ jobs:
                 }
                 executedQueries.add(normQuery);
 
-                // TOOL LIMITS PER PHASE:
-                // Capped at 20 web_search calls per research phase to focus the agent on high-relevance
-                // Tavily search queries rather than infinite querying loops. This matches the accuracy-over-depth
-                // priority of this project. If this limit is exceeded, we return a clear feedback message.
                 if (webSearchCount >= 20) {
                   searchCapHit = true;
                   final limitMsg =
@@ -5561,7 +6113,7 @@ jobs:
               final List<String> allUrls = [];
               final StringBuffer combinedResults = StringBuffer();
 
-              for (var k = 0; k < searchCalls.length; k++) {
+              for (var k = 0; k < queries.length; k++) {
                 final query = queries[k];
                 final eventId = eventIds[k];
                 final eventWatch = stopwatches[k];
@@ -5584,7 +6136,7 @@ jobs:
                     ? searchResult
                     : null;
                 final resultMatches = RegExp(
-                  r'- \[([^\]]+)\]\(([^)]+)\):\s*(.*)',
+                  r'(?:^|\n)[-*\d.]+\s*\[?([^\]\n]+?)\]?\s*[(:-]\s*(https?://[^\s)\]]+)',
                   multiLine: true,
                 ).allMatches(searchResult);
 
@@ -5601,7 +6153,7 @@ jobs:
                           (match) => {
                             'title': match.group(1) ?? '',
                             'url': match.group(2) ?? '',
-                            'snippet': match.group(3) ?? '',
+                            'snippet': '',
                           },
                         ),
                       ),
@@ -5618,14 +6170,6 @@ jobs:
                 combinedResults.writeln(
                   "Search results for '$query':\n$searchResult\n",
                 );
-
-                if (searchError == null &&
-                    !isDup &&
-                    !isCapError &&
-                    searchResult.isNotEmpty) {
-                  // Search snippets are discovery leads only. They are never promoted to
-                  // facts/findings; evidence is created exclusively after a successful read_url.
-                }
               }
 
               stepMessages.add(
@@ -5887,10 +6431,15 @@ jobs:
                           'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.',
                         );
                       }
+                      final relevanceQuery = queryText
+                          .split(RegExp(r' - | \| | success:| Key questions:', caseSensitive: false))
+                          .where((s) => s.trim().isNotEmpty)
+                          .take(2)
+                          .join(' ');
                       return _deepResearchBridge.readUrl(
                         targetUrl,
                         allowPdf: false,
-                        query: queryText,
+                        query: relevanceQuery,
                       );
                     });
                     // Bridge skipped_pdf is the source of truth for PDF exclusion.
@@ -6132,18 +6681,7 @@ jobs:
               final stepReflectMessages = [
                 const ChatMessage(
                   role: MessageRole.system,
-                  text:
-                      "You are a research sufficiency judger. Analyze the current facts and findings "
-                      "and decide if the phase goal is fully addressed.\n"
-                      "Respond with JSON:\n"
-                      "{\n"
-                      "  \"should_continue\": true | false,\n"
-                      "  \"reason\": \"<brief explanation>\",\n"
-                      "  \"gaps\": [\"specific gap 1\", \"specific gap 2\", ...]\n"
-                      "}\n"
-                      "If should_continue is false, gaps should be [].\n"
-                      "If should_continue is true, list 2-4 specific, searchable questions that would fill missing information. "
-                      "These gaps will guide the next search queries.",
+                  text: DeepResearchPrompts.reflectorSystemPrompt,
                 ),
                 ChatMessage(
                   role: MessageRole.user,
@@ -6183,7 +6721,7 @@ jobs:
                     if (gaps is List && gaps.isNotEmpty) {
                       final gapText = gaps
                           .whereType<String>()
-                          .take(3)
+                          .take(4)
                           .map((g) => '- $g')
                           .join('\n');
                       stepMessages.add(
@@ -6197,10 +6735,15 @@ jobs:
                 } else {
                   debugPrint('Reflection JSON parse failed: $cleanReflectResp');
                 }
-              } catch (e) {
-                debugPrint('Reflection error: $e');
-                // Don't silently swallow — log but continue
-              }
+                } catch (e) {
+                  debugPrint('Reflection error: $e');
+                  stepMessages.add(
+                    const ChatMessage(
+                      role: MessageRole.user,
+                      text: 'Reflection analysis failed. Continue searching for more evidence or emit step_complete if you have enough.',
+                    ),
+                  );
+                }
             }
           } catch (e) {
             stepDone = true;
@@ -6240,27 +6783,47 @@ jobs:
         }
         steps[i]['content'] = stepContent;
 
-        // Update cross-phase context: entity handoff + compact evidence summary
         if (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty) {
           final entitySet = <String>{};
           for (final f in phaseFacts) {
             final subj = (f['subject'] ?? '').toString().trim();
+            final val = (f['value'] ?? '').toString().trim();
             if (subj.isNotEmpty) entitySet.add(subj);
+            if (val.isNotEmpty && val.length < 60) entitySet.add(val);
           }
-          final topFacts = phaseFacts
-              .take(8)
-              .map((f) => "${f['subject']} ${f['metric']}: ${f['value']}")
-              .join('; ');
-          final topFinding = phaseFindings.isNotEmpty
-              ? ' | Top: ${phaseFindings.first['text']}'
-              : '';
-          crossPhaseContext.writeln(
-            '- Phase ${i + 1} ($phaseTitle): ${phaseFacts.length} facts, ${phaseFindings.length} findings. ' +
-            'Key: $topFacts$topFinding',
-          );
-          if (entitySet.isNotEmpty) {
-            crossPhaseContext.writeln('  Discovered entities: ${entitySet.join(', ')}');
+          for (final f in phaseFindings) {
+            final text = (f['text'] ?? '').toString();
+            final words = text.split(RegExp(r'\s+'));
+            for (final w in words) {
+              final clean = w.replaceAll(RegExp(r'[^\w\-\.]'), '');
+              if (clean.length > 3 && clean.length < 40 &&
+                  (clean.contains('-') || clean.contains('.') || clean[0].toUpperCase() == clean[0])) {
+                entitySet.add(clean);
+              }
+            }
           }
+          final sourceUrls = <String>{};
+          for (final f in [...phaseFacts, ...phaseFindings]) {
+            final s = (f['source'] ?? '').toString().trim();
+            if (s.isNotEmpty) sourceUrls.add(s);
+          }
+          crossPhaseContext.writeln('━━ Phase ${i + 1}: $phaseTitle ━━');
+          crossPhaseContext.writeln('Discovered entities: ${entitySet.join(', ')}');
+          crossPhaseContext.writeln('Key facts:');
+          for (final f in phaseFacts.take(15)) {
+            crossPhaseContext.writeln('  - ${f['subject']} ${f['metric']}: ${f['value']} (date: ${f['date'] ?? 'n/a'})');
+          }
+          crossPhaseContext.writeln('Key findings:');
+          for (final f in phaseFindings.take(8)) {
+            crossPhaseContext.writeln('  - ${f['text']}');
+          }
+          if (sourceUrls.isNotEmpty) {
+            crossPhaseContext.writeln('Sources found (use read_url on these if needed):');
+            for (final u in sourceUrls.take(8)) {
+              crossPhaseContext.writeln('  - $u');
+            }
+          }
+          crossPhaseContext.writeln('');
         }
 
         _publishResearchState(sessionIndex, messageIndex, stateMap);
@@ -6276,8 +6839,8 @@ jobs:
             stats: {
               'phases_completed': i + 1,
               'phases_total': steps.length,
-              'facts_collected': phaseFacts.length,
-              'findings_collected': phaseFindings.length,
+              'facts_collected': (cumulativeFacts += phaseFacts.length),
+              'findings_collected': (cumulativeFindings += phaseFindings.length),
             },
           );
         } catch (e) {
@@ -6383,14 +6946,36 @@ jobs:
         });
       }
 
-      final verifiedSourceUrls = _evidenceSourceUrls(rawTempJson);
+      var verifiedSourceUrls = _evidenceSourceUrls(rawTempJson);
       if (writerInputFailure == null && verifiedSourceUrls.isEmpty) {
         writerInputFailure =
             'No verified source URLs were persisted to temp.json, so a research artifact cannot be generated safely.';
       }
 
-      // Prefer compact structured text for the writer LLM (~40% fewer tokens than JSON)
       final writerEvidence = compactText.isNotEmpty ? compactText : tempJsonContent;
+
+      final evidenceUrls = <String>{};
+      try {
+        final parsedTemp = jsonDecode(rawTempJson);
+        if (parsedTemp is List) {
+          for (final phase in parsedTemp) {
+            if (phase is! Map) continue;
+            for (final fact in phase['facts'] as List? ?? []) {
+              if (fact is Map) {
+                final s = fact['source']?.toString();
+                if (s != null && s.isNotEmpty) evidenceUrls.add(s);
+              }
+            }
+            for (final finding in phase['findings'] as List? ?? []) {
+              if (finding is Map) {
+                final s = finding['source']?.toString();
+                if (s != null && s.isNotEmpty) evidenceUrls.add(s);
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      verifiedSourceUrls = verifiedSourceUrls.where((u) => evidenceUrls.contains(u)).toList();
 
       // IMPROVEMENT: Build evidence summary so the writer knows the scope of research
       int totalFacts = 0;
@@ -6444,7 +7029,6 @@ jobs:
         if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
           break;
         }
-        final turnWatch = Stopwatch()..start();
         try {
           String responseText = '';
           String reasoningText = '';
@@ -6508,7 +7092,9 @@ jobs:
           finalReportDone = true;
         } catch (e) {
           writerRetries++;
-          writerFailure = e.toString();
+          if (writerRetries >= 3) {
+            writerFailure = e.toString();
+          }
         }
       }
 
@@ -6914,6 +7500,52 @@ jobs:
     return 'Cleared current session messages.';
   }
 
+  Future<String> _slashPlan(String prompt) async {
+    if (!_agenticEnabled) {
+      return 'Plan mode requires Agentic File Access. Enable it in Settings.';
+    }
+    final activeId = _activeSessionId;
+    if (activeId == null) return 'No active session.';
+    bool hasExistingFiles = false;
+    try {
+      final dir = Directory(_agenticWorkspace);
+      if (dir.existsSync()) {
+        final entries = dir.listSync(followLinks: false).where((e) {
+          final name = e.path.split('/').last;
+          return !name.startsWith('.') && name != 'build' && name != 'node_modules';
+        });
+        hasExistingFiles = entries.isNotEmpty;
+      }
+    } catch (_) {}
+    final String planInstruction;
+    if (hasExistingFiles) {
+      planInstruction =
+        'The user wants: $prompt\n\n'
+        'This workspace already has files. Before creating a todo list, explore the codebase to understand the current structure:\n'
+        '1. Call list to see the project tree (depth 2-3).\n'
+        '2. Call search for key terms from the user request to find relevant files.\n'
+        '3. Call outline on the most relevant files to understand the code organization.\n'
+        '4. Based on what you found, create a todo list with todo_create covering the specific changes needed.\n'
+        '5. Execute each task one by one, marking each with todo_done when complete.\n'
+        'Do NOT create the todo list until you have explored the codebase and understand what exists.';
+    } else {
+      planInstruction =
+        'The user wants: $prompt\n\n'
+        'This workspace is empty — the user is building from scratch. Create a todo list immediately:\n'
+        '1. Call todo_create with the steps needed to build this project from scratch (project setup, core files, configuration, tests, etc.).\n'
+        '2. Execute each task one by one using create_file, sh (for package installs), and other tools.\n'
+        '3. Mark each task with todo_done as you complete it.\n'
+        'Be thorough in the todo list — include project structure, dependencies, all source files, config, and a README.';
+    }
+    await _appendSystemMessage('Plan mode: "$prompt" — ${hasExistingFiles ? "exploring codebase" : "building from scratch"}…');
+    if (mounted) {
+      setState(() => _toolStatus = '📋 Planning: $prompt');
+    }
+    await _sendChatMessage(promptText: planInstruction);
+    if (mounted) setState(() => _toolStatus = '');
+    return 'Plan initiated.';
+  }
+
   Future<void> _openPlusBottomSheet() async {
     final provider = _provider;
     final settings = _activeSettings;
@@ -7298,7 +7930,10 @@ jobs:
                 messageController: _messageController,
                 scrollController: _scrollController,
                 isSending: _sendingSessionIds.contains(_activeSessionId),
-                toolStatus: _toolStatus,
+                 toolStatus: _toolStatus,
+                 activeTodos: _activeTodos,
+                 todoListVisible: _todoListVisible,
+                 onCloseTodoList: () => setState(() => _todoListVisible = false),
                 onOpenProvider: () => _openProviderSheet(_selectedProviderId),
                 onOpenModel: _openModelSheet,
                 onSend: _sendMessage,
@@ -7322,6 +7957,7 @@ jobs:
                 activeFeaturePills: [
                   if (_deepResearchEnabled) const _FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
                   if (_agenticEnabled) const _FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
+                  if (_searchSettings.enabled) const _FeaturePill(icon: Icons.search, label: 'Web Search'),
                   if (_studyModeEnabled) const _FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
                   if (_artifactsEnabled) const _FeaturePill(icon: Icons.extension, label: 'Artifacts'),
                   if (_svgVisualsEnabled) const _FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
@@ -7681,6 +8317,9 @@ class ChatSurface extends StatelessWidget {
     required this.scrollController,
     required this.isSending,
     required this.toolStatus,
+    this.activeTodos = const [],
+    this.todoListVisible = false,
+    this.onCloseTodoList,
     required this.onOpenProvider,
     required this.onOpenModel,
     required this.onSend,
@@ -7713,6 +8352,9 @@ class ChatSurface extends StatelessWidget {
   final ScrollController scrollController;
   final bool isSending;
   final String toolStatus;
+  final List<_TodoItem> activeTodos;
+  final bool todoListVisible;
+  final VoidCallback? onCloseTodoList;
   final String fileName;
   final VoidCallback onOpenProvider;
   final VoidCallback onOpenModel;
@@ -7831,6 +8473,17 @@ class ChatSurface extends StatelessWidget {
               },
             ),
           ),
+          if (todoListVisible && activeTodos.isNotEmpty)
+            Positioned(
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 280,
+              child: _TodoListPanel(
+                todos: activeTodos,
+                onClose: onCloseTodoList,
+              ),
+            ),
           if (messages.isEmpty && deepResearchEnabled)
             Center(
               child: LiquidGlassSurface(
@@ -8703,6 +9356,14 @@ class _McpToolBlockState extends State<McpToolBlock> {
           Icons.account_tree_outlined,
           const Color(0xFF0369A1),
           'Outline  ${shortPath(p('file_path'))}',
+        );
+      case 'workspace_cross_compare':
+        return (
+          Icons.compare_arrows,
+          const Color(0xFF7C3AED),
+          'Cross-compare',
+          p('query').isNotEmpty ? '"${p('query')}"' : null,
+        );
           null,
         );
       // ── Native C++ bridge tools (JSON {"t","a"} format) ─────────────
@@ -8782,11 +9443,28 @@ class _McpToolBlockState extends State<McpToolBlock> {
       case 'py':
         return (Icons.code, const Color(0xFF0175C2), 'Python', p('m').isNotEmpty ? p('m') : null);
       case 'web_search':
-        return (Icons.search, const Color(0xFF0369A1), 'Web search', p('q').isNotEmpty ? '"${p('q')}"' : (p('query').isNotEmpty ? '"${p('query')}"' : null));
+        {
+          final qList = params['queries'] ?? params['q_list'];
+          if (qList is List && qList.isNotEmpty) {
+            final labels = qList.take(4).map((q) => '"$q"').join(' + ');
+            return (Icons.search, const Color(0xFF0369A1), 'Web search (${qList.length})', labels);
+          }
+          final q = p('q');
+          return (Icons.search, const Color(0xFF0369A1), 'Web search', q.isNotEmpty ? '"$q"' : (p('query').isNotEmpty ? '"${p('query')}"' : null));
+        }
       case 'read_url':
         return (Icons.link, const Color(0xFF0369A1), 'Read webpage', p('url').isNotEmpty ? shortPath(p('url')) : null);
-      case 'memory':
-        return (Icons.psychology_outlined, const Color(0xFF7C3AED), 'Memory ${p('action')}', null);
+      case 'todo_create':
+        {
+          final tasks = params['tasks'];
+          final count = tasks is List ? tasks.length : 0;
+          return (Icons.checklist, const Color(0xFF7C3AED), 'Plan ($count)', count > 0 ? '$count tasks' : null);
+        }
+      case 'todo_done':
+        {
+          final n = p('n');
+          return (Icons.check_circle, const Color(0xFF059669), 'Task done', n.isNotEmpty ? '#$n' : null);
+        }
       case 'quiz':
         return (Icons.school_outlined, const Color(0xFFD97706), 'Quiz', null);
       default:
@@ -9541,8 +10219,7 @@ List<ContentBlock> parseContentBlocks(String text) {
 
       bool isValidLanguageIdentifier(String lang) {
         if (lang.isEmpty) return true;
-        // A valid language prefix shouldn't contain spaces, quotes, brackets, or math operators, and shouldn't be too long.
-        final invalidChars = RegExp(r"[\s\(\)\{\}\[\]\=\+\-\*\/\\;,'\.]");
+        final invalidChars = RegExp(r"[\s\(\)\{\}\[\]\=\*\/\\;,'\.]");
         return !invalidChars.hasMatch(lang) && lang.length <= 20;
       }
 
@@ -10693,6 +11370,32 @@ class MessageBubble extends StatelessWidget {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (message.tokenUsage.isNotEmpty && !isUser)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Text(
+                            message.tokenUsage,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
+                              color: const Color(0xFF9B8B7A),
+                            ),
+                          ),
+                        ),
+                      if (message.tokensPerSec.isNotEmpty && !isUser)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Text(
+                            '${message.tokensPerSec} tok/s',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w500,
+                              color: animationState != AvatarAnimationState.idle
+                                  ? const Color(0xFF059669)
+                                  : const Color(0xFF9B8B7A),
+                            ),
+                          ),
+                        ),
                       LiquidGlassIconButton(
                         icon: Icons.content_copy_rounded,
                         size: 28,
@@ -10839,10 +11542,12 @@ class MessageBubble extends StatelessWidget {
                             alignment: Alignment.centerLeft,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
-                              children: _buildToolResultDetails(
-                                context,
-                                message.text,
-                              ),
+                              children: webSearchMatch
+                                  ? [_buildMarkdownResult(context, message.text)]
+                                  : _buildToolResultDetails(
+                                      context,
+                                      message.text,
+                                    ),
                             ),
                           ),
                         ),
@@ -10949,6 +11654,7 @@ class MessageBubble extends StatelessWidget {
       (tag: '<command>', isXml: true),
       (tag: '<workspace_list>', isXml: false),
       (tag: '<workspace_search>', isXml: false),
+      (tag: '<workspace_cross_compare>', isXml: false),
       (tag: '<workspace_read_page>', isXml: false),
       (tag: '<workspace_get_outline>', isXml: false),
       (tag: '<workspace_ingest>', isXml: false),
@@ -11197,16 +11903,21 @@ class MessageBubble extends StatelessWidget {
       final decoded = jsonDecode(content);
       if (method == 'workspace_list' && decoded is Map) {
         final files = (decoded['files'] as List?) ?? [];
-        final usedMb = decoded['used_quota_mb']?.toString() ?? '';
-        final totalMb = decoded['quota_mb']?.toString() ?? '';
+        final usedMb = decoded['used_quota_mb']?.toString() ??
+            decoded['total_used_mb']?.toString() ?? '';
+        final totalMb = decoded['quota_mb']?.toString() ??
+            decoded['total_quota_mb']?.toString() ?? '';
         header = 'Workspace files (${files.length})' +
             (usedMb.isNotEmpty ? ' · $usedMb/$totalMb MB used' : '');
         icon = Icons.folder_open_outlined;
         accent = const Color(0xFFD97706);
         for (final f in files.whereType<Map>()) {
-          final name = f['path']?.toString() ?? 'file';
-          final sizeKb =
-              ((f['size_bytes'] as num? ?? 0) / 1024).toStringAsFixed(1);
+          final name = f['path']?.toString() ??
+              f['file']?.toString() ??
+              f['name']?.toString() ?? 'file';
+          final sizeBytes = (f['size_bytes'] as num? ??
+              ((f['size_kb'] as num? ?? 0) * 1024));
+          final sizeKb = (sizeBytes / 1024).toStringAsFixed(1);
           detailChildren.add(
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
@@ -11242,15 +11953,25 @@ class MessageBubble extends StatelessWidget {
             ),
           );
         }
-      } else if (method == 'workspace_search' && decoded is Map) {
-        final matches = (decoded['matches'] as List?) ?? [];
-        header = 'Workspace search (${matches.length} matches)';
+      } else if (method == 'workspace_search') {
+        List<dynamic> rawMatches = [];
+        if (decoded is Map) {
+          rawMatches = (decoded['matches'] as List?) ??
+              (decoded['results'] as List?) ?? [];
+        } else if (decoded is List) {
+          rawMatches = decoded;
+        }
+        header = 'Workspace search (${rawMatches.length} matches)';
         icon = Icons.manage_search_outlined;
         accent = const Color(0xFF0369A1);
-        for (final m in matches.whereType<Map>().take(8)) {
-          final file = m['file_path']?.toString() ?? '';
-          final section = m['section']?.toString() ?? '';
-          final excerpt = m['excerpt']?.toString() ?? '';
+        for (final m in rawMatches.whereType<Map>().take(8)) {
+          final file = m['file_path']?.toString() ??
+              m['file']?.toString() ??
+              m['relative_path']?.toString() ?? '';
+          final section = m['section']?.toString() ??
+              m['chunk_id']?.toString() ?? '';
+          final excerpt = m['excerpt']?.toString() ??
+              m['content']?.toString() ?? '';
           detailChildren.add(
             Container(
               width: double.infinity,
@@ -11326,6 +12047,26 @@ class MessageBubble extends StatelessWidget {
         children: detailChildren.isEmpty
             ? [const SizedBox.shrink()]
             : detailChildren,
+      ),
+    );
+  }
+
+  Widget _buildMarkdownResult(BuildContext context, String text) {
+    final lines = text.split('\n');
+    final contentStart = lines.indexWhere((l) => l.trim().isNotEmpty && !l.startsWith('🔍'));
+    final content = contentStart > 0 ? lines.sublist(contentStart).join('\n') : text;
+    return MarkdownBody(
+      data: content.trim(),
+      selectable: true,
+      onTapLink: (url, _, __) async {
+        if (await canLaunchUrl(Uri.parse(url))) {
+          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        }
+      },
+      styleSheet: MarkdownStyleSheet(
+        p: const TextStyle(fontSize: 12.5, height: 1.4, color: Color(0xFF2D241C)),
+        a: const TextStyle(color: Color(0xFF0369A1), decoration: TextDecoration.underline),
+        listBullet: const TextStyle(color: Color(0xFF6C5946)),
       ),
     );
   }
@@ -11506,8 +12247,8 @@ class MessageBubble extends StatelessWidget {
           contentLower.contains('void main(') ||
           contentLower.contains('def main(') ||
           contentLower.contains('if __name__') ||
-          contentLower.contains('class ') ||
-          contentLower.contains('function ');
+          RegExp(r'^\s*(class|public class|abstract class|private class)\s+', multiLine: true).hasMatch(block.content) ||
+          RegExp(r'^\s*(function|export function|async function|export default function)\s+', multiLine: true).hasMatch(block.content);
       final isArtifact =
           lang == 'artifact' ||
           ((lang == 'html' || lang == 'react' || lang == 'javascript') &&
@@ -12020,10 +12761,16 @@ class _QuizSheetState extends State<_QuizSheet> {
               icon: const Icon(Icons.arrow_upward, size: 18),
               color: accent,
               onPressed: () {
-                final t = _own.text.trim();
+                final t = _own.text.trim().toLowerCase();
                 if (t.isEmpty) return;
-                final match = opts.indexWhere((o) => o.toLowerCase() == t.toLowerCase());
-                _submit(match, t);
+                int match = opts.indexWhere((o) => o.toLowerCase() == t);
+                if (match == -1) {
+                  match = opts.indexWhere((o) {
+                    final ol = o.toLowerCase();
+                    return ol.contains(t) || t.contains(ol);
+                  });
+                }
+                _submit(match, _own.text.trim());
               },
             ),
           ],
@@ -12829,6 +13576,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   bool _isBackingUp = false;
   bool _isRestoring = false;
   String _syncProgressStatus = '';
+  String _backupResultMessage = '';
+  bool _backupResultSuccess = false;
   String _activePlanTier = '';
   int? _liveDailyPool;
   int? _liveSubscriptionCredits;
@@ -13358,17 +14107,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: [
-          'pdf',
-          'txt',
-          'md',
-          'json',
-          'py',
-          'dart',
-          'js',
-          'html',
-          'css',
-          'yaml',
-          'yml',
+          'pdf', 'txt', 'md', 'json', 'py', 'dart', 'js', 'html',
+          'css', 'yaml', 'yml', 'csv', 'docx', 'doc', 'rtf', 'odt',
+          'pptx', 'ppt', 'xlsx', 'xls', 'epub', 'htm', 'xml',
+          'log', 'tex',
         ],
         allowMultiple: true,
       );
@@ -13646,6 +14388,91 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         apiKey: keys.isNotEmpty ? keys.first : '',
         fallbackApiKeys: keys.length > 1 ? keys.sublist(1) : const [],
         googleCx: _searchCxController.text.trim(),
+        customProviders: _searchSettings.customProviders,
+      ),
+    );
+  }
+
+  void _showCustomSearchProviderDialog() {
+    final nameCtrl = TextEditingController();
+    final endpointCtrl = TextEditingController();
+    final keyHeaderCtrl = TextEditingController(text: 'Authorization');
+    final keyPrefixCtrl = TextEditingController(text: 'Bearer ');
+    final queryParamCtrl = TextEditingController(text: 'query');
+    final resultsPathCtrl = TextEditingController(text: 'results');
+    final titleCtrl = TextEditingController(text: 'title');
+    final urlCtrl = TextEditingController(text: 'url');
+    final snippetCtrl = TextEditingController(text: 'content');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFFFFFBF2),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Add Custom Search Provider', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder(), isDense: true)),
+                const SizedBox(height: 8),
+                TextField(controller: endpointCtrl, decoration: const InputDecoration(labelText: 'API Endpoint URL', border: OutlineInputBorder(), isDense: true, hintText: 'https://api.example.com/search')),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: 'POST',
+                  decoration: const InputDecoration(labelText: 'Method', border: OutlineInputBorder(), isDense: true),
+                  items: ['POST', 'GET'].map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+                  onChanged: (v) {},
+                ),
+                const SizedBox(height: 8),
+                TextField(controller: keyHeaderCtrl, decoration: const InputDecoration(labelText: 'API Key Header', border: OutlineInputBorder(), isDense: true, hintText: 'Authorization')),
+                const SizedBox(height: 8),
+                TextField(controller: keyPrefixCtrl, decoration: const InputDecoration(labelText: 'API Key Prefix', border: OutlineInputBorder(), isDense: true, hintText: 'Bearer ')),
+                const SizedBox(height: 8),
+                TextField(controller: queryParamCtrl, decoration: const InputDecoration(labelText: 'Query Parameter', border: OutlineInputBorder(), isDense: true, hintText: 'query')),
+                const SizedBox(height: 8),
+                TextField(controller: resultsPathCtrl, decoration: const InputDecoration(labelText: 'Results JSON Path', border: OutlineInputBorder(), isDense: true, hintText: 'results')),
+                const SizedBox(height: 8),
+                TextField(controller: titleCtrl, decoration: const InputDecoration(labelText: 'Title Field', border: OutlineInputBorder(), isDense: true)),
+                const SizedBox(height: 8),
+                TextField(controller: urlCtrl, decoration: const InputDecoration(labelText: 'URL Field', border: OutlineInputBorder(), isDense: true)),
+                const SizedBox(height: 8),
+                TextField(controller: snippetCtrl, decoration: const InputDecoration(labelText: 'Snippet Field', border: OutlineInputBorder(), isDense: true)),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (nameCtrl.text.trim().isEmpty || endpointCtrl.text.trim().isEmpty) return;
+              final id = DateTime.now().millisecondsSinceEpoch.toString();
+              final cp = CustomSearchProvider(
+                id: id,
+                name: nameCtrl.text.trim(),
+                endpoint: endpointCtrl.text.trim(),
+                apiKeyHeader: keyHeaderCtrl.text.trim(),
+                apiKeyPrefix: keyPrefixCtrl.text.trim(),
+                queryParam: queryParamCtrl.text.trim(),
+                resultsPath: resultsPathCtrl.text.trim(),
+                titleField: titleCtrl.text.trim(),
+                urlField: urlCtrl.text.trim(),
+                snippetField: snippetCtrl.text.trim(),
+              );
+              setState(() {
+                _searchSettings = _searchSettings.copyWith(
+                  customProviders: [..._searchSettings.customProviders, cp],
+                );
+                _updateSearchSettings();
+              });
+              Navigator.pop(ctx);
+            },
+            child: const Text('Add'),
+          ),
+        ],
       ),
     );
   }
@@ -14021,6 +14848,15 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             (p) => p.id == val,
                             orElse: () => providerCatalog.first,
                           );
+                          if (nextProvider.isKaggle) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const KaggleSetupScreen(),
+                              ),
+                            );
+                            return;
+                          }
                           setState(() {
                             _selectedProviderId = val as String;
                             _selectedModel = nextProvider.models.isNotEmpty
@@ -14499,11 +15335,25 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     ),
                     border: OutlineInputBorder(),
                   ),
-                  items: ['tavily', 'exa', 'firecrawl', 'google'].map((p) {
+                  items: [
+                    'tavily',
+                    'duckduckgo',
+                    'exa',
+                    'firecrawl',
+                    'google',
+                    ..._searchSettings.customProviders.map((p) => 'custom:${p.id}'),
+                  ].map((p) {
+                    final label = p.startsWith('custom:')
+                        ? _searchSettings.customProviders
+                            .firstWhere((cp) => cp.id == p.substring(7),
+                                orElse: () => CustomSearchProvider(
+                                    id: '', name: 'Unknown', endpoint: ''))
+                            .name
+                        : p.toUpperCase();
                     return DropdownMenuItem<String>(
                       value: p,
                       child: Text(
-                        p.toUpperCase(),
+                        label,
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                     );
@@ -14547,13 +15397,67 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     onChanged: (_) => _updateSearchSettings(),
                   ),
                 ],
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Custom Search Providers',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF6C5946),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _showCustomSearchProviderDialog(),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('Add'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF7B4E2E),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_searchSettings.customProviders.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text(
+                      'No custom providers. Add one to use any OpenAI-compatible search API.',
+                      style: TextStyle(fontSize: 11, color: Color(0xFF9B8B7A)),
+                    ),
+                  ),
+                ..._searchSettings.customProviders.map((cp) => Card(
+                      margin: const EdgeInsets.only(top: 6),
+                      child: ListTile(
+                        dense: true,
+                        title: Text(cp.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        subtitle: Text(cp.endpoint, style: const TextStyle(fontSize: 10, color: Color(0xFF9B8B7A)), overflow: TextOverflow.ellipsis),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                          onPressed: () {
+                            setState(() {
+                              _searchSettings = _searchSettings.copyWith(
+                                customProviders: _searchSettings.customProviders
+                                    .where((p) => p.id != cp.id)
+                                    .toList(),
+                              );
+                              if (_searchProvider == 'custom:${cp.id}') {
+                                _searchProvider = 'tavily';
+                              }
+                              _updateSearchSettings();
+                            });
+                          },
+                        ),
+                      ),
+                    )),
               ],
             ],
           ),
         ),
         const SizedBox(height: 12),
 
-        // Markdown Artifacts Card
+        // Artifacts Card
         LiquidGlassSurface(
           padding: const EdgeInsets.all(16),
           borderRadius: BorderRadius.circular(18),
@@ -14564,7 +15468,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Markdown Artifacts',
+                    'Artifacts',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
@@ -14573,7 +15477,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                   SizedBox(height: 2),
                   Text(
-                    'Let models create structured markdown artifacts',
+                    'Let models create HTML, React, markdown & code artifacts',
                     style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
@@ -14649,7 +15553,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   ),
                   SizedBox(height: 2),
                   Text(
-                    'Let models perform iterative multi-step research plans',
+                    'Multi-step research with web search. Requires Web Search enabled.',
                     style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
@@ -14728,6 +15632,13 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     }
                     if (_deepResearchEnabled) {
                       _showExclusivitySnackBar('Study Mode', 'Deep Research');
+                      return;
+                    }
+                    final bridgeResult = await _checkBridgeAlive();
+                    if (!bridgeResult['alive']) {
+                      _appendSystemMessage(
+                        'Study Mode requires the Python bridge. Start it from Settings or run the bridge manually.',
+                      );
                       return;
                     }
                   }
@@ -14854,7 +15765,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               FutureBuilder<List<dynamic>>(
                 future: NexonTts.getVoices(),
                 builder: (context, snapshot) {
-                  final voices = snapshot.data ?? [];
+                  final allVoices = snapshot.data ?? [];
+                  final voices = allVoices.where((v) {
+                    if (v is! Map) return false;
+                    final locale = v['locale']?.toString().toLowerCase() ?? '';
+                    return locale.startsWith('en-') || locale == 'en';
+                  }).toList();
                   if (voices.isEmpty) {
                     return const Text(
                       'Default System Voice',
@@ -14866,7 +15782,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     );
                   }
                   return DropdownButtonFormField<String>(
-                    value: _selectedVoiceName,
+                    value: _selectedVoiceName ?? NexonTts.selectedVoiceName,
                     dropdownColor: const Color(0xFFFFFBF2),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
@@ -14895,8 +15811,15 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     }).toList(),
                     onChanged: (val) {
                       if (val != null) {
+                        final selected = voices.firstWhere(
+                          (v) => v is Map && v['name'] == val,
+                          orElse: () => <String, dynamic>{},
+                        );
+                        final locale = selected is Map
+                            ? (selected['locale']?.toString() ?? 'en-US')
+                            : 'en-US';
                         setState(() => _selectedVoiceName = val);
-                        NexonTts.setVoice({"name": val, "locale": "en-US"});
+                        NexonTts.setVoice({"name": val, "locale": locale});
                       }
                     },
                   );
@@ -15168,6 +16091,38 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                             ],
                           ),
                         ),
+                      if (_backupResultMessage.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6.0),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _backupResultSuccess
+                                    ? Icons.cloud_done
+                                    : Icons.cloud_off,
+                                size: 14,
+                                color: _backupResultSuccess
+                                    ? Colors.green
+                                    : Colors.red,
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  _backupResultMessage,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: _backupResultSuccess
+                                        ? const Color(0xFF3B7A3B)
+                                        : const Color(0xFFB33A3A),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -15260,41 +16215,108 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                     setState(() {
                                       _isBackingUp = true;
                                       _syncProgressStatus = 'Starting backup…';
+                                      _backupResultMessage = '';
                                     });
                                     try {
                                       final result =
                                           await DriveSyncService.syncToDriveDetailed(
-                                            widget.sessions,
-                                            force: true,
-                                            onProgress: (status) {
-                                              if (mounted) {
-                                                setState(
-                                                  () => _syncProgressStatus =
-                                                      status,
-                                                );
-                                              }
-                                            },
-                                          );
+                                        widget.sessions,
+                                        force: true,
+                                        onProgress: (status) {
+                                          if (mounted) {
+                                            setState(
+                                              () => _syncProgressStatus =
+                                                  status,
+                                            );
+                                          }
+                                        },
+                                      );
                                       if (mounted) {
-                                        setState(
-                                          () => _syncProgressStatus = '',
-                                        );
-                                        _showSyncResultDialog(
-                                          context,
-                                          title: result.success
-                                              ? 'Backup Complete'
-                                              : 'Backup Failed',
-                                          message: result.message,
-                                          details: result.details,
-                                          success: result.success,
-                                          needsRelogin: result.needsRelogin,
-                                        );
+                                        setState(() {
+                                          _syncProgressStatus = '';
+                                          _backupResultSuccess = result.success;
+                                          _backupResultMessage = result.success
+                                              ? result.message
+                                              : 'Backup failed: ${result.message}';
+                                        });
+                                        if (!result.success || result.needsRelogin) {
+                                          _showSyncResultDialog(
+                                            context,
+                                            title: result.success
+                                                ? 'Backup Complete'
+                                                : 'Backup Failed',
+                                            message: result.message,
+                                            details: result.details,
+                                            success: result.success,
+                                            needsRelogin: result.needsRelogin,
+                                          );
+      } else if (method == 'workspace_cross_compare' && decoded is Map) {
+        final groups = (decoded['results'] as List?) ??
+            (decoded['groups'] as List?) ?? [];
+        header = 'Cross-document comparison (${groups.length} docs)';
+        icon = Icons.compare_arrows;
+        accent = const Color(0xFF7C3AED);
+        for (final g in groups.whereType<Map>().take(6)) {
+          final file = g['file']?.toString() ??
+              g['file_path']?.toString() ??
+              g['document']?.toString() ?? '';
+          final chunks = (g['chunks'] as List?) ?? [];
+          for (final chunk in chunks.whereType<Map>().take(2)) {
+            final excerpt = chunk['content']?.toString() ??
+                chunk['excerpt']?.toString() ?? '';
+            final page = chunk['page']?.toString() ?? '';
+            detailChildren.add(
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFFBF2),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFFE7D8C4)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      file + (page.isNotEmpty ? ' — Page $page' : ''),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF2D241C),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      excerpt,
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF52606D),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+        }
+      } else {
+                                          Future.delayed(const Duration(seconds: 3), () {
+                                            if (mounted) setState(() => _backupResultMessage = '');
+                                          });
+                                        }
                                       }
                                     } catch (e) {
                                       if (mounted) {
-                                        setState(
-                                          () => _syncProgressStatus = '',
-                                        );
+                                        setState(() {
+                                          _syncProgressStatus = '';
+                                          _backupResultSuccess = false;
+                                          _backupResultMessage = 'Backup error: $e';
+                                        });
                                         _showSyncResultDialog(
                                           context,
                                           title: 'Backup Error',
@@ -15517,79 +16539,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     ],
                   ),
                 ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        // Memory Settings Card
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFBF9F4),
-            border: Border.all(color: const Color(0xFFE5DDD3)),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'AI Memory',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2D241C),
-                    ),
-                  ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Clear personalized facts learned by AI',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
-                  ),
-                ],
-              ),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final docDir = await getApplicationDocumentsDirectory();
-                  final memoryFile = File('${docDir.path}/nexon_memory.json');
-                  if (await memoryFile.exists()) {
-                    await memoryFile.writeAsString('');
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('AI Memory cleared!')),
-                      );
-                    }
-                  } else {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('AI Memory is already empty.'),
-                        ),
-                      );
-                    }
-                  }
-                },
-                icon: const Icon(
-                  Icons.delete_outline,
-                  size: 16,
-                  color: Colors.red,
-                ),
-                label: const Text(
-                  'Clear',
-                  style: TextStyle(
-                    color: Colors.red,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.red),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
               ),
             ],
           ),
@@ -17553,6 +18502,7 @@ class ChatClient {
     String? startDate,
     String? endDate,
     String? searchDepth,
+    List<CustomSearchProvider> customProviders = const [],
   }) async {
     final client = HttpClient()
       ..findProxy = ((uri) => "DIRECT")
@@ -17695,6 +18645,54 @@ class ChatClient {
                   )
                   .join('\n\n');
             }
+          } else if (provider.startsWith('custom:')) {
+            final customId = provider.substring(7);
+            final cp = customProviders.firstWhere(
+              (p) => p.id == customId,
+              orElse: () => throw Exception('Unknown custom search provider: $customId'),
+            );
+            final uri = Uri.parse(cp.endpoint);
+            final request = cp.method.toUpperCase() == 'GET'
+                ? await client.getUrl(Uri.parse(
+                    '$cp.endpoint?${cp.queryParam}=${Uri.encodeComponent(query)}'
+                    '${cp.extraParams.entries.map((e) => '&${e.key}=${Uri.encodeComponent(e.value)}').join('')}'
+                  ))
+                : await client.postUrl(uri);
+            if (cp.method.toUpperCase() == 'GET') {
+              if (currentKey.isNotEmpty) {
+                request.headers.set(cp.apiKeyHeader, '$cp.apiKeyPrefix$currentKey');
+              }
+            } else {
+              request.headers.contentType = ContentType.json;
+              if (currentKey.isNotEmpty) {
+                request.headers.set(cp.apiKeyHeader, '$cp.apiKeyPrefix$currentKey');
+              }
+              final payload = <String, dynamic>{
+                cp.queryParam: query,
+                ...cp.extraParams,
+              };
+              request.write(jsonEncode(payload));
+            }
+            final response = await request.close();
+            final body = await response.transform(utf8.decoder).join();
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+              throw HttpException('HTTP ${response.statusCode}: $body');
+            }
+            final decoded = jsonDecode(body);
+            List<dynamic> rawResults;
+            if (cp.resultsPath.contains('.')) {
+              dynamic node = decoded;
+              for (final part in cp.resultsPath.split('.')) {
+                node = (node as Map)?[part];
+              }
+              rawResults = node is List ? node : [];
+            } else {
+              rawResults = (decoded is Map ? decoded[cp.resultsPath] : null) as List? ?? [];
+            }
+            return rawResults.map((r) {
+              final item = r as Map;
+              return '- [${item[cp.titleField] ?? ""}](${item[cp.urlField] ?? ""}): ${item[cp.snippetField] ?? ""}';
+            }).take(6).join('\n\n');
           } else if (provider == 'duckduckgo') {
             final uri = Uri.parse('https://lite.duckduckgo.com/lite/');
             final request = await client.postUrl(uri);
@@ -17915,6 +18913,7 @@ class ProviderDefinition {
     this.defaultMaxTokens = 4096,
     this.requiresKey = true,
     this.extraHeaders = const {},
+    this.isKaggle = false,
   });
 
   final String id;
@@ -17926,6 +18925,7 @@ class ProviderDefinition {
   final int defaultMaxTokens;
   final bool requiresKey;
   final Map<String, String> extraHeaders;
+  final bool isKaggle;
 }
 
 class ProviderSettings {
@@ -18007,12 +19007,77 @@ class ProviderSettings {
   }
 }
 
+class CustomSearchProvider {
+  final String id;
+  final String name;
+  final String endpoint;
+  final String method;
+  final String apiKeyHeader;
+  final String apiKeyPrefix;
+  final String queryParam;
+  final String resultsPath;
+  final String titleField;
+  final String urlField;
+  final String snippetField;
+  final Map<String, String> extraParams;
+
+  const CustomSearchProvider({
+    required this.id,
+    required this.name,
+    required this.endpoint,
+    this.method = 'POST',
+    this.apiKeyHeader = 'Authorization',
+    this.apiKeyPrefix = 'Bearer ',
+    this.queryParam = 'query',
+    this.resultsPath = 'results',
+    this.titleField = 'title',
+    this.urlField = 'url',
+    this.snippetField = 'content',
+    this.extraParams = const {},
+  });
+
+  factory CustomSearchProvider.fromJson(Map<String, dynamic> json) {
+    return CustomSearchProvider(
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      endpoint: json['endpoint']?.toString() ?? '',
+      method: json['method']?.toString() ?? 'POST',
+      apiKeyHeader: json['apiKeyHeader']?.toString() ?? 'Authorization',
+      apiKeyPrefix: json['apiKeyPrefix']?.toString() ?? 'Bearer ',
+      queryParam: json['queryParam']?.toString() ?? 'query',
+      resultsPath: json['resultsPath']?.toString() ?? 'results',
+      titleField: json['titleField']?.toString() ?? 'title',
+      urlField: json['urlField']?.toString() ?? 'url',
+      snippetField: json['snippetField']?.toString() ?? 'content',
+      extraParams: Map<String, String>.from(
+        (json['extraParams'] as Map?) ?? {},
+      ),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'endpoint': endpoint,
+    'method': method,
+    'apiKeyHeader': apiKeyHeader,
+    'apiKeyPrefix': apiKeyPrefix,
+    'queryParam': queryParam,
+    'resultsPath': resultsPath,
+    'titleField': titleField,
+    'urlField': urlField,
+    'snippetField': snippetField,
+    'extraParams': extraParams,
+  };
+}
+
 class SearchSettings {
   final bool enabled;
-  final String provider; // 'tavily', 'exa', 'firecrawl', 'google'
+  final String provider;
   final String apiKey;
   final List<String> fallbackApiKeys;
-  final String googleCx; // Google Search Engine ID
+  final String googleCx;
+  final List<CustomSearchProvider> customProviders;
 
   const SearchSettings({
     required this.enabled,
@@ -18020,6 +19085,7 @@ class SearchSettings {
     required this.apiKey,
     required this.fallbackApiKeys,
     required this.googleCx,
+    this.customProviders = const [],
   });
 
   factory SearchSettings.defaults() {
@@ -18043,6 +19109,12 @@ class SearchSettings {
               .toList() ??
           const [],
       googleCx: json['googleCx']?.toString() ?? '',
+      customProviders: (json['customProviders'] as List<dynamic>?)
+              ?.map((e) => CustomSearchProvider.fromJson(
+                    Map<String, dynamic>.from(e as Map),
+                  ))
+              .toList() ??
+          const [],
     );
   }
 
@@ -18052,6 +19124,7 @@ class SearchSettings {
     'apiKey': apiKey,
     'fallbackApiKeys': fallbackApiKeys,
     'googleCx': googleCx,
+    'customProviders': customProviders.map((p) => p.toJson()).toList(),
   };
 
   SearchSettings copyWith({
@@ -18060,6 +19133,7 @@ class SearchSettings {
     String? apiKey,
     List<String>? fallbackApiKeys,
     String? googleCx,
+    List<CustomSearchProvider>? customProviders,
   }) {
     return SearchSettings(
       enabled: enabled ?? this.enabled,
@@ -18067,6 +19141,7 @@ class SearchSettings {
       apiKey: apiKey ?? this.apiKey,
       fallbackApiKeys: fallbackApiKeys ?? this.fallbackApiKeys,
       googleCx: googleCx ?? this.googleCx,
+      customProviders: customProviders ?? this.customProviders,
     );
   }
 }
@@ -18114,12 +19189,16 @@ class ChatMessage {
     this.images = const [],
     this.videos = const [],
     this.files = const [],
+    this.tokensPerSec = '',
+    this.tokenUsage = '',
   });
 
   final MessageRole role;
   final String text;
   final bool isError;
   final String reasoning;
+  final String tokensPerSec;
+  final String tokenUsage;
 
   /// Base64-encoded image data attached to this message.
   final List<String> images;
@@ -18136,6 +19215,8 @@ class ChatMessage {
     List<String>? images,
     List<String>? videos,
     List<AttachedFile>? files,
+    String? tokensPerSec,
+    String? tokenUsage,
   }) {
     return ChatMessage(
       role: role ?? this.role,
@@ -18145,6 +19226,8 @@ class ChatMessage {
       images: images ?? this.images,
       videos: videos ?? this.videos,
       files: files ?? this.files,
+      tokensPerSec: tokensPerSec ?? this.tokensPerSec,
+      tokenUsage: tokenUsage ?? this.tokenUsage,
     );
   }
 }
@@ -18702,6 +19785,16 @@ const providerCatalog = <ProviderDefinition>[
     baseUrl: 'https://example.com/v1',
     models: ['custom-model'],
   ),
+  ProviderDefinition(
+    id: 'kaggle',
+    name: 'Kaggle (Free GPU) [If you don\'t have API key]',
+    shortName: 'KG',
+    keyLabel: 'KAGGLE_API_KEY',
+    baseUrl: 'https://your-kaggle-tunnel.trycloudflare.com/v1',
+    models: ['Qwen3.8-27B'],
+    requiresKey: true,
+    isKaggle: true,
+  ),
 ];
 
 class ResearchPlanWidget extends StatefulWidget {
@@ -19093,7 +20186,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
           ...steps.asMap().entries.map((entry) {
             final idx = entry.key;
             final step = entry.value as Map<String, dynamic>;
-            final stepStatus = step['status'] as String;
+            final stepStatus = step['status'] as String? ?? 'pending';
             final isExpanded = _expandedSteps.contains(idx);
 
             IconData statusIcon = Icons.radio_button_unchecked;
@@ -19107,6 +20200,9 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
             } else if (stepStatus == 'completed_with_issues') {
               statusIcon = Icons.warning_amber;
               statusColor = Colors.orange;
+            } else if (stepStatus == 'failed') {
+              statusIcon = Icons.error_outline;
+              statusColor = Colors.red;
             }
 
             return Column(
@@ -19812,10 +20908,10 @@ class HtmlArtifactWidget extends StatelessWidget {
             ),
           ),
           Container(
-            height: 150,
+            height: 200,
             padding: const EdgeInsets.all(12),
             child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
+              physics: const ClampingScrollPhysics(),
               child: Text(
                 htmlContent,
                 style: const TextStyle(
@@ -19823,7 +20919,7 @@ class HtmlArtifactWidget extends StatelessWidget {
                   color: Color(0xFFD4D4D4),
                   fontSize: 12,
                 ),
-                maxLines: 8,
+                maxLines: 50,
                 overflow: TextOverflow.fade,
               ),
             ),
@@ -19872,6 +20968,12 @@ class _FullScreenHtmlViewerState extends State<FullScreenHtmlViewer> {
       ..setBackgroundColor(Colors.white)
       ..setNavigationDelegate(
         NavigationDelegate(
+          navigationRequest: (request) {
+            if (request.url.startsWith('http')) {
+              return NavigationDecision.prevent;
+            }
+            return NavigationDecision.navigate;
+          },
           onPageFinished: (String url) {
             if (mounted) setState(() => _isLoading = false);
           },
@@ -20076,6 +21178,38 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
         caseSensitive: false,
       ),
       (m) => m.group(1)!,
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'<use\s+[^>]*href=["\']https?://[^"\']*["\'][^>]*/>', caseSensitive: false),
+      (_) => '',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'<image\s+[^>]*href=["\']https?://[^"\']*["\'][^>]*/?>', caseSensitive: false),
+      (_) => '',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'xlink:href=["\']https?://[^"\']*["\']', caseSensitive: false),
+      (_) => 'xlink:href=""',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false),
+      (_) => '',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'<foreignObject[^>]*>[\s\S]*?</foreignObject>', caseSensitive: false),
+      (_) => '',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
+      (_) => '',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'\son\w+\s*=\s*["\'][^"\']*["\']', caseSensitive: false),
+      (_) => '',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'javascript:', caseSensitive: false),
+      (_) => '',
     );
     return s;
   }
@@ -20459,7 +21593,7 @@ class DocxArtifactWidget extends StatelessWidget {
             height: 150,
             padding: const EdgeInsets.all(12),
             child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
+              physics: const ClampingScrollPhysics(),
               child: Text(
                 docxContent,
                 style: const TextStyle(
@@ -20467,7 +21601,7 @@ class DocxArtifactWidget extends StatelessWidget {
                   color: Color(0xFFD4D4D4),
                   fontSize: 12,
                 ),
-                maxLines: 8,
+                maxLines: 50,
               ),
             ),
           ),
@@ -20783,7 +21917,7 @@ class MdArtifactWidget extends StatelessWidget {
             height: 150,
             padding: const EdgeInsets.all(12),
             child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
+              physics: const ClampingScrollPhysics(),
               child: Text(
                 mdContent,
                 style: const TextStyle(
@@ -20791,7 +21925,7 @@ class MdArtifactWidget extends StatelessWidget {
                   color: Color(0xFFD4D4D4),
                   fontSize: 12,
                 ),
-                maxLines: 8,
+                maxLines: 50,
               ),
             ),
           ),
@@ -21073,8 +22207,33 @@ Map<String, dynamic>? _findFenceWithKeys(String text, List<String> keys) {
     if (open == -1) return null;
     final nl = text.indexOf('\n', open);
     if (nl == -1) return null;
-    final close = text.indexOf('```', nl + 1);
-    if (close == -1) return null;
+    int depth = 0;
+    bool inStr = false;
+    bool esc = false;
+    int close = -1;
+    for (int i = nl + 1; i < text.length; i++) {
+      final c = text[i];
+      if (inStr) {
+        if (esc) { esc = false; }
+        else if (c == '\\') { esc = true; }
+        else if (c == '"') { inStr = false; }
+      } else {
+        if (c == '"') { inStr = true; }
+        else if (c == '{' || c == '[') { depth++; }
+        else if (c == '}' || c == ']') {
+          depth--;
+          if (depth == 0) {
+            final fenceEnd = text.indexOf('```', i + 1);
+            if (fenceEnd != -1) { close = fenceEnd; }
+            break;
+          }
+        }
+      }
+    }
+    if (close == -1) {
+      close = text.indexOf('```', nl + 1);
+      if (close == -1) return null;
+    }
     final inner = text.substring(nl + 1, close).trim();
     try {
       final dynamic d = jsonDecode(inner);
@@ -21089,6 +22248,37 @@ Map<String, dynamic>? _findFenceWithKeys(String text, List<String> keys) {
 /// Returns the tool name when the text contains a fenced ```json tool
 /// block ({"t": ...}), else null. Drives the streaming avatar state.
 /// Top-level (not a class method): called from ChatSurface and MessageBubble.
+String _formatTokenUsage(int tokens, int maxTokens) {
+  if (tokens <= 0) return '';
+  String countStr;
+  if (tokens >= 1000000) {
+    countStr = '${(tokens / 1000000).toStringAsFixed(1)}M';
+  } else if (tokens >= 1000) {
+    countStr = '${(tokens / 1000).toStringAsFixed(1)}K';
+  } else {
+    countStr = '$tokens';
+  }
+  if (maxTokens > 0) {
+    final pct = ((tokens / maxTokens) * 100).round();
+    return '$countStr ($pct%)';
+  }
+  return countStr;
+}
+
+bool _isKnownToolNameGlobal(String t) {
+  const extra = {
+    'web_search', 'search_web', 'read_url',
+    'quiz', 'quiz_request', 'step_complete',
+    'run_background',
+    'todo_create', 'todo_done',
+  };
+  if (NativeToolsService.cppTools.contains(t) || extra.contains(t)) return true;
+  if (t.startsWith('workspace_') || t.startsWith('service_') || t.startsWith('dart_')) return true;
+  if (t.startsWith('deep_research.') || t.startsWith('mcp_') || t.startsWith('github_') ||
+      t.startsWith('checkpoint_') || t.startsWith('workflow_') || t.startsWith('media_')) return true;
+  return false;
+}
+
 String? _detectNativeToolCall(String text) {
   if (!text.contains('```')) return null;
   final m = RegExp(r'"t"\s*:\s*"([a-z_][a-zA-Z0-9_]*)"').firstMatch(text);
@@ -21102,19 +22292,29 @@ String? _detectNativeToolCall(String text) {
 _NativeToolFence? _findNativeToolFence(String text) {
   int searchFrom = 0;
   while (true) {
-    final openIdx = text.indexOf('```json', searchFrom);
+    final openIdx = text.indexOf('```', searchFrom);
     if (openIdx == -1) return null;
     final contentStart = text.indexOf('\n', openIdx);
     if (contentStart == -1) return null;
     final closeIdx = text.indexOf('```', contentStart + 1);
-    if (closeIdx == -1) return null; // unclosed while streaming — leave as text
+    if (closeIdx == -1) return null;
     final inner = text.substring(contentStart + 1, closeIdx).trim();
     Map<String, dynamic>? parsed;
     try {
       final dynamic decoded = jsonDecode(inner);
-      if (decoded is Map<String, dynamic> &&
-          (decoded['t'] != null || decoded['calls'] is List)) {
-        parsed = decoded;
+      if (decoded is Map<String, dynamic>) {
+        final t = decoded['t']?.toString() ?? '';
+        final calls = decoded['calls'];
+        if (calls is List) {
+          bool allKnown = calls.every((c) =>
+              c is Map<String, dynamic> &&
+              _isKnownToolNameGlobal(c['t']?.toString() ?? ''));
+          if (allKnown && calls.isNotEmpty) parsed = decoded;
+        } else if (t.isNotEmpty && _isKnownToolNameGlobal(t)) {
+          parsed = decoded;
+        } else if (decoded['method'] != null) {
+          parsed = decoded;
+        }
       }
     } catch (_) {
       parsed = null;
@@ -21122,7 +22322,7 @@ _NativeToolFence? _findNativeToolFence(String text) {
     if (parsed != null) {
       return _NativeToolFence(openIdx, closeIdx + 3, parsed);
     }
-    searchFrom = closeIdx + 3; // plain JSON example — keep scanning
+    searchFrom = closeIdx + 3;
   }
 }
 
@@ -21133,41 +22333,90 @@ class _NativeToolFence {
   _NativeToolFence(this.start, this.end, this.json);
 }
 
-Future<String> _handleMemoryTool(String action, String content) async {
-  try {
-    final docDir = await getApplicationDocumentsDirectory();
-    final memoryFile = File('${docDir.path}/nexon_memory.json');
+class _TodoItem {
+  final int n;
+  final String title;
+  bool done;
+  _TodoItem({required this.n, required this.title, this.done = false});
+}
 
-    String currentMemory = '';
-    if (await memoryFile.exists()) {
-      currentMemory = await memoryFile.readAsString();
-    }
+class _TodoListPanel extends StatelessWidget {
+  final List<_TodoItem> todos;
+  final VoidCallback? onClose;
+  const _TodoListPanel({required this.todos, this.onClose});
 
-    if (action == 'read') {
-      return currentMemory.isEmpty ? 'Memory is empty.' : currentMemory;
-    } else if (action == 'append') {
-      final newMemory = currentMemory.isEmpty
-          ? content.trim()
-          : '$currentMemory\n${content.trim()}';
-      if (utf8.encode(newMemory).length > 10240) {
-        return 'Error: Appending this would exceed the 10KB memory limit. Use replace action instead.';
-      }
-      await memoryFile.writeAsString(newMemory);
-      return 'Appended successfully. Current memory size: ${utf8.encode(newMemory).length} bytes.';
-    } else if (action == 'replace') {
-      if (utf8.encode(content).length > 10240) {
-        return 'Error: New memory exceeds the 10KB memory limit.';
-      }
-      await memoryFile.writeAsString(content.trim());
-      return 'Replaced successfully. Current memory size: ${utf8.encode(content).length} bytes.';
-    } else if (action == 'clear') {
-      await memoryFile.writeAsString('');
-      return 'Memory cleared.';
-    } else {
-      return 'Error: Unknown action "$action". Valid actions are read, append, replace, clear.';
-    }
-  } catch (e) {
-    return 'Error interacting with memory: $e';
+  @override
+  Widget build(BuildContext context) {
+    final done = todos.where((t) => t.done).length;
+    final total = todos.length;
+    final progress = total > 0 ? done / total : 0.0;
+    return Material(
+      elevation: 8,
+      borderRadius: const BorderRadius.horizontal(left: Radius.circular(20)),
+      color: const Color(0xFFFBF9F4),
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+              decoration: const BoxDecoration(
+                border: Border(bottom: BorderSide(color: Color(0xFFE5DDD3), width: 1)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.checklist, size: 18, color: Color(0xFF7C3AED)),
+                  const SizedBox(width: 8),
+                  Text('Tasks $done/$total', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C))),
+                  const Spacer(),
+                  if (onClose != null)
+                    IconButton(icon: const Icon(Icons.close, size: 18), onPressed: onClose, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 32, minHeight: 32)),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(value: progress, backgroundColor: const Color(0xFFE5DDD3), valueColor: const AlwaysStoppedAnimation(Color(0xFF059669)), minHeight: 4),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                itemCount: todos.length,
+                itemBuilder: (context, i) {
+                  final t = todos[i];
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: t.done ? const Color(0xFFF0FDF4) : const Color(0xFFFFFFFF),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: t.done ? const Color(0xFFBBF7D0) : const Color(0xFFE5DDD3)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 22, height: 22, alignment: Alignment.center,
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: t.done ? const Color(0xFF059669) : const Color(0xFFE5DDD3)),
+                          child: t.done
+                              ? const Icon(Icons.check, size: 14, color: Colors.white)
+                              : Text('${t.n}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF6C5946))),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text(t.title, style: TextStyle(fontSize: 13, color: t.done ? const Color(0xFF86EFAC) : const Color(0xFF2D241C), decoration: t.done ? TextDecoration.lineThrough : TextDecoration.none))),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -21462,5 +22711,250 @@ class _PipelinePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _PipelinePainter oldDelegate) {
     return oldDelegate.activePhase != activePhase || oldDelegate.scan != scan;
+  }
+}
+
+class KaggleSetupScreen extends StatefulWidget {
+  const KaggleSetupScreen({super.key});
+
+  @override
+  State<KaggleSetupScreen> createState() => _KaggleSetupScreenState();
+}
+
+class _KaggleSetupScreenState extends State<KaggleSetupScreen> {
+  int _currentStep = 0;
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final step = KaggleScripts.steps[_currentStep];
+    final isLast = _currentStep == KaggleScripts.steps.length - 1;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFFBF6EC),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFFBF6EC),
+        elevation: 0,
+        title: const Text(
+          'Kaggle Free GPU Setup',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Color(0xFF7B4E2E)),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: Column(
+        children: [
+          LinearProgressIndicator(
+            value: (_currentStep + 1) / KaggleScripts.steps.length,
+            backgroundColor: const Color(0xFFE5DDD3),
+            color: const Color(0xFF7C3AED),
+            minHeight: 4,
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_currentStep == 0) ...[
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF9F2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE7D8C4)),
+                      ),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Before you start:',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            '1. Create a free account at kaggle.com\n'
+                            '2. Create a new notebook: Create → New Notebook\n'
+                            '3. In the right settings panel, set Accelerator → GPU T4 x2\n'
+                            '4. Each step below goes in its own code cell',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF6C5946), height: 1.6),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                  Row(
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        alignment: Alignment.center,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF7C3AED),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          '${step.number}',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          step.title,
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF2D241C)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    step.description,
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF6C5946)),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Copy this script and paste it into a new code cell in your Kaggle notebook:',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF7B4E2E)),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 48, 12),
+                          child: SelectableText(
+                            step.script,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              height: 1.4,
+                              color: Color(0xFFD4D4D4),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: IconButton(
+                            icon: Icon(
+                              _copied ? Icons.check : Icons.copy,
+                              size: 18,
+                              color: _copied ? Colors.green : Colors.white70,
+                            ),
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: step.script));
+                              setState(() => _copied = true);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Script copied! Paste it into a Kaggle code cell.'),
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                              Future.delayed(const Duration(seconds: 2), () {
+                                if (mounted) setState(() => _copied = false);
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (isLast) ...[
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0FDF4),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFBBF7D0)),
+                      ),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'After running this cell:',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF166534)),
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            'When the script finishes, you\'ll see:\n\n'
+                            '  Base URL : https://xxxx-xxxx.trycloudflare.com/v1\n'
+                            '  API key  : a1b2c3...\n\n'
+                            'Copy both of those into this app\'s provider settings.\n\n'
+                            'To keep it running without your phone:\n'
+                            '• Click Save Version → Save & Run All (Commit)\n'
+                            '• This runs on Kaggle\'s servers even if you close your browser\n'
+                            '• Check the Output tab later for your URL and key',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF15803D), height: 1.6),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                if (_currentStep > 0)
+                  TextButton.icon(
+                    onPressed: () => setState(() => _currentStep--),
+                    icon: const Icon(Icons.arrow_back, size: 18),
+                    label: const Text('Previous'),
+                    style: TextButton.styleFrom(foregroundColor: const Color(0xFF7B4E2E)),
+                  )
+                else
+                  const SizedBox(width: 80),
+                Text(
+                  'Step ${_currentStep + 1} of ${KaggleScripts.steps.length}',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF9B8B7A)),
+                ),
+                if (!isLast)
+                  FilledButton.icon(
+                    onPressed: () => setState(() => _currentStep++),
+                    icon: const Icon(Icons.arrow_forward, size: 18),
+                    label: const Text('Next'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF7C3AED),
+                      foregroundColor: Colors.white,
+                    ),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Done! Enter your Base URL and API key in provider settings.'),
+                          duration: Duration(seconds: 3),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.check, size: 18),
+                    label: const Text('Done'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF059669),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

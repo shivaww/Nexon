@@ -4,7 +4,6 @@
 /// in the data layer.
 library;
 
-export 'package:nexon/data/models/project_memory_model.dart';
 export 'package:nexon/data/models/task_model.dart';
 export 'package:nexon/data/models/todo_model.dart';
 export 'package:nexon/data/models/agent_model.dart';

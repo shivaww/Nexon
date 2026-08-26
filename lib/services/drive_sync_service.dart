@@ -50,10 +50,12 @@ typedef SyncProgressCallback = void Function(String status);
 
 class DriveSyncService {
   static final _secureStorage = const FlutterSecureStorage();
-  static const _backupFileName = 'nexon_backup.json';
+  static const _backupFileName = 'nexon_backup.enc';
   static const _tokenKey = 'google_provider_token';
   static const _refreshTokenKey = 'google_provider_refresh_token';
   static const _tokenExpiryKey = 'google_provider_token_expiry';
+  static const _encryptionKeyStorage = 'nexon_backup_enc_key';
+  static const _maxBackupVersions = 5;
   // Public OAuth client identifier for Google Drive token refresh.
   // Matches the Google OAuth Web Client ID configured in Supabase Auth.
   static const _googleOAuthClientId =
@@ -152,7 +154,25 @@ class DriveSyncService {
         final toSync = _pendingSessions;
         _pendingSessions = null;
         if (toSync == null) return;
-        if (_isSyncing) return; // another sync already running
+        if (_isSyncing) {
+          _pendingSessions = toSync;
+          _pendingDebounce = Future.delayed(
+            const Duration(seconds: 10),
+            () async {
+              _pendingDebounce = null;
+              final retry = _pendingSessions;
+              _pendingSessions = null;
+              if (retry == null) return;
+              _isSyncing = true;
+              try {
+                await syncToDriveDetailed(retry, force: false);
+              } finally {
+                _isSyncing = false;
+              }
+            },
+          );
+          return;
+        }
         _isSyncing = true;
         try {
           await syncToDriveDetailed(toSync, force: false);
@@ -230,7 +250,8 @@ class DriveSyncService {
       onProgress?.call('Encoding backup ($sessionCount chats, $artifactCount artifacts)…');
       log.add('⏳ Encoding JSON…');
       final jsonBackup = jsonEncode(backupData);
-      final bytes = utf8.encode(jsonBackup);
+      final rawBytes = utf8.encode(jsonBackup);
+      final bytes = await _encryptBackup(rawBytes);
       final sizeKB = (bytes.length / 1024).toStringAsFixed(1);
       log.add('✅ Encoded — ${sizeKB} KB');
 
@@ -262,47 +283,21 @@ class DriveSyncService {
         );
       }
       log.add(existing?.id != null
-          ? '✅ Found existing backup — updating'
+          ? '✅ Found existing backup — creating new version'
           : '✅ No existing backup — creating new file');
 
-      // Check if backup is already identical (up to date)
-      if (existing?.id != null && existing?.md5Checksum != null) {
-        final localMd5 = md5.convert(bytes).toString().toLowerCase();
-        final remoteMd5 = existing!.md5Checksum!.toLowerCase();
-        if (localMd5 == remoteMd5) {
-          log.add('ℹ️ Backup on Drive is already up to date (MD5: $localMd5). Skipping upload.');
-          onProgress?.call('Backup is already up to date ✅');
-          return DriveSyncResult(
-            success: true,
-            message: 'Backup is already up to date (no changes detected).',
-            details: log,
-          );
-        }
-      }
+      final timestamp = DateTime.now().toUtc().millisecondsSinceEpoch;
+      final versionedName = 'nexon_backup_$timestamp.enc';
 
-      // ── Step 5: upload ──
-      onProgress?.call('Uploading ${sizeKB} KB to Google Drive…');
-      log.add('⏳ Uploading…');
       try {
         await _withDriveAuthRetry((driveApi) async {
-          // Build a fresh stream for the one permitted auth retry.
           final upload = drive.Media(Stream.value(bytes), bytes.length);
-          if (existing?.id != null) {
-            await driveApi.files.update(
-              drive.File()
-                ..name = _backupFileName
-                ..modifiedTime = DateTime.now().toUtc(),
-              existing!.id!,
-              uploadMedia: upload,
-            );
-          } else {
-            await driveApi.files.create(
-              drive.File()
-                ..name = _backupFileName
-                ..parents = [folderId!],
-              uploadMedia: upload,
-            );
-          }
+          await driveApi.files.create(
+            drive.File()
+              ..name = versionedName
+              ..parents = [folderId!],
+            uploadMedia: upload,
+          );
         }, log);
       } catch (e) {
         _appendDriveFailure(log, 'Upload', e);
@@ -313,13 +308,33 @@ class DriveSyncService {
           details: log,
         );
       }
+
+      try {
+        await _withDriveAuthRetry((driveApi) async {
+          final oldFiles = await driveApi.files.list(
+            spaces: 'appDataFolder',
+            q: "'$folderId' in parents and trashed = false and name != '$versionedName'",
+            $fields: 'files(id,name)',
+            orderBy: 'modifiedTime desc',
+            pageSize: _maxBackupVersions + 10,
+          );
+          final allFiles = oldFiles.files ?? [];
+          if (allFiles.length >= _maxBackupVersions) {
+            for (int i = _maxBackupVersions - 1; i < allFiles.length; i++) {
+              try {
+                await driveApi.files.delete(allFiles[i].id!);
+              } catch (_) {}
+            }
+          }
+        }, log);
+      } catch (_) {}
       log.add('✅ Upload complete');
 
       // ── Done ──
-      onProgress?.call('Backup complete ✅');
+      onProgress?.call('Backup complete ✅ (encrypted)');
       final msg =
           'Backed up $sessionCount chat(s), $artifactCount artifact(s), '
-          '$keyCount provider key(s), settings & memory (${sizeKB} KB).';
+          '$keyCount provider key(s) & settings (${sizeKB} KB, encrypted).';
       log.add('✅ $msg');
       return DriveSyncResult(success: true, message: msg, details: log);
     } catch (e) {
@@ -365,13 +380,21 @@ class DriveSyncService {
       try {
         existing = await _withDriveAuthRetry((driveApi) async {
           final folderList = await driveApi.files.list(
-            spaces: 'drive',
-            q: "mimeType = 'application/vnd.google-apps.folder' and name = 'Nexon Backups' and trashed = false",
+            spaces: 'appDataFolder',
+            q: "mimeType = 'application/vnd.google-apps.folder' and name = 'nexon_data' and trashed = false",
             $fields: 'files(id)',
             pageSize: 1,
           );
           if (folderList.files?.isEmpty != false) return null;
-          return _findBackupFile(driveApi, folderList.files!.first.id!);
+          final folderId = folderList.files!.first.id!;
+          final allFiles = await driveApi.files.list(
+            spaces: 'appDataFolder',
+            q: "'$folderId' in parents and trashed = false",
+            $fields: 'files(id,name,modifiedTime,size)',
+            orderBy: 'modifiedTime desc',
+            pageSize: 10,
+          );
+          return allFiles.files?.isNotEmpty == true ? allFiles.files!.first : null;
         }, log);
       } catch (e) {
         _appendDriveFailure(log, 'Drive search', e);
@@ -412,9 +435,19 @@ class DriveSyncService {
         final sizeKB = (bytes.length / 1024).toStringAsFixed(1);
         log.add('✅ Downloaded ${sizeKB} KB');
 
-        onProgress?.call('Parsing backup data…');
-        log.add('⏳ Parsing JSON…');
-        backupData = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+        onProgress?.call('Decrypting backup data…');
+        log.add('⏳ Decrypting…');
+        final decryptedBytes = await _decryptBackup(bytes);
+        if (decryptedBytes == null) {
+          log.add('❌ Decryption failed — backup may be from a different device or corrupted.');
+          return DriveSyncResult(
+            success: false,
+            message: 'Backup decryption failed. The encryption key on this device does not match.',
+            details: log,
+          );
+        }
+        log.add('✅ Decrypted');
+        backupData = jsonDecode(utf8.decode(decryptedBytes)) as Map<String, dynamic>;
         log.add('✅ Parsed — version ${backupData['version'] ?? 'unknown'}');
       } catch (e) {
         _appendDriveFailure(log, 'Download/parse', e);
@@ -500,6 +533,24 @@ class DriveSyncService {
           'custom_mcp_url',
           'custom_mcp_url_v1',
         );
+        await _restorePrefsString(
+          prefs,
+          backupData,
+          'custom_providers',
+          'custom_providers_v1',
+        );
+        await _restorePrefsString(
+          prefs,
+          backupData,
+          'user_name',
+          'user_name_v1',
+        );
+        await _restorePrefsBool(
+          prefs,
+          backupData,
+          'study_mode_enabled',
+          'study_mode_enabled_v1',
+        );
         log.add('✅ Settings restored');
       } catch (e) {
         log.add('⚠️ Settings restore error (non-fatal): $e');
@@ -516,25 +567,7 @@ class DriveSyncService {
         log.add('⚠️ API key restore error (non-fatal): $e');
       }
 
-      // ── Step 7: restore memory ──
-      onProgress?.call('Restoring AI memory…');
-      log.add('⏳ Restoring AI memory…');
-      try {
-        final docDir = await getApplicationDocumentsDirectory();
-        final aiMemory = backupData['ai_memory'];
-        if (aiMemory != null && aiMemory.toString().isNotEmpty) {
-          await File(
-            '${docDir.path}/nexon_memory.json',
-          ).writeAsString(aiMemory.toString());
-          log.add('✅ Memory restored');
-        } else {
-          log.add('ℹ️ No memory data in backup');
-        }
-      } catch (e) {
-        log.add('⚠️ Memory restore error (non-fatal): $e');
-      }
-
-      // ── Step 8: restore artifacts ──
+      // ── Step 7: restore artifacts ──
       onProgress?.call('Restoring artifacts…');
       log.add('⏳ Restoring artifacts…');
       try {
@@ -554,7 +587,7 @@ class DriveSyncService {
       return DriveSyncResult(
         success: true,
         message:
-            'Restore complete. Chats, provider keys, settings, memory, and artifacts were restored.',
+            'Restore complete. Chats, API keys, settings, and artifacts restored (existing data preserved).',
         details: log,
       );
     } catch (e) {
@@ -853,18 +886,17 @@ class DriveSyncService {
   /// Gets or creates a visible "Nexon Backups" folder in the user's Drive.
   static Future<String> _getOrCreateBackupFolder(drive.DriveApi driveApi) async {
     final folderList = await driveApi.files.list(
-      spaces: 'drive',
-      q: "mimeType = 'application/vnd.google-apps.folder' and name = 'Nexon Backups' and trashed = false",
+      spaces: 'appDataFolder',
+      q: "mimeType = 'application/vnd.google-apps.folder' and name = 'nexon_data' and trashed = false",
       $fields: 'files(id)',
       pageSize: 1,
     );
     if (folderList.files?.isNotEmpty == true) {
       return folderList.files!.first.id!;
     }
-    // Create the folder
     final folder = await driveApi.files.create(
       drive.File()
-        ..name = 'Nexon Backups'
+        ..name = 'nexon_data'
         ..mimeType = 'application/vnd.google-apps.folder',
     );
     return folder.id!;
@@ -898,15 +930,15 @@ class DriveSyncService {
     }).toList();
 
     final artifacts = await _collectArtifacts(docDir);
-    final memoryFile = File('${docDir.path}/nexon_memory.json');
     final providerApiKeys = await _collectProviderApiKeys(prefs);
 
     return {
-      'version': 2,
+      'version': 3,
       'created_at': DateTime.now().toUtc().toIso8601String(),
       'chat_sessions': serializedSessions,
       'active_session_id': prefs.getString('active_session_id_v1') ?? '',
       'provider_settings': prefs.getString('provider_settings_v1') ?? '{}',
+      'custom_providers': prefs.getString('custom_providers_v1') ?? '{}',
       'provider_api_keys': providerApiKeys,
       'provider_api_key_count': providerApiKeys.length,
       'selected_provider_id': prefs.getString('selected_provider_id') ?? '',
@@ -915,9 +947,8 @@ class DriveSyncService {
       'agentic_workspace': prefs.getString('agentic_workspace_v1') ?? '',
       'shell_permission': prefs.getString('shell_permission_v1') ?? 'ask',
       'custom_mcp_url': prefs.getString('custom_mcp_url_v1') ?? '',
-      'ai_memory': await memoryFile.exists()
-          ? await memoryFile.readAsString()
-          : '',
+      'user_name': prefs.getString('user_name_v1') ?? '',
+      'study_mode_enabled': prefs.getBool('study_mode_enabled_v1') ?? false,
       'artifacts': artifacts,
       'artifact_count': artifacts.length,
     };
@@ -1141,10 +1172,12 @@ class DriveSyncService {
   ) async {
     if (!data.containsKey(backupKey)) return;
     final value = data[backupKey];
-    await prefs.setString(
-      prefsKey,
-      value is String ? value : jsonEncode(value),
-    );
+    final stringValue = value is String ? value : jsonEncode(value);
+    final existing = prefs.getString(prefsKey);
+    if (existing != null && existing.trim().isNotEmpty && existing != '{}') {
+      return;
+    }
+    await prefs.setString(prefsKey, stringValue);
   }
 
   static Future<void> _restorePrefsBool(
@@ -1153,9 +1186,9 @@ class DriveSyncService {
     String backupKey,
     String prefsKey,
   ) async {
-    if (data[backupKey] is bool) {
-      await prefs.setBool(prefsKey, data[backupKey] as bool);
-    }
+    if (data[backupKey] is! bool) return;
+    if (prefs.containsKey(prefsKey)) return;
+    await prefs.setBool(prefsKey, data[backupKey] as bool);
   }
 
   static Future<void> _restoreProviderApiKeys(
@@ -1187,12 +1220,22 @@ class DriveSyncService {
       if (apiKey.trim().isEmpty) continue;
 
       try {
+        final existing = await _secureStorage.read(
+          key: _providerApiKeyStorageName(providerId),
+        );
+        if (existing != null && existing.trim().isNotEmpty) {
+          continue;
+        }
         await _secureStorage.write(
           key: _providerApiKeyStorageName(providerId),
           value: apiKey,
         );
         await prefs.remove('fallback_api_key_$providerId');
       } catch (_) {
+        final existingFallback = prefs.getString('fallback_api_key_$providerId');
+        if (existingFallback != null && existingFallback.trim().isNotEmpty) {
+          continue;
+        }
         await prefs.setString('fallback_api_key_$providerId', apiKey);
       }
     }
@@ -1318,6 +1361,59 @@ class DriveSyncService {
       return '$prefix: Google Drive API error (${e.status}): ${e.message}';
     }
     return '$prefix: ${e.toString()}';
+  }
+
+  static Future<String> _getOrCreateEncryptionKey() async {
+    try {
+      final existing = await _secureStorage.read(key: _encryptionKeyStorage);
+      if (existing != null && existing.length == 32) return existing;
+    } catch (_) {}
+    final newKey = _generateRandomKey(32);
+    try {
+      await _secureStorage.write(key: _encryptionKeyStorage, value: newKey);
+    } catch (_) {}
+    return newKey;
+  }
+
+  static String _generateRandomKey(int length) {
+    final random = DateTime.now().microsecondsSinceEpoch;
+    final chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    final buffer = StringBuffer();
+    for (int i = 0; i < length; i++) {
+      final idx = (random + i * 7919) % chars.length;
+      buffer.write(chars[idx.abs() % chars.length]);
+    }
+    return buffer.toString();
+  }
+
+  static Future<List<int>> _encryptBackup(List<int> plaintext) async {
+    final key = await _getOrCreateEncryptionKey();
+    final keyBytes = utf8.encode(key);
+    final keyHash = md5.convert(keyBytes).bytes;
+    final iv = List<int>.generate(16, (i) => (keyHash[i] + i * 31) & 0xFF);
+    final xorBytes = List<int>.generate(plaintext.length, (i) {
+      return plaintext[i] ^ keyBytes[i % keyBytes.length] ^ iv[i % iv.length];
+    });
+    final header = utf8.encode('NEXON_ENC_V1:');
+    return [...header, ...xorBytes];
+  }
+
+  static Future<List<int>?> _decryptBackup(List<int> ciphertext) async {
+    final header = utf8.encode('NEXON_ENC_V1:');
+    if (ciphertext.length < header.length) return null;
+    for (int i = 0; i < header.length; i++) {
+      if (ciphertext[i] != header[i]) return null;
+    }
+    final key = await _getOrCreateEncryptionKey();
+    if (key.isEmpty) return null;
+    final keyBytes = utf8.encode(key);
+    final keyHash = md5.convert(keyBytes).bytes;
+    final iv = List<int>.generate(16, (i) => (keyHash[i] + i * 31) & 0xFF);
+    final encrypted = ciphertext.sublist(header.length);
+    final plaintext = List<int>.generate(encrypted.length, (i) {
+      return encrypted[i] ^ keyBytes[i % keyBytes.length] ^ iv[i % iv.length];
+    });
+    return plaintext;
   }
 
   static void _appendDriveFailure(List<String> log, String context, Object e) {

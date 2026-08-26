@@ -19,8 +19,8 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 |                        Flutter App (Android)                         |
 |                                                                      |
 | +-------------+ +--------------+ +-------------+ +-----------------+ |
-| | Chat/IDE UI | |  Artifacts   | |Memory System| |Deep Research UI | |
-| |(Tool routing) |(SVG/MD Render) | (JSON File) | |(3-State UI)     | |
+| | Chat/IDE UI | |  Artifacts   | |  Cost Tracker| |Deep Research UI | |
+| |(Tool routing) |(SVG/MD Render) | (Token Usage)| |(3-State UI)     | |
 | +------+------+ +--------------+ +-------------+ +-------+---------+ |
 |        |                                                 |           |
 |        |    +-------------------------------+            |           |
@@ -67,19 +67,16 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 *   **SVG Diagram Rendering**: Intercepts generated SVG markup and renders interactive visual diagrams natively via `flutter_svg`.
 *   **Document Export**: Supports parsing and saving conversational artifacts locally as `.md` or `.docx` files.
 
-### 4. 🧠 Memory & Persistent Context
-*   **State Persistence**: Persists global context to `nexon_memory.json`, allowing user preferences, developer guidelines, and project specs to survive app restarts.
-
-### 5. ☁️ Google Drive Backup & Sync
-*   **Unified Sync**: Bundles conversation sessions, settings, AI memory, and credentials into `nexon_backup.json` on Google Drive.
+### 4. ☁️ Google Drive Backup & Sync
+*   **Unified Sync**: Bundles conversation sessions, settings, and credentials into `nexon_backup.json` on Google Drive.
 *   **Non-Destructive Merge**: Smart syncing preserves local un-synced chats while restoring remote backups smoothly.
 
-### 6. 🔬 Deep Research Engine
+### 5. 🔬 Deep Research Engine
 *   **3-Agent Autonomous Pipeline**: Guided pipeline moving through Planner, Researcher, and Synthesizer phases.
 *   **Structured Fact & Finding Storage**: Iteratively extracts precise `FACT` records (numeric metrics, dates, claims) and `FINDING` insights into state storage without heavy embedding models or vector databases.
 *   **Configurable Context Budget**: Dynamically budget and throttle evidence tokens passed into the synthesis phase for maximum response quality.
 
-### 7. 🔔 Automatic Release Notifications
+### 6. 🔔 Automatic Release Notifications
 *   **Version Checker**: Integrated `UpdateService` notifies users when a new version or APK release is available.
 
 ---

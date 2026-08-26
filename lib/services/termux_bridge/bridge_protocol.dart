@@ -128,26 +128,48 @@ class BridgeResponse {
   /// Deserializes a [BridgeResponse] from a JSON map.
   factory BridgeResponse.fromJson(Map<String, dynamic> json) {
     final result = json['result'];
-    final resultMap = result is Map ? Map<String, dynamic>.from(result) : null;
-    final durationMs = json['durationMs'] as int?;
+    final resultMap = result is Map
+        ? Map<String, dynamic>.from(result)
+        : null;
+
+    // Duration: check top-level first, then nested result.
+    final durationMs = (json['durationMs'] as num?)?.toInt();
     final durationSeconds = (resultMap?['duration'] as num?)?.toDouble();
+    final duration = durationMs != null
+        ? Duration(milliseconds: durationMs)
+        : Duration(milliseconds: ((durationSeconds ?? 0) * 1000).round());
+
+    // Exit code: check top-level first, then nested result.
+    final exitCode = (json['exitCode'] as num?)?.toInt() ??
+        (resultMap?['exitCode'] as num?)?.toInt() ??
+        (resultMap?['exit_code'] as num?)?.toInt();
+
+    // Stdout/stderr: check top-level first, then nested result.
+    final stdout = (json['stdout'] as String?) ??
+        (resultMap?['stdout'] as String?) ??
+        (resultMap?['rawStdout'] as String?) ??
+        '';
+    final stderr = (json['stderr'] as String?) ??
+        (resultMap?['stderr'] as String?) ??
+        (resultMap?['rawStderr'] as String?) ??
+        '';
+
+    // Error: must be a Map to parse.
+    final errorJson = json['error'];
+    final error = errorJson is Map<String, dynamic>
+        ? BridgeError.fromJson(errorJson)
+        : errorJson is Map
+            ? BridgeError.fromJson(Map<String, dynamic>.from(errorJson))
+            : null;
 
     return BridgeResponse(
-      id: json['id'].toString(),
+      id: json['id']?.toString() ?? '',
       result: result,
-      error: json['error'] != null
-          ? BridgeError.fromJson(json['error'] as Map<String, dynamic>)
-          : null,
-      exitCode: (json['exitCode'] as int?) ?? (resultMap?['exitCode'] as int?),
-      stdout: (json['stdout'] as String?) ??
-          (resultMap?['stdout'] as String?) ??
-          '',
-      stderr: (json['stderr'] as String?) ??
-          (resultMap?['stderr'] as String?) ??
-          '',
-      duration: durationMs != null
-          ? Duration(milliseconds: durationMs)
-          : Duration(milliseconds: ((durationSeconds ?? 0) * 1000).round()),
+      error: error,
+      exitCode: exitCode,
+      stdout: stdout,
+      stderr: stderr,
+      duration: duration,
     );
   }
 
@@ -180,19 +202,77 @@ class BridgeError {
       };
 
   factory BridgeError.fromJson(Map<String, dynamic> json) {
+    final code = (json['code'] as num?)?.toInt() ?? BridgeErrorCodes.internalError;
     return BridgeError(
-      code: json['code'] as int? ?? BridgeErrorCodes.internalError,
-      message: json['message'] as String? ?? 'Unknown error',
+      code: code,
+      message: json['message'] as String? ?? _defaultMessageForCode(code),
       data: json['data'],
     );
+  }
+
+  /// Returns a human-readable default message for a known error code.
+  static String _defaultMessageForCode(int code) {
+    switch (code) {
+      case BridgeErrorCodes.parseError:
+        return 'Parse error';
+      case BridgeErrorCodes.invalidRequest:
+        return 'Invalid request';
+      case BridgeErrorCodes.methodNotFound:
+        return 'Method not found';
+      case BridgeErrorCodes.invalidParams:
+        return 'Invalid params';
+      case BridgeErrorCodes.internalError:
+        return 'Internal error';
+      case BridgeErrorCodes.notConnected:
+        return 'Bridge is not connected';
+      case BridgeErrorCodes.commandBlocked:
+        return 'Command blocked by security policy';
+      case BridgeErrorCodes.commandTimeout:
+        return 'Command timed out';
+      case BridgeErrorCodes.commandFailed:
+        return 'Command execution failed';
+      case BridgeErrorCodes.fileNotFound:
+        return 'File not found';
+      case BridgeErrorCodes.permissionDenied:
+        return 'Permission denied';
+      case BridgeErrorCodes.toolNotFound:
+        return 'Tool not found';
+      case BridgeErrorCodes.mcpError:
+        return 'MCP server error';
+      case BridgeErrorCodes.workflowError:
+        return 'Workflow execution error';
+      case BridgeErrorCodes.checkpointError:
+        return 'Checkpoint operation error';
+      case BridgeErrorCodes.githubError:
+        return 'GitHub operation error';
+      case BridgeErrorCodes.mediaError:
+        return 'Media operation error';
+      case BridgeErrorCodes.validationError:
+        return 'Validation error';
+      case BridgeErrorCodes.approvalRequired:
+        return 'Approval required for this operation';
+      default:
+        return 'Unknown error';
+    }
   }
 
   @override
   String toString() => 'BridgeError($code: $message)';
 }
 
-/// Standard JSON-RPC error codes used by the bridge protocol.
+/// Standard and custom JSON-RPC error codes used by the bridge protocol.
+///
+/// Custom codes (-32000 to -32099) are kept in sync with the Python bridge's
+/// `ErrorCode` enum in `protocol.py`. Changing a value here requires changing
+/// the corresponding value in the Python bridge and vice versa.
 abstract class BridgeErrorCodes {
+  // ── Standard JSON-RPC 2.0 error codes ──────────────────────────────
+  /// Parse error.
+  static const int parseError = -32700;
+
+  /// Invalid request.
+  static const int invalidRequest = -32600;
+
   /// The method was not found.
   static const int methodNotFound = -32601;
 
@@ -202,15 +282,53 @@ abstract class BridgeErrorCodes {
   /// Internal server error.
   static const int internalError = -32603;
 
-  /// Request timed out.
-  static const int timeout = -32000;
+  // ── Custom TermuxForge error codes (-32000 to -32099) ──────────────
+  /// Bridge is not connected (Flutter-local; Python bridge never sends this).
+  static const int notConnected = -32000;
+
+  /// Command blocked by security policy.
+  static const int commandBlocked = -32001;
+
+  /// Command timed out.
+  static const int commandTimeout = -32002;
 
   /// Command execution failed.
-  static const int executionFailed = -32001;
+  static const int commandFailed = -32003;
+
+  /// File not found.
+  static const int fileNotFound = -32004;
 
   /// Permission denied.
-  static const int permissionDenied = -32002;
+  static const int permissionDenied = -32005;
 
-  /// Bridge is not connected.
-  static const int notConnected = -32003;
+  /// Tool not found.
+  static const int toolNotFound = -32006;
+
+  /// MCP server error.
+  static const int mcpError = -32007;
+
+  /// Workflow execution error.
+  static const int workflowError = -32008;
+
+  /// Checkpoint operation error.
+  static const int checkpointError = -32009;
+
+  /// GitHub operation error.
+  static const int githubError = -32010;
+
+  /// Media operation error.
+  static const int mediaError = -32011;
+
+  /// Validation error.
+  static const int validationError = -32012;
+
+  /// Approval required for this operation.
+  static const int approvalRequired = -32013;
+
+  // ── Backward-compatible aliases (deprecated; use the canonical names
+  //    above in new code) ──────────────────────────────────────────────
+  @Deprecated('Use commandTimeout instead')
+  static const int timeout = commandTimeout;
+  @Deprecated('Use commandFailed instead')
+  static const int executionFailed = commandFailed;
 }

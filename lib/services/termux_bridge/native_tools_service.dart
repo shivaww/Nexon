@@ -60,6 +60,19 @@ class NativeToolsService {
   StreamSubscription<String>? _stderrSub;
   final List<_PendingCall> _queue = [];
   final List<String> _stderrTail = [];
+  Future<void>? _ensureRunningLock;
+
+  /// Consecutive restart counter. Reset to 0 on any successful tool call.
+  int _restartCount = 0;
+
+  /// Maximum consecutive restarts before refusing to restart.
+  static const int _maxRestarts = 5;
+
+  /// Timestamp of the last restart attempt (for cool-down enforcement).
+  DateTime? _lastRestartTime;
+
+  /// Cool-down duration after hitting the restart cap.
+  static const Duration _restartCooldown = Duration(seconds: 30);
 
   bool get isRunning => _process != null;
   String get workspace => _workspace;
@@ -96,7 +109,52 @@ class NativeToolsService {
     String? binaryPath,
   }) async {
     if (_process != null && _workspace == workspace) return;
+    if (_ensureRunningLock != null) {
+      await _ensureRunningLock;
+      if (_process != null && _workspace == workspace) return;
+    }
+    final completer = Completer<void>();
+    _ensureRunningLock = completer.future;
+    try {
+      await _ensureRunningInner(workspace, binaryPath);
+      completer.complete();
+    } catch (e) {
+      completer.completeError(e);
+      rethrow;
+    } finally {
+      _ensureRunningLock = null;
+    }
+  }
+
+  Future<void> _ensureRunningInner({
+    required String workspace,
+    String? binaryPath,
+  }) async {
+    if (_process != null && _workspace == workspace) return;
+
+    // Restart loop safety: refuse to restart if we've hit the cap and the
+    // cool-down window hasn't elapsed. This prevents an infinite restart
+    // loop when the binary is broken or the workspace is inaccessible.
+    if (_restartCount >= _maxRestarts) {
+      final elapsed = _lastRestartTime != null
+          ? DateTime.now().difference(_lastRestartTime!)
+          : Duration.zero;
+      if (elapsed < _restartCooldown) {
+        final remaining = _restartCooldown - elapsed;
+        throw NativeToolsException(
+          'tools binary restarted $_restartCount consecutive times (cap: '
+          '$_maxRestarts). Cool-down: ${remaining.inSeconds}s remaining. '
+          'Check the binary at $_binaryPath and workspace "$workspace".');
+      }
+      // Cool-down elapsed — reset and try again.
+      _restartCount = 0;
+    }
+
     await _teardown();
+    if (_process == null) {
+      _restartCount++;
+      _lastRestartTime = DateTime.now();
+    }
     final bin = binaryPath ?? await findBinary();
     if (bin == null) {
       throw NativeToolsException(
@@ -222,10 +280,25 @@ class NativeToolsService {
       final dynamic decoded = jsonDecode(trimmed);
       if (decoded is Map<String, dynamic>) parsed = decoded;
     } catch (_) {
-      return; // non-JSON noise; keep waiting for the real result line
+      if (trimmed.startsWith('{') && _queue.isNotEmpty) {
+        final pending = _queue.removeAt(0);
+        if (!pending.completer.isCompleted) {
+          pending.completer.complete({
+            'err': 'malformed JSON result (likely truncated at output cap)',
+            't': pending.tool,
+            'partial': trimmed.length > 200
+                ? '${trimmed.substring(0, 200)}…'
+                : trimmed,
+          });
+          _restartCount = 0;
+        }
+      }
+      return;
     }
     final pending = _queue.removeAt(0);
     if (!pending.completer.isCompleted) pending.completer.complete(parsed);
+    // A successful result means the process is healthy — reset restart counter.
+    _restartCount = 0;
   }
 
   void _onStderrLine(String line) {

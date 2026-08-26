@@ -20,9 +20,6 @@ enum ToolCategory {
   /// Shell / terminal command execution.
   shell,
 
-  /// Memory / knowledge-base operations.
-  memory,
-
   /// Agent orchestration tools.
   agent,
 

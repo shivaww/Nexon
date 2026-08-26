@@ -229,6 +229,77 @@ class WorkspaceManager:
             except ImportError:
                 return "[docx Extractor unavailable: Install python-docx in Termux]"
 
+        elif ext in [".html", ".htm"]:
+            try:
+                import re as _re
+                raw = file_path.read_text(encoding="utf-8", errors="ignore")
+                text = _re.sub(r'<script[^>]*>[\s\S]*?</script>', '', raw, flags=_re.IGNORECASE)
+                text = _re.sub(r'<style[^>]*>[\s\S]*?</style>', '', text, flags=_re.IGNORECASE)
+                text = _re.sub(r'<[^>]+>', ' ', text)
+                text = _re.sub(r'\s+', ' ', text).strip()
+                return text
+            except Exception as e:
+                return f"[Error reading HTML: {e}]"
+
+        elif ext == ".xml":
+            try:
+                import re as _re
+                raw = file_path.read_text(encoding="utf-8", errors="ignore")
+                text = _re.sub(r'<[^>]+>', ' ', raw)
+                text = _re.sub(r'\s+', ' ', text).strip()
+                return text
+            except Exception:
+                return ""
+
+        elif ext in [".rtf"]:
+            try:
+                raw = file_path.read_text(encoding="utf-8", errors="ignore")
+                import re as _re
+                text = _re.sub(r'\\[a-zA-Z]+-?\d*\s?', '', raw)
+                text = _re.sub(r'[{}]', '', text)
+                return text.strip()
+            except Exception:
+                return ""
+
+        elif ext in [".log", ".tex"]:
+            try:
+                return file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                return ""
+
+        elif ext == ".doc":
+            return "[Legacy .doc format not supported. Convert to .docx for text extraction.]"
+
+        elif ext in [".pptx", ".ppt"]:
+            return "[PowerPoint files require manual conversion. Export as PDF or text for indexing.]"
+
+        elif ext in [".xlsx", ".xls"]:
+            return "[Excel files require manual conversion. Export as CSV for indexing.]"
+
+        elif ext == ".epub":
+            try:
+                import zipfile, re as _re
+                text_parts = []
+                with zipfile.ZipFile(file_path, 'r') as zf:
+                    for name in zf.namelist():
+                        if name.endswith(('.html', '.xhtml', '.htm')):
+                            raw = zf.read(name).decode('utf-8', errors='ignore')
+                            raw = _re.sub(r'<[^>]+>', ' ', raw)
+                            text_parts.append(_re.sub(r'\s+', ' ', raw).strip())
+                return "\n\n".join(text_parts)
+            except Exception:
+                return ""
+
+        elif ext == ".odt":
+            try:
+                import zipfile, re as _re
+                with zipfile.ZipFile(file_path, 'r') as zf:
+                    content_xml = zf.read('content.xml').decode('utf-8', errors='ignore')
+                    text = _re.sub(r'<[^>]+>', ' ', content_xml)
+                    return _re.sub(r'\s+', ' ', text).strip()
+            except Exception:
+                return ""
+
         return ""
 
     def _chunk_text(self, text: str, file_name: str, rel_path: str) -> List[Dict[str, Any]]:
@@ -398,13 +469,20 @@ class WorkspaceManager:
             try:
                 import docx
                 doc = docx.Document(str(path))
-                # Approximate pages by paragraph count (no native page concept)
-                content = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                all_paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                total_paras = len(all_paragraphs)
+                paras_per_page = max(1, total_paras // 10) if total_paras > 50 else total_paras
+                total_pages = max(1, (total_paras + paras_per_page - 1) // paras_per_page)
+                start_idx = (page - 1) * paras_per_page
+                end_idx = min(start_idx + paras_per_page, total_paras)
+                if page < 1 or start_idx >= total_paras:
+                    return {"status": "error", "message": f"Page {page} out of range (1-{total_pages})"}
+                content = "\n".join(all_paragraphs[start_idx:end_idx])
                 return {
                     "status": "success",
                     "file": path.name,
                     "page": page,
-                    "total_pages": 1,
+                    "total_pages": total_pages,
                     "content": content
                 }
             except ImportError:
@@ -526,7 +604,6 @@ class WorkspaceManager:
             }
 
     def search_chunks(self, query, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Search indexed chunks from disk using keyword scoring."""
         if not self.index_file.exists():
             self.rebuild_index()
 
@@ -536,20 +613,24 @@ class WorkspaceManager:
         except Exception:
             return []
 
-        # Support array of queries for batch RAG
         if isinstance(query, list):
             query = " ".join(str(q) for q in query)
 
         keywords = [k.lower() for k in re.findall(r'\w+', query) if len(k) > 2]
         if not keywords:
-            return chunks[:top_k]
+            keywords = [query.lower().strip()]
 
         scored = []
         for chunk in chunks:
             text_lower = chunk["content"].lower()
             score = sum(text_lower.count(kw) for kw in keywords)
             if score > 0:
-                scored.append((score, chunk))
+                page_match = re.search(r'\[Page (\d+)\]', chunk["content"])
+                page_num = page_match.group(1) if page_match else None
+                enriched = dict(chunk)
+                if page_num:
+                    enriched["page"] = int(page_num)
+                scored.append((score, enriched))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [item[1] for item in scored[:top_k]]

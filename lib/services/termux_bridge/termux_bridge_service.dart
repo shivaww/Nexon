@@ -344,7 +344,7 @@ class TermuxBridgeService {
       return BridgeResponse(
         id: request.id,
         error: const BridgeError(
-          code: BridgeErrorCodes.timeout,
+          code: BridgeErrorCodes.commandTimeout,
           message: 'Request timed out',
         ),
       );

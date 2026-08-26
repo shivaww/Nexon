@@ -34,8 +34,8 @@ class DeepResearchOrchestrator:
             )
         ).expanduser()
         self.run_ingested_urls: set[str] = set()
-        # Serialize atomic writes across concurrent bridge RPC handlers.
         self._lock = asyncio.Lock()
+        self._rebuild_ingested_cache()
 
     # ── Run lifecycle ─────────────────────────────────────────────────
 
@@ -72,34 +72,30 @@ class DeepResearchOrchestrator:
                 phase_idx = idx
                 break
 
-        # Deduplicate facts by source URL: skip if this URL was already
-        # ingested in a previous phase (prevents same source dominating output)
+        # Deduplicate facts by (source URL, stage_id): skip if this URL was
+        # already ingested in THIS phase (prevents same source duplicating
+        # within a phase), but allow it in different phases.
+        seen_this_phase: set[str] = set()
         deduped_facts: list[dict[str, str]] = []
         deduped_findings: list[dict[str, str]] = []
         for fact in facts or []:
             source = str(fact.get("source") or "")
             norm = self._normalize_url(source)
-            if norm and norm in self.run_ingested_urls:
+            key = f"{norm}::{stage_id}"
+            if norm and key in seen_this_phase:
                 continue
+            if norm:
+                seen_this_phase.add(key)
             deduped_facts.append(fact)
         for finding in findings or []:
             source = str(finding.get("source") or "")
             norm = self._normalize_url(source)
-            if norm and norm in self.run_ingested_urls:
+            key = f"{norm}::{stage_id}"
+            if norm and key in seen_this_phase:
                 continue
+            if norm:
+                seen_this_phase.add(key)
             deduped_findings.append(finding)
-
-        # Mark new sources as ingested
-        for fact in deduped_facts:
-            source = str(fact.get("source") or "")
-            norm = self._normalize_url(source)
-            if norm:
-                self.run_ingested_urls.add(norm)
-        for finding in deduped_findings:
-            source = str(finding.get("source") or "")
-            norm = self._normalize_url(source)
-            if norm:
-                self.run_ingested_urls.add(norm)
 
         new_phase = {
             "stage_id": stage_id,
@@ -113,10 +109,11 @@ class DeepResearchOrchestrator:
         }
 
         if phase_idx != -1:
-            # Merge with existing phase: keep old evidence, add new deduped evidence
             existing = payload[phase_idx]
             merged_facts = list(existing.get("facts") or []) + deduped_facts
             merged_findings = list(existing.get("findings") or []) + deduped_findings
+            merged_facts = self._cap_evidence(merged_facts, 20)
+            merged_findings = self._cap_evidence(merged_findings, 30)
             new_phase["facts"] = merged_facts
             new_phase["findings"] = merged_findings
             if not summary:
@@ -143,6 +140,14 @@ class DeepResearchOrchestrator:
                         self.run_ingested_urls.add(norm)
         except Exception as e:
             logger.warning("Failed to rebuild ingested cache: %s", e)
+
+    @staticmethod
+    def _cap_evidence(items: list, cap: int) -> list:
+        """Keep the highest-confidence items, drop the rest above cap."""
+        if len(items) <= cap:
+            return items
+        order = {"high": 0, "medium": 1, "low": 2}
+        return sorted(items, key=lambda x: order.get(str(x.get("confidence", "")).lower(), 3))[:cap]
 
     @staticmethod
     def _normalize_url(url: str) -> str:
