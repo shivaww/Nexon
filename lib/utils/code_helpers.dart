@@ -1,6 +1,7 @@
 // Extracted from main.dart lines 21310-21580
 // Extracted: 2026-08-26T13:41:08.257754
 
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:nexon/services/termux_bridge/native_tools_service.dart';

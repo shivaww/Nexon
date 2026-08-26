@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/main.dart';
+import 'package:nexon/screens/kaggle_scripts.dart';
 
 class KaggleSetupScreen extends StatefulWidget {
   const KaggleSetupScreen({super.key});

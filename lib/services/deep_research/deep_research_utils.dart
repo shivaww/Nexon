@@ -6,11 +6,14 @@ import 'package:nexon/widgets/artifact_widgets.dart';
 
 void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
   final resolved =
-      _resolveToolPathValue(params, workspace) as Map<String, dynamic>;
+      resolveToolPathValue(params, workspace) as Map<String, dynamic>;
   params
     ..clear()
     ..addAll(resolved);
 }
+
+void resolveToolPaths(Map<String, dynamic> params, String workspace) =>
+    _resolveToolPaths(params, workspace);
 
 /// Fenced ```json marker carrying the research state map.
 String _researchStateFence(Map<String, dynamic> stateMap) =>

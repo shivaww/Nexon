@@ -2,6 +2,7 @@
 // Extracted on: 2026-08-26T18:20:45.726103
 
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';

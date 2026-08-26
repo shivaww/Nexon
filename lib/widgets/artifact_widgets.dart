@@ -1,14 +1,17 @@
 // Extracted from main.dart lines 19953-21293
 // Extracted: 2026-08-26T13:43:58.959187
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
 
 class HtmlArtifactWidget extends StatelessWidget {
   final String htmlContent;
@@ -1322,7 +1325,7 @@ String _resolvePath(String p, String workspace) {
   return candidateCanonical;
 }
 
-dynamic _resolveToolPathValue(dynamic value, String workspace, [String? key]) {
+dynamic resolveToolPathValue(dynamic value, String workspace, [String? key]) {
   const pathKeys = {
     'path',
     'file',
@@ -1338,12 +1341,12 @@ dynamic _resolveToolPathValue(dynamic value, String workspace, [String? key]) {
   };
   if (value is Map<String, dynamic>) {
     return value.map(
-      (k, v) => MapEntry(k, _resolveToolPathValue(v, workspace, k)),
+      (k, v) => MapEntry(k, resolveToolPathValue(v, workspace, k)),
     );
   }
   if (value is List) {
     return value
-        .map((item) => _resolveToolPathValue(item, workspace, key))
+        .map((item) => resolveToolPathValue(item, workspace, key))
         .toList();
   }
   if (value is String && key != null && pathKeys.contains(key)) {

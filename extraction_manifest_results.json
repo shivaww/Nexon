@@ -1,0 +1,238 @@
+{
+  "timestamp": "2026-08-26T18:20:45.760136",
+  "source": "lib/main.dart",
+  "lines_before": 20367,
+  "lines_after": 7548,
+  "results": [
+    {
+      "description": "Phase 25: KaggleSetupScreen + _KaggleSetupScreenState \u2014 Kaggle GPU tunnel setup walkthrough",
+      "start": 20124,
+      "end": 20367,
+      "lines_extracted": 244,
+      "dest_file": "lib/screens/kaggle_setup_screen.dart",
+      "dest_path": "./lib/screens/kaggle_setup_screen.dart",
+      "export_line": "export 'package:nexon/screens/kaggle_setup_screen.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 24: _ResearchAgentAvatars + _ResearchAgentAvatarsState + _PipelinePainter \u2014 animated research pipeline indicator",
+      "start": 19882,
+      "end": 20122,
+      "lines_extracted": 241,
+      "dest_file": "lib/widgets/research_agent_avatars.dart",
+      "dest_path": "./lib/widgets/research_agent_avatars.dart",
+      "export_line": "export 'package:nexon/widgets/research_agent_avatars.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 23: _resolveToolPaths, _researchStateFence \u2014 deep research utility functions",
+      "start": 19865,
+      "end": 19875,
+      "lines_extracted": 11,
+      "dest_file": "lib/services/deep_research/deep_research_utils.dart",
+      "dest_path": "./lib/services/deep_research/deep_research_utils.dart",
+      "export_line": "export 'package:nexon/services/deep_research/deep_research_utils.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 22: ResearchPlanWidget, _ResearchPlanWidgetState, _ResearchEventRow, _ResearchEventRowState \u2014 deep research UI",
+      "start": 18817,
+      "end": 19861,
+      "lines_extracted": 1045,
+      "dest_file": "lib/widgets/research_widgets.dart",
+      "dest_path": "./lib/widgets/research_widgets.dart",
+      "export_line": "export 'package:nexon/widgets/research_widgets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 21: ChatClient \u2014 core HTTP LLM client with streaming, protocol adapters, keep-alive pooling (954 lines)",
+      "start": 17860,
+      "end": 18813,
+      "lines_extracted": 954,
+      "dest_file": "lib/services/llm/chat_client.dart",
+      "dest_path": "./lib/services/llm/chat_client.dart",
+      "export_line": "export 'package:nexon/services/llm/chat_client.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 20: SheetFrame, SearchBox, AppMark, AvatarAnimationState, ProviderAvatar \u2014 common shared UI widgets",
+      "start": 17616,
+      "end": 17858,
+      "lines_extracted": 243,
+      "dest_file": "lib/widgets/common_widgets.dart",
+      "dest_path": "./lib/widgets/common_widgets.dart",
+      "export_line": "export 'package:nexon/widgets/common_widgets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 19: ProviderSheetResult, ProviderSettingsSheet, ModelPickerSheet \u2014 provider settings and model picker",
+      "start": 17175,
+      "end": 17614,
+      "lines_extracted": 440,
+      "dest_file": "lib/widgets/provider_sheets.dart",
+      "dest_path": "./lib/widgets/provider_sheets.dart",
+      "export_line": "export 'package:nexon/widgets/provider_sheets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 18: MediaAndModelSheet + _MediaAndModelSheetState \u2014 comprehensive settings bottom sheet (3816 lines)",
+      "start": 13358,
+      "end": 17173,
+      "lines_extracted": 3816,
+      "dest_file": "lib/widgets/media_and_model_sheet.dart",
+      "dest_path": "./lib/widgets/media_and_model_sheet.dart",
+      "export_line": "export 'package:nexon/widgets/media_and_model_sheet.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 17: modelHasVision, modelCanGenerateImages, modelCanGenerateVideos, modelIsReasoningOrCoding, modelCategoryOf, _ModelCounts",
+      "start": 13105,
+      "end": 13356,
+      "lines_extracted": 252,
+      "dest_file": "lib/utils/model_capabilities.dart",
+      "dest_path": "./lib/utils/model_capabilities.dart",
+      "export_line": "export 'package:nexon/utils/model_capabilities.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 16: Composer \u2014 bottom message input area with attachment tray, voice toggle, send/stop button",
+      "start": 12788,
+      "end": 13103,
+      "lines_extracted": 316,
+      "dest_file": "lib/widgets/composer.dart",
+      "dest_path": "./lib/widgets/composer.dart",
+      "export_line": "export 'package:nexon/widgets/composer.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 15: _QuizSheet + _QuizSheetState + _FeaturePill \u2014 interactive quiz bottom sheet and feature pill badge",
+      "start": 12513,
+      "end": 12786,
+      "lines_extracted": 274,
+      "dest_file": "lib/widgets/quiz_sheet.dart",
+      "dest_path": "./lib/widgets/quiz_sheet.dart",
+      "export_line": "export 'package:nexon/widgets/quiz_sheet.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 14: TypingBubble, PulseDot, _StreamingCursor, _StreamingCodeBlock \u2014 typing indicators and streaming display",
+      "start": 12295,
+      "end": 12511,
+      "lines_extracted": 217,
+      "dest_file": "lib/widgets/streaming_widgets.dart",
+      "dest_path": "./lib/widgets/streaming_widgets.dart",
+      "export_line": "export 'package:nexon/widgets/streaming_widgets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 13: MessageBubble \u2014 complete message bubble widget with markdown, latex, artifacts, TTS, copy, media grids",
+      "start": 11114,
+      "end": 12293,
+      "lines_extracted": 1180,
+      "dest_file": "lib/widgets/message_bubble.dart",
+      "dest_path": "./lib/widgets/message_bubble.dart",
+      "export_line": "export 'package:nexon/widgets/message_bubble.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 12: ShimmerBox, ChatMediaGrid, ImageChatTile, VideoChatTile, ChatMediaViewer \u2014 rich chat media display system",
+      "start": 10326,
+      "end": 11112,
+      "lines_extracted": 787,
+      "dest_file": "lib/widgets/chat_media_widgets.dart",
+      "dest_path": "./lib/widgets/chat_media_widgets.dart",
+      "export_line": "export 'package:nexon/widgets/chat_media_widgets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 11: getExtension, _saveCodeBlock, ContentBlock, parseContentBlocks, convertLatexToUnicode \u2014 content parsing and file utilities",
+      "start": 10012,
+      "end": 10324,
+      "lines_extracted": 313,
+      "dest_file": "lib/utils/content_parser.dart",
+      "dest_path": "./lib/utils/content_parser.dart",
+      "export_line": "export 'package:nexon/utils/content_parser.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 10: _highlightCode, CodeBlockWidget, FileArtifactWidget \u2014 syntax highlighting and code block display",
+      "start": 9574,
+      "end": 10010,
+      "lines_extracted": 437,
+      "dest_file": "lib/widgets/code_widgets.dart",
+      "dest_path": "./lib/widgets/code_widgets.dart",
+      "export_line": "export 'package:nexon/widgets/code_widgets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 9: McpToolBlock + _McpToolBlockState + _PermissionInfoRow \u2014 MCP tool call/result renderer with permission confirmation",
+      "start": 8779,
+      "end": 9572,
+      "lines_extracted": 794,
+      "dest_file": "lib/widgets/mcp_tool_block.dart",
+      "dest_path": "./lib/widgets/mcp_tool_block.dart",
+      "export_line": "export 'package:nexon/widgets/mcp_tool_block.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 8: formatMathText(), ThoughtBlock + _ThoughtBlockState \u2014 math text formatter and collapsible reasoning block",
+      "start": 8677,
+      "end": 8777,
+      "lines_extracted": 101,
+      "dest_file": "lib/widgets/thought_block.dart",
+      "dest_path": "./lib/widgets/thought_block.dart",
+      "export_line": "export 'package:nexon/widgets/thought_block.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 7: ChatHeader + _ChatHeaderState \u2014 top header bar with provider logo and model switcher",
+      "start": 8554,
+      "end": 8675,
+      "lines_extracted": 122,
+      "dest_file": "lib/widgets/chat_header.dart",
+      "dest_path": "./lib/widgets/chat_header.dart",
+      "export_line": "export 'package:nexon/widgets/chat_header.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 6: ChatSurface \u2014 primary chat message list and layout",
+      "start": 8220,
+      "end": 8552,
+      "lines_extracted": 333,
+      "dest_file": "lib/widgets/chat_surface.dart",
+      "dest_path": "./lib/widgets/chat_surface.dart",
+      "export_line": "export 'package:nexon/widgets/chat_surface.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 5: ChatHistoryPanel \u2014 session list drawer with search, rename, pin, delete, pagination",
+      "start": 7887,
+      "end": 8218,
+      "lines_extracted": 332,
+      "dest_file": "lib/widgets/chat_history_panel.dart",
+      "dest_path": "./lib/widgets/chat_history_panel.dart",
+      "export_line": "export 'package:nexon/widgets/chat_history_panel.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 4b: _LiquidGlassRimPainter, LiquidGlassSurface, LiquidGlassIconButton, LiquidGlassChip, WarmGlassDialog (after tts_service export)",
+      "start": 140,
+      "end": 445,
+      "lines_extracted": 306,
+      "dest_file": "lib/widgets/liquid_glass_widgets.dart",
+      "dest_path": "./lib/widgets/liquid_glass_widgets.dart",
+      "export_line": "export 'package:nexon/widgets/glass_widgets.dart';\nexport 'package:nexon/widgets/liquid_glass_widgets.dart';",
+      "status": "written"
+    },
+    {
+      "description": "Phase 4a: WarmGlassContainer (first glass widget \u2014 before tts_service export)",
+      "start": 52,
+      "end": 135,
+      "lines_extracted": 84,
+      "dest_file": "lib/widgets/glass_widgets.dart",
+      "dest_path": "./lib/widgets/glass_widgets.dart",
+      "export_line": "",
+      "status": "written"
+    }
+  ]
+}
