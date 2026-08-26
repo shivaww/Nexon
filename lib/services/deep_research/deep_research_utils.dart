@@ -1,0 +1,17 @@
+// Extracted from main.dart lines 19865-19875
+// Extracted on: 2026-08-26T18:20:45.692448
+
+import 'dart:convert';
+import 'package:nexon/widgets/artifact_widgets.dart';
+
+void _resolveToolPaths(Map<String, dynamic> params, String workspace) {
+  final resolved =
+      _resolveToolPathValue(params, workspace) as Map<String, dynamic>;
+  params
+    ..clear()
+    ..addAll(resolved);
+}
+
+/// Fenced ```json marker carrying the research state map.
+String _researchStateFence(Map<String, dynamic> stateMap) =>
+    '```json\n{"research_state": ${jsonEncode(stateMap)}}\n```';

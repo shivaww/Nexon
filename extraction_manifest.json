@@ -1,0 +1,345 @@
+{
+  "source": "lib/main.dart",
+  "description": "Batch extraction manifest for Nexon main.dart refactoring — continued from Phase 3. Carefully splits around existing export statements that must remain in main.dart.",
+  "extractions": [
+    {
+      "id": "P4a-glass-warm",
+      "start_line": 52,
+      "end_line": 135,
+      "dest_file": "lib/widgets/glass_widgets.dart",
+      "imports": [
+        "import 'dart:ui' show ImageFilter;",
+        "import 'package:flutter/material.dart';"
+      ],
+      "export_line": "",
+      "description": "Phase 4a: WarmGlassContainer (first glass widget — before tts_service export)"
+    },
+    {
+      "id": "P4b-glass-liquid",
+      "start_line": 140,
+      "end_line": 445,
+      "dest_file": "lib/widgets/liquid_glass_widgets.dart",
+      "imports": [
+        "import 'dart:ui' show ImageFilter;",
+        "import 'package:flutter/material.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/glass_widgets.dart';\nexport 'package:nexon/widgets/liquid_glass_widgets.dart';",
+      "description": "Phase 4b: _LiquidGlassRimPainter, LiquidGlassSurface, LiquidGlassIconButton, LiquidGlassChip, WarmGlassDialog (after tts_service export)"
+    },
+    {
+      "id": "P5-chat-history",
+      "start_line": 7887,
+      "end_line": 8218,
+      "dest_file": "lib/widgets/chat_history_panel.dart",
+      "imports": [
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/chat_history_panel.dart';",
+      "description": "Phase 5: ChatHistoryPanel — session list drawer with search, rename, pin, delete, pagination"
+    },
+    {
+      "id": "P6-chat-surface",
+      "start_line": 8220,
+      "end_line": 8552,
+      "dest_file": "lib/widgets/chat_surface.dart",
+      "imports": [
+        "import 'dart:async';",
+        "import 'dart:convert';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/chat_surface.dart';",
+      "description": "Phase 6: ChatSurface — primary chat message list and layout"
+    },
+    {
+      "id": "P7-chat-header",
+      "start_line": 8554,
+      "end_line": 8675,
+      "dest_file": "lib/widgets/chat_header.dart",
+      "imports": [
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/chat_header.dart';",
+      "description": "Phase 7: ChatHeader + _ChatHeaderState — top header bar with provider logo and model switcher"
+    },
+    {
+      "id": "P8-thought-block",
+      "start_line": 8677,
+      "end_line": 8777,
+      "dest_file": "lib/widgets/thought_block.dart",
+      "imports": [
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/thought_block.dart';",
+      "description": "Phase 8: formatMathText(), ThoughtBlock + _ThoughtBlockState — math text formatter and collapsible reasoning block"
+    },
+    {
+      "id": "P9-mcp-tool-block",
+      "start_line": 8779,
+      "end_line": 9572,
+      "dest_file": "lib/widgets/mcp_tool_block.dart",
+      "imports": [
+        "import 'dart:convert';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/mcp_tool_block.dart';",
+      "description": "Phase 9: McpToolBlock + _McpToolBlockState + _PermissionInfoRow — MCP tool call/result renderer with permission confirmation"
+    },
+    {
+      "id": "P10-code-widgets",
+      "start_line": 9574,
+      "end_line": 10010,
+      "dest_file": "lib/widgets/code_widgets.dart",
+      "imports": [
+        "import 'dart:io';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:file_picker/file_picker.dart';",
+        "import 'package:permission_handler/permission_handler.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/code_widgets.dart';",
+      "description": "Phase 10: _highlightCode, CodeBlockWidget, FileArtifactWidget — syntax highlighting and code block display"
+    },
+    {
+      "id": "P11-content-parser",
+      "start_line": 10012,
+      "end_line": 10324,
+      "dest_file": "lib/utils/content_parser.dart",
+      "imports": [
+        "import 'dart:io';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:file_picker/file_picker.dart';",
+        "import 'package:permission_handler/permission_handler.dart';"
+      ],
+      "export_line": "export 'package:nexon/utils/content_parser.dart';",
+      "description": "Phase 11: getExtension, _saveCodeBlock, ContentBlock, parseContentBlocks, convertLatexToUnicode — content parsing and file utilities"
+    },
+    {
+      "id": "P12-media-widgets",
+      "start_line": 10326,
+      "end_line": 11112,
+      "dest_file": "lib/widgets/chat_media_widgets.dart",
+      "imports": [
+        "import 'dart:convert';",
+        "import 'dart:io';",
+        "import 'dart:typed_data';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:video_player/video_player.dart';",
+        "import 'package:path_provider/path_provider.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/chat_media_widgets.dart';",
+      "description": "Phase 12: ShimmerBox, ChatMediaGrid, ImageChatTile, VideoChatTile, ChatMediaViewer — rich chat media display system"
+    },
+    {
+      "id": "P13-message-bubble",
+      "start_line": 11114,
+      "end_line": 12293,
+      "dest_file": "lib/widgets/message_bubble.dart",
+      "imports": [
+        "import 'dart:async';",
+        "import 'dart:convert';",
+        "import 'dart:io';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:flutter_markdown/flutter_markdown.dart';",
+        "import 'package:flutter_markdown_latex/flutter_markdown_latex.dart';",
+        "import 'package:markdown/markdown.dart' as md;",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';",
+        "import 'package:nexon/widgets/nexon_chart.dart';",
+        "import 'package:nexon/widgets/diff_viewer_widget.dart';",
+        "import 'package:nexon/widgets/scrollable_table_builder.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/message_bubble.dart';",
+      "description": "Phase 13: MessageBubble — complete message bubble widget with markdown, latex, artifacts, TTS, copy, media grids"
+    },
+    {
+      "id": "P14-streaming-widgets",
+      "start_line": 12295,
+      "end_line": 12511,
+      "dest_file": "lib/widgets/streaming_widgets.dart",
+      "imports": [
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/streaming_widgets.dart';",
+      "description": "Phase 14: TypingBubble, PulseDot, _StreamingCursor, _StreamingCodeBlock — typing indicators and streaming display"
+    },
+    {
+      "id": "P15-quiz-sheet",
+      "start_line": 12513,
+      "end_line": 12786,
+      "dest_file": "lib/widgets/quiz_sheet.dart",
+      "imports": [
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/quiz_sheet.dart';",
+      "description": "Phase 15: _QuizSheet + _QuizSheetState + _FeaturePill — interactive quiz bottom sheet and feature pill badge"
+    },
+    {
+      "id": "P16-composer",
+      "start_line": 12788,
+      "end_line": 13103,
+      "dest_file": "lib/widgets/composer.dart",
+      "imports": [
+        "import 'dart:io';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/composer.dart';",
+      "description": "Phase 16: Composer — bottom message input area with attachment tray, voice toggle, send/stop button"
+    },
+    {
+      "id": "P17-model-capabilities",
+      "start_line": 13105,
+      "end_line": 13356,
+      "dest_file": "lib/utils/model_capabilities.dart",
+      "imports": [
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/utils/model_capabilities.dart';",
+      "description": "Phase 17: modelHasVision, modelCanGenerateImages, modelCanGenerateVideos, modelIsReasoningOrCoding, modelCategoryOf, _ModelCounts"
+    },
+    {
+      "id": "P18-media-model-sheet",
+      "start_line": 13358,
+      "end_line": 17173,
+      "dest_file": "lib/widgets/media_and_model_sheet.dart",
+      "imports": [
+        "import 'dart:async';",
+        "import 'dart:convert';",
+        "import 'dart:io';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:flutter_secure_storage/flutter_secure_storage.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:image_picker/image_picker.dart';",
+        "import 'package:nexon/main.dart';",
+        "import 'package:nexon/services/voice/live_voice_engine.dart';",
+        "import 'package:nexon/widgets/live_voice_overlay.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/media_and_model_sheet.dart';",
+      "description": "Phase 18: MediaAndModelSheet + _MediaAndModelSheetState — comprehensive settings bottom sheet (3816 lines)"
+    },
+    {
+      "id": "P19-provider-sheets",
+      "start_line": 17175,
+      "end_line": 17614,
+      "dest_file": "lib/widgets/provider_sheets.dart",
+      "imports": [
+        "import 'dart:convert';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:flutter_secure_storage/flutter_secure_storage.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/provider_sheets.dart';",
+      "description": "Phase 19: ProviderSheetResult, ProviderSettingsSheet, ModelPickerSheet — provider settings and model picker"
+    },
+    {
+      "id": "P20-common-widgets",
+      "start_line": 17616,
+      "end_line": 17858,
+      "dest_file": "lib/widgets/common_widgets.dart",
+      "imports": [
+        "import 'dart:math' as math;",
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/common_widgets.dart';",
+      "description": "Phase 20: SheetFrame, SearchBox, AppMark, AvatarAnimationState, ProviderAvatar — common shared UI widgets"
+    },
+    {
+      "id": "P21-chat-client",
+      "start_line": 17860,
+      "end_line": 18813,
+      "dest_file": "lib/services/llm/chat_client.dart",
+      "imports": [
+        "import 'dart:async';",
+        "import 'dart:convert';",
+        "import 'dart:io';",
+        "import 'dart:typed_data';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:nexon/main.dart';",
+        "import 'package:nexon/data/models/provider_models.dart';"
+      ],
+      "export_line": "export 'package:nexon/services/llm/chat_client.dart';",
+      "description": "Phase 21: ChatClient — core HTTP LLM client with streaming, protocol adapters, keep-alive pooling (954 lines)"
+    },
+    {
+      "id": "P22-research-widgets",
+      "start_line": 18817,
+      "end_line": 19861,
+      "dest_file": "lib/widgets/research_widgets.dart",
+      "imports": [
+        "import 'dart:async';",
+        "import 'dart:convert';",
+        "import 'dart:io';",
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';",
+        "import 'package:nexon/services/deep_research/deep_research_helpers.dart';",
+        "import 'package:nexon/services/deep_research/deep_research_prompts.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/research_widgets.dart';",
+      "description": "Phase 22: ResearchPlanWidget, _ResearchPlanWidgetState, _ResearchEventRow, _ResearchEventRowState — deep research UI"
+    },
+    {
+      "id": "P23-research-helpers-extra",
+      "start_line": 19865,
+      "end_line": 19875,
+      "dest_file": "lib/services/deep_research/deep_research_utils.dart",
+      "imports": [
+        "import 'dart:convert';",
+        "import 'package:nexon/widgets/artifact_widgets.dart';"
+      ],
+      "export_line": "export 'package:nexon/services/deep_research/deep_research_utils.dart';",
+      "description": "Phase 23: _resolveToolPaths, _researchStateFence — deep research utility functions"
+    },
+    {
+      "id": "P24-research-avatars",
+      "start_line": 19882,
+      "end_line": 20122,
+      "dest_file": "lib/widgets/research_agent_avatars.dart",
+      "imports": [
+        "import 'dart:math' as math;",
+        "import 'package:flutter/material.dart';",
+        "import 'package:google_fonts/google_fonts.dart';"
+      ],
+      "export_line": "export 'package:nexon/widgets/research_agent_avatars.dart';",
+      "description": "Phase 24: _ResearchAgentAvatars + _ResearchAgentAvatarsState + _PipelinePainter — animated research pipeline indicator"
+    },
+    {
+      "id": "P25-kaggle-setup",
+      "start_line": 20124,
+      "end_line": 20367,
+      "dest_file": "lib/screens/kaggle_setup_screen.dart",
+      "imports": [
+        "import 'package:flutter/material.dart';",
+        "import 'package:flutter/services.dart';",
+        "import 'package:google_fonts/google_fonts.dart';",
+        "import 'package:nexon/main.dart';"
+      ],
+      "export_line": "export 'package:nexon/screens/kaggle_setup_screen.dart';",
+      "description": "Phase 25: KaggleSetupScreen + _KaggleSetupScreenState — Kaggle GPU tunnel setup walkthrough"
+    }
+  ]
+}
