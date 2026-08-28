@@ -68,9 +68,29 @@ def do_dart_format(params, workspace):
 
 def do_read_url(params, workspace):
     import urllib.request
+    import urllib.parse
+    import ipaddress
     url = str(params.get("url", "")).strip()
     if not url.startswith(("http://", "https://")):
         raise ValueError("'url' must start with http:// or https://")
+    
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.hostname:
+        raise ValueError("Invalid URL: missing hostname")
+    host = parsed.hostname.lower()
+    blocked_hosts = {
+        "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]",
+        "169.254.169.254", "metadata.google.internal"
+    }
+    if host in blocked_hosts or host.endswith(".local") or host.endswith(".internal"):
+        raise ValueError("Fetch blocked: local or private URLs are not allowed")
+    try:
+        addr = ipaddress.ip_address(host)
+        if not addr.is_global:
+            raise ValueError("Fetch blocked: private IP address")
+    except ValueError:
+        pass
+
     timeout = min(int(params.get("timeout", 20)), 120)
     max_bytes = min(int(params.get("max_bytes", 2000000)), 8000000)
     req = urllib.request.Request(url, headers={

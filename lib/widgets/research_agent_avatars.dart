@@ -5,16 +5,16 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-class _ResearchAgentAvatars extends StatefulWidget {
-  const _ResearchAgentAvatars({required this.status, required this.isSending});
+class ResearchAgentAvatars extends StatefulWidget {
+  const ResearchAgentAvatars({required this.status, required this.isSending});
   final String status;
   final bool isSending;
 
   @override
-  State<_ResearchAgentAvatars> createState() => _ResearchAgentAvatarsState();
+  State<ResearchAgentAvatars> createState() => ResearchAgentAvatarsState();
 }
 
-class _ResearchAgentAvatarsState extends State<_ResearchAgentAvatars>
+class ResearchAgentAvatarsState extends State<ResearchAgentAvatars>
     with SingleTickerProviderStateMixin {
   late final AnimationController _scanCtrl;
   late final Animation<double> _scanAnim;
@@ -44,7 +44,7 @@ class _ResearchAgentAvatarsState extends State<_ResearchAgentAvatars>
   }
 
   @override
-  void didUpdateWidget(_ResearchAgentAvatars oldWidget) {
+  void didUpdateWidget(ResearchAgentAvatars oldWidget) {
     super.didUpdateWidget(oldWidget);
     _syncAnimation();
   }

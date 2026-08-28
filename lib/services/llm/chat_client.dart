@@ -308,7 +308,7 @@ class ChatClient {
                 return {'role': message.role.apiName, 'content': finalText};
               }).toList(),
               'max_tokens': settings.maxTokens,
-              'temperature': 1.0,
+              'temperature': settings.temperature,
               'top_p': 0.95,
               'stream': false,
             };
@@ -457,7 +457,7 @@ class ChatClient {
                 return {'role': message.role.apiName, 'content': finalText};
               }).toList(),
               'max_tokens': settings.maxTokens,
-              'temperature': 1.0,
+              'temperature': settings.temperature,
               'top_p': 0.95,
               'stream': true,
             };

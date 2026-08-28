@@ -1,10 +1,11 @@
 /// TermuxForge — Code Editor Screen
-import 'dart:io';
 ///
 /// Tabbed code editor with syntax highlighting, line numbers,
 /// search/replace, file path breadcrumb, modified indicator,
 /// and "Send to Agent" button.
 library;
+
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';

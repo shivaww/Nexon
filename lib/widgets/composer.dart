@@ -254,69 +254,120 @@ class Composer extends StatelessWidget {
                 ),
               ),
             ),
-          // Target #5: Bottom message input -> full-width pill glass container
-          LiquidGlassSurface(
-            borderRadius: BorderRadius.circular(30),
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                LiquidGlassIconButton(
-                  icon: Icons.add_rounded,
-                  size: 38,
-                  onPressed: onPlusPressed,
-                  tooltip: 'Attach media or file',
+          // Bottom message input -> elevated full-width pill glass container
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(30),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF7B4E2E).withOpacity(0.08),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
                 ),
-                if (onOpenLiveVoice != null) ...[
-                  const SizedBox(width: 6),
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: LiquidGlassSurface(
+              borderRadius: BorderRadius.circular(30),
+              padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
                   LiquidGlassIconButton(
-                    icon: Icons.mic_rounded,
-                    size: 38,
-                    onPressed: onOpenLiveVoice!,
-                    tooltip: 'Live Voice Mode',
+                    icon: Icons.add_rounded,
+                    size: 40,
+                    onPressed: onPlusPressed,
+                    tooltip: 'Attach media or file',
                   ),
-                ],
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: TextField(
-                      controller: controller,
-                      minLines: 1,
-                      maxLines: 6,
-                      textInputAction: TextInputAction.newline,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Color(0xFF2D241C),
-                      ),
-                      decoration: const InputDecoration(
-                        hintText: 'Message Nexon...',
-                        hintStyle: TextStyle(
-                          color: Color(0xFF8C7A6B),
-                          fontSize: 14,
+                  if (onOpenLiveVoice != null) ...[
+                    const SizedBox(width: 6),
+                    LiquidGlassIconButton(
+                      icon: Icons.mic_rounded,
+                      size: 40,
+                      onPressed: onOpenLiveVoice!,
+                      tooltip: 'Live Voice Mode',
+                    ),
+                  ],
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: TextField(
+                        controller: controller,
+                        minLines: 1,
+                        maxLines: 6,
+                        textInputAction: TextInputAction.newline,
+                        textCapitalization: TextCapitalization.sentences,
+                        cursorColor: const Color(0xFF7B4E2E),
+                        cursorWidth: 1.6,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.35,
+                          color: Color(0xFF2D241C),
                         ),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
-                          vertical: 6,
-                          horizontal: 4,
+                        decoration: const InputDecoration(
+                          hintText: 'Message Nexon...',
+                          hintStyle: TextStyle(
+                            color: Color(0xFFA89888),
+                            fontSize: 15,
+                            fontWeight: FontWeight.w400,
+                          ),
+                          border: InputBorder.none,
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            vertical: 7,
+                            horizontal: 4,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                LiquidGlassIconButton(
-                  icon: isSending
-                      ? Icons.stop_rounded
-                      : Icons.arrow_upward_rounded,
-                  size: 38,
-                  backgroundColor: const Color(0xFF7B4E2E),
-                  iconColor: Colors.white,
-                  onPressed: isSending ? (onStop ?? () {}) : onSend,
-                  tooltip: isSending ? 'Stop response' : 'Send message',
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, value, _) {
+                      final hasText = value.text.trim().isNotEmpty;
+                      final canTap = isSending || hasText;
+                      final Color btnColor = isSending
+                          ? const Color(0xFF9B4D39)
+                          : (hasText
+                              ? const Color(0xFF7B4E2E)
+                              : const Color(0xFFCBBBA4));
+                      return AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        transitionBuilder: (child, animation) =>
+                            ScaleTransition(
+                          scale: animation,
+                          child: FadeTransition(
+                            opacity: animation,
+                            child: child,
+                          ),
+                        ),
+                        child: LiquidGlassIconButton(
+                          key: ValueKey<bool>(isSending),
+                          icon: isSending
+                              ? Icons.stop_rounded
+                              : Icons.arrow_upward_rounded,
+                          size: 40,
+                          backgroundColor: btnColor,
+                          iconColor: Colors.white,
+                          onPressed: isSending
+                              ? (onStop ?? () {})
+                              : (canTap ? onSend : () {}),
+                          tooltip:
+                              isSending ? 'Stop response' : 'Send message',
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
         ],

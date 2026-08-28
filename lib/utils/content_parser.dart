@@ -50,7 +50,7 @@ String getExtension(String lang) {
   }
 }
 
-Future<void> _saveCodeBlock(
+Future<void> saveCodeBlock(
   BuildContext context,
   String code,
   String language,

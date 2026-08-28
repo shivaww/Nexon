@@ -507,8 +507,6 @@ class _McpToolBlockState extends State<McpToolBlock> {
           'Cross-compare',
           p('query').isNotEmpty ? '"${p('query')}"' : null,
         );
-          null,
-        );
       // ── Native C++ bridge tools (JSON {"t","a"} format) ─────────────
       case 'read':
         {
@@ -760,8 +758,8 @@ class _McpToolBlockState extends State<McpToolBlock> {
   }
 }
 
-class _PermissionInfoRow extends StatelessWidget {
-  const _PermissionInfoRow({required this.label, required this.value});
+class PermissionInfoRow extends StatelessWidget {
+  const PermissionInfoRow({required this.label, required this.value});
 
   final String label;
   final String value;

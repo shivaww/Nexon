@@ -49,6 +49,59 @@ import 'package:nexon/services/termux_bridge/termux_bridge_service.dart';
 import 'package:nexon/services/termux_bridge/bridge_protocol.dart';
 import 'package:uuid/uuid.dart';
 
+// Modules extracted from this file. Imported so the symbols are visible
+// here, and re-exported so the widget libraries (which import main.dart)
+// can reach them.
+import 'package:nexon/widgets/chat_history_panel.dart';
+import 'package:nexon/widgets/chat_surface.dart';
+import 'package:nexon/widgets/chat_header.dart';
+import 'package:nexon/widgets/thought_block.dart';
+import 'package:nexon/widgets/mcp_tool_block.dart';
+import 'package:nexon/widgets/code_widgets.dart';
+import 'package:nexon/utils/content_parser.dart';
+import 'package:nexon/widgets/chat_media_widgets.dart';
+import 'package:nexon/widgets/message_bubble.dart';
+import 'package:nexon/widgets/streaming_widgets.dart';
+import 'package:nexon/widgets/quiz_sheet.dart';
+import 'package:nexon/widgets/composer.dart';
+import 'package:nexon/utils/model_capabilities.dart';
+import 'package:nexon/widgets/media_and_model_sheet.dart';
+import 'package:nexon/widgets/provider_sheets.dart';
+import 'package:nexon/widgets/common_widgets.dart';
+import 'package:nexon/services/llm/chat_client.dart';
+import 'package:nexon/data/models/provider_models.dart';
+import 'package:nexon/widgets/research_widgets.dart';
+import 'package:nexon/widgets/artifact_widgets.dart';
+import 'package:nexon/services/deep_research/deep_research_utils.dart';
+import 'package:nexon/utils/code_helpers.dart';
+import 'package:nexon/widgets/research_agent_avatars.dart';
+import 'package:nexon/screens/kaggle_setup_screen.dart';
+
+export 'package:nexon/widgets/chat_history_panel.dart';
+export 'package:nexon/widgets/chat_surface.dart';
+export 'package:nexon/widgets/chat_header.dart';
+export 'package:nexon/widgets/thought_block.dart';
+export 'package:nexon/widgets/mcp_tool_block.dart';
+export 'package:nexon/widgets/code_widgets.dart';
+export 'package:nexon/utils/content_parser.dart';
+export 'package:nexon/widgets/chat_media_widgets.dart';
+export 'package:nexon/widgets/message_bubble.dart';
+export 'package:nexon/widgets/streaming_widgets.dart';
+export 'package:nexon/widgets/quiz_sheet.dart';
+export 'package:nexon/widgets/composer.dart';
+export 'package:nexon/utils/model_capabilities.dart';
+export 'package:nexon/widgets/media_and_model_sheet.dart';
+export 'package:nexon/widgets/provider_sheets.dart';
+export 'package:nexon/widgets/common_widgets.dart';
+export 'package:nexon/services/llm/chat_client.dart';
+export 'package:nexon/data/models/provider_models.dart';
+export 'package:nexon/widgets/research_widgets.dart';
+export 'package:nexon/widgets/artifact_widgets.dart';
+export 'package:nexon/services/deep_research/deep_research_utils.dart';
+export 'package:nexon/utils/code_helpers.dart';
+export 'package:nexon/widgets/research_agent_avatars.dart';
+export 'package:nexon/screens/kaggle_setup_screen.dart';
+
 
 /// Helper class for Text-To-Speech audio playback of model outputs.
 export 'package:nexon/services/tts_service.dart';
@@ -307,7 +360,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   String _toolStatus = '';
 
-  List<_TodoItem> _activeTodos = [];
+  List<TodoItem> _activeTodos = [];
   bool _todoListVisible = false;
 
   String _promptSig = '';
@@ -2053,7 +2106,7 @@ jobs:
                       text: _fenceBareToolCalls(fullText),
                       reasoning: reasoningText,
                       tokensPerSec: tps > 0 ? tps.toStringAsFixed(1) : '',
-                      tokenUsage: _formatTokenUsage(estTokens, maxTok),
+                      tokenUsage: formatTokenUsage(estTokens, maxTok),
                     );
                     _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
                   }
@@ -2104,7 +2157,7 @@ jobs:
         final finalEstTokens = (streamCharCount / 4).ceil();
         final finalTps = finalElapsedSec > 0.1 ? (finalEstTokens / finalElapsedSec) : 0.0;
         final finalMaxTok = settings.maxTokens;
-        final finalUsage = _formatTokenUsage(finalEstTokens, finalMaxTok);
+        final finalUsage = formatTokenUsage(finalEstTokens, finalMaxTok);
 
         setState(() {
           final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
@@ -2129,7 +2182,7 @@ jobs:
         }
 
         if (_deepResearchEnabled) {
-          final planFence = _findFenceWithKeys(fullText, ['research_plan']);
+          final planFence = findFenceWithKeys(fullText, ['research_plan']);
           if (planFence != null) {
             final rawPlan =
                 (planFence['json'] as Map<String, dynamic>)['research_plan'];
@@ -2172,7 +2225,7 @@ jobs:
                 );
                 msgs[assistantMessageIndex] = ChatMessage(
                   role: MessageRole.assistant,
-                  text: fullText + '\n\n' + _researchStateFence(stateMap),
+                  text: fullText + '\n\n' + researchStateFence(stateMap),
                   reasoning: reasoningText,
                 );
                 _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
@@ -2314,7 +2367,7 @@ jobs:
               if (toolName == 'todo_create') {
                 executedTools = true;
                 final tasks = toolArgs['tasks'];
-                final List<_TodoItem> items = [];
+                final List<TodoItem> items = [];
                 if (tasks is List) {
                   for (var i = 0; i < tasks.length; i++) {
                     final item = tasks[i];
@@ -2329,7 +2382,7 @@ jobs:
                       title = item.toString();
                     }
                     if (title.trim().isNotEmpty) {
-                      items.add(_TodoItem(n: items.length + 1, title: title.trim()));
+                      items.add(TodoItem(n: items.length + 1, title: title.trim()));
                     }
                   }
                 }
@@ -2454,7 +2507,7 @@ jobs:
                     }
                   });
                 }
-                final questions = _QuizSheet.parseQuestions(
+                final questions = QuizSheet.parseQuestions(
                   jsonEncode(toolArgs),
                 );
                 if (questions.isEmpty) {
@@ -2468,7 +2521,7 @@ jobs:
                         isScrollControlled: true,
                         backgroundColor: Colors.transparent,
                         isDismissible: false,
-                        builder: (_) => _QuizSheet(questions: questions),
+                        builder: (_) => QuizSheet(questions: questions),
                       );
                   if (answers == null) {
                     toolOutputs.add(
@@ -2676,7 +2729,7 @@ jobs:
                   (toolParams['cwd'] as String?)?.isEmpty == true) {
                 toolParams['cwd'] = _agenticWorkspace;
               }
-              _resolveToolPaths(toolParams, _agenticWorkspace);
+              resolveToolPaths(toolParams, _agenticWorkspace);
               parsed['params'] = toolParams;
               jsonString = jsonEncode(parsed);
             } catch (e) {
@@ -3747,9 +3800,9 @@ jobs:
                   ),
                 ),
                 const SizedBox(height: 12),
-                _PermissionInfoRow(label: 'Tool', value: method),
+                PermissionInfoRow(label: 'Tool', value: method),
                 const SizedBox(height: 8),
-                _PermissionInfoRow(label: 'Target', value: target),
+                PermissionInfoRow(label: 'Target', value: target),
                 if (diffPreview != null) ...[
                   const SizedBox(height: 12),
                   const Text(
@@ -4365,7 +4418,7 @@ jobs:
     return results;
   }
 
-  bool _isKnownToolName(String t) => _isKnownToolNameGlobal(t);
+  bool _isKnownToolName(String t) => isKnownToolNameGlobal(t);
 
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
   /// renderer shows them as tool cards instead of raw text.
@@ -4571,8 +4624,8 @@ jobs:
     String oldText,
     Map<String, dynamic> stateMap,
   ) {
-    final newStateStr = _researchStateFence(stateMap);
-    final span = _findFenceWithKeys(oldText, ['research_state']);
+    final newStateStr = researchStateFence(stateMap);
+    final span = findFenceWithKeys(oldText, ['research_state']);
     if (span == null) {
       return oldText.isEmpty ? newStateStr : '$oldText\n\n$newStateStr';
     }
@@ -4802,7 +4855,7 @@ jobs:
     if (sessionIndex == -1) return;
 
     final message = activeSession.messages[messageIndex];
-    final stateFence = _findFenceWithKeys(message.text, ['research_state']);
+    final stateFence = findFenceWithKeys(message.text, ['research_state']);
     if (stateFence == null) return;
 
     try {
@@ -4820,7 +4873,7 @@ jobs:
             text: message.text.replaceRange(
               stateFence['start'] as int,
               stateFence['end'] as int,
-              _researchStateFence(stateMap),
+              researchStateFence(stateMap),
             ),
             reasoning: message.reasoning,
           );
@@ -4841,7 +4894,7 @@ jobs:
           text: message.text.replaceRange(
             stateFence['start'] as int,
             stateFence['end'] as int,
-            _researchStateFence(stateMap),
+            researchStateFence(stateMap),
           ),
           reasoning: message.reasoning,
         );
@@ -5050,7 +5103,7 @@ jobs:
         }
 
         final plannedSteps = <Map<String, dynamic>>[];
-        final planFence = _findFenceWithKeys(planText, ['research_plan']);
+        final planFence = findFenceWithKeys(planText, ['research_plan']);
         final rawPlan = planFence == null
             ? null
             : (planFence['json'] as Map<String, dynamic>)['research_plan'];
@@ -7082,6 +7135,7 @@ jobs:
         return MediaAndModelSheet(
           sessions: _sessions,
           sessionId: _activeSessionId ?? '',
+          onSystemMessage: _appendSystemMessage,
           onRestoreCompleted: _loadSessions,
           provider: provider,
           customProviders: _customProviders,
@@ -7263,6 +7317,18 @@ jobs:
             });
             await _saveSettings();
             await _saveSessions();
+          },
+          onTemperatureChanged: (newTemperature) async {
+            setState(() {
+              final currentProv = _selectedProviderId;
+              final currentSettings =
+                  _settings[currentProv] ??
+                  ProviderSettings.defaults(_provider);
+              _settings[currentProv] = currentSettings.copyWith(
+                temperature: newTemperature,
+              );
+            });
+            await _saveSettings();
           },
           onReasoningEnabledChanged: (enabled) async {
             setState(() {
@@ -7477,12 +7543,12 @@ jobs:
                 fileName: _getResearchFileName(activeSession.title),
                 onOpenLiveVoice: _openLiveVoiceMode,
                 activeFeaturePills: [
-                  if (_deepResearchEnabled) const _FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
-                  if (_agenticEnabled) const _FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
-                  if (_searchSettings.enabled) const _FeaturePill(icon: Icons.search, label: 'Web Search'),
-                  if (_studyModeEnabled) const _FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
-                  if (_artifactsEnabled) const _FeaturePill(icon: Icons.extension, label: 'Artifacts'),
-                  if (_svgVisualsEnabled) const _FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
+                  if (_deepResearchEnabled) const FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
+                  if (_agenticEnabled) const FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
+                  if (_searchSettings.enabled) const FeaturePill(icon: Icons.search, label: 'Web Search'),
+                  if (_studyModeEnabled) const FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
+                  if (_artifactsEnabled) const FeaturePill(icon: Icons.extension, label: 'Artifacts'),
+                  if (_svgVisualsEnabled) const FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
                 ],
               ),
             ),
@@ -7495,54 +7561,3 @@ jobs:
   static String _keyStorageName(String providerId) =>
       'provider_api_key_$providerId';
 }
-
-export 'package:nexon/widgets/chat_history_panel.dart';
-
-export 'package:nexon/widgets/chat_surface.dart';
-
-export 'package:nexon/widgets/chat_header.dart';
-
-export 'package:nexon/widgets/thought_block.dart';
-
-export 'package:nexon/widgets/mcp_tool_block.dart';
-
-export 'package:nexon/widgets/code_widgets.dart';
-
-export 'package:nexon/utils/content_parser.dart';
-
-export 'package:nexon/widgets/chat_media_widgets.dart';
-
-export 'package:nexon/widgets/message_bubble.dart';
-
-export 'package:nexon/widgets/streaming_widgets.dart';
-
-export 'package:nexon/widgets/quiz_sheet.dart';
-
-export 'package:nexon/widgets/composer.dart';
-
-export 'package:nexon/utils/model_capabilities.dart';
-
-export 'package:nexon/widgets/media_and_model_sheet.dart';
-
-export 'package:nexon/widgets/provider_sheets.dart';
-
-export 'package:nexon/widgets/common_widgets.dart';
-
-export 'package:nexon/services/llm/chat_client.dart';
-
-export 'package:nexon/data/models/provider_models.dart';
-
-export 'package:nexon/widgets/research_widgets.dart';
-
-export 'package:nexon/widgets/artifact_widgets.dart';
-
-export 'package:nexon/services/deep_research/deep_research_utils.dart';
-
-/// Find the first fenced ```json block in [text] containing any of [keys].
-/// Returns {'start', 'end', 'json'} with offsets into [text], or null.
-/// Research plan/state markers use this; tool fences use _findNativeToolFence.
-export 'package:nexon/utils/code_helpers.dart';
-
-export 'package:nexon/widgets/research_agent_avatars.dart';
-
-export 'package:nexon/screens/kaggle_setup_screen.dart';

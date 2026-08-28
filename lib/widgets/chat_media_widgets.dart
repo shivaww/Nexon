@@ -78,8 +78,8 @@ class _ShimmerBoxState extends State<_ShimmerBox>
 }
 
 /// Responsive grid of image + video tiles in a chat bubble.
-class _ChatMediaGrid extends StatelessWidget {
-  const _ChatMediaGrid({required this.images, required this.videos});
+class ChatMediaGrid extends StatelessWidget {
+  const ChatMediaGrid({required this.images, required this.videos});
   final List<String> images;
   final List<String> videos;
 

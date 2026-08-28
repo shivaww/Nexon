@@ -253,7 +253,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                 Expanded(
                   child: Row(
                     children: [
-                      _ResearchAgentAvatars(
+                      ResearchAgentAvatars(
                         status: status,
                         isSending: widget.isSending,
                       ),

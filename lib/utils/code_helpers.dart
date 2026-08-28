@@ -6,7 +6,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:nexon/services/termux_bridge/native_tools_service.dart';
 
-Map<String, dynamic>? _findFenceWithKeys(String text, List<String> keys) {
+Map<String, dynamic>? findFenceWithKeys(String text, List<String> keys) {
   int from = 0;
   while (true) {
     final open = text.indexOf('```', from);
@@ -54,7 +54,7 @@ Map<String, dynamic>? _findFenceWithKeys(String text, List<String> keys) {
 /// Returns the tool name when the text contains a fenced ```json tool
 /// block ({"t": ...}), else null. Drives the streaming avatar state.
 /// Top-level (not a class method): called from ChatSurface and MessageBubble.
-String _formatTokenUsage(int tokens, int maxTokens) {
+String formatTokenUsage(int tokens, int maxTokens) {
   if (tokens <= 0) return '';
   String countStr;
   if (tokens >= 1000000) {
@@ -71,7 +71,7 @@ String _formatTokenUsage(int tokens, int maxTokens) {
   return countStr;
 }
 
-bool _isKnownToolNameGlobal(String t) {
+bool isKnownToolNameGlobal(String t) {
   const extra = {
     'web_search', 'search_web', 'read_url',
     'quiz', 'quiz_request', 'step_complete',
@@ -85,7 +85,7 @@ bool _isKnownToolNameGlobal(String t) {
   return false;
 }
 
-String? _detectNativeToolCall(String text) {
+String? detectNativeToolCall(String text) {
   if (!text.contains('```')) return null;
   final m = RegExp(r'"t"\s*:\s*"([a-z_][a-zA-Z0-9_]*)"').firstMatch(text);
   return m?.group(1);
@@ -95,7 +95,7 @@ String? _detectNativeToolCall(String text) {
 /// a native tool call ({"t":...} or {"calls":[...]}). Returns null when no
 /// tool fence exists (plain code fences are skipped). Offsets are relative
 /// to [text]. Top-level: called from MessageBubble's rich-content parser.
-_NativeToolFence? _findNativeToolFence(String text) {
+NativeToolFence? findNativeToolFence(String text) {
   int searchFrom = 0;
   while (true) {
     final openIdx = text.indexOf('```', searchFrom);
@@ -114,9 +114,9 @@ _NativeToolFence? _findNativeToolFence(String text) {
         if (calls is List) {
           bool allKnown = calls.every((c) =>
               c is Map<String, dynamic> &&
-              _isKnownToolNameGlobal(c['t']?.toString() ?? ''));
+              isKnownToolNameGlobal(c['t']?.toString() ?? ''));
           if (allKnown && calls.isNotEmpty) parsed = decoded;
-        } else if (t.isNotEmpty && _isKnownToolNameGlobal(t)) {
+        } else if (t.isNotEmpty && isKnownToolNameGlobal(t)) {
           parsed = decoded;
         } else if (decoded['method'] != null) {
           parsed = decoded;
@@ -126,30 +126,30 @@ _NativeToolFence? _findNativeToolFence(String text) {
       parsed = null;
     }
     if (parsed != null) {
-      return _NativeToolFence(openIdx, closeIdx + 3, parsed);
+      return NativeToolFence(openIdx, closeIdx + 3, parsed);
     }
     searchFrom = closeIdx + 3;
   }
 }
 
-class _NativeToolFence {
+class NativeToolFence {
   final int start;
   final int end;
   final Map<String, dynamic> json;
-  _NativeToolFence(this.start, this.end, this.json);
+  NativeToolFence(this.start, this.end, this.json);
 }
 
-class _TodoItem {
+class TodoItem {
   final int n;
   final String title;
   bool done;
-  _TodoItem({required this.n, required this.title, this.done = false});
+  TodoItem({required this.n, required this.title, this.done = false});
 }
 
-class _TodoListPanel extends StatelessWidget {
-  final List<_TodoItem> todos;
+class TodoListPanel extends StatelessWidget {
+  final List<TodoItem> todos;
   final VoidCallback? onClose;
-  const _TodoListPanel({required this.todos, this.onClose});
+  const TodoListPanel({required this.todos, this.onClose});
 
   @override
   Widget build(BuildContext context) {

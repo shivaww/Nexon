@@ -35,16 +35,21 @@ class ProviderSettings {
     required this.maxTokens,
     this.fallbackApiKeys = const [],
     this.reasoningEnabled = true,
+    this.temperature = 1.0,
   });
+
+  /// Default maximum output length used for fresh provider settings.
+  static const int defaultMaxOutputTokens = 128000;
 
   factory ProviderSettings.defaults(ProviderDefinition provider) {
     return ProviderSettings(
       apiKey: '',
       baseUrl: provider.baseUrl,
       model: provider.models.first,
-      maxTokens: provider.defaultMaxTokens,
+      maxTokens: defaultMaxOutputTokens,
       fallbackApiKeys: const [],
       reasoningEnabled: true,
+      temperature: 1.0,
     );
   }
 
@@ -60,6 +65,7 @@ class ProviderSettings {
               .toList() ??
           const [],
       reasoningEnabled: json['reasoningEnabled'] as bool? ?? true,
+      temperature: _readDouble(json['temperature'], 1.0),
     );
   }
 
@@ -70,6 +76,10 @@ class ProviderSettings {
   final List<String> fallbackApiKeys;
   final bool reasoningEnabled;
 
+  /// Sampling temperature sent to the provider (0.0 – 2.0). Lower values
+  /// are more deterministic, higher values more creative.
+  final double temperature;
+
   ProviderSettings copyWith({
     String? apiKey,
     String? baseUrl,
@@ -77,6 +87,7 @@ class ProviderSettings {
     int? maxTokens,
     List<String>? fallbackApiKeys,
     bool? reasoningEnabled,
+    double? temperature,
   }) {
     return ProviderSettings(
       apiKey: apiKey ?? this.apiKey,
@@ -85,6 +96,7 @@ class ProviderSettings {
       maxTokens: maxTokens ?? this.maxTokens,
       fallbackApiKeys: fallbackApiKeys ?? this.fallbackApiKeys,
       reasoningEnabled: reasoningEnabled ?? this.reasoningEnabled,
+      temperature: temperature ?? this.temperature,
     );
   }
 
@@ -96,7 +108,14 @@ class ProviderSettings {
       'maxTokens': maxTokens,
       'fallbackApiKeys': fallbackApiKeys,
       'reasoningEnabled': reasoningEnabled,
+      'temperature': temperature,
     };
+  }
+
+  static double _readDouble(dynamic value, double fallback) {
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? fallback;
   }
 
   static int _readInt(dynamic value, int fallback) {

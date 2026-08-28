@@ -87,17 +87,30 @@ class MessageBubble extends StatelessWidget {
               Row(
                 children: [
                   if (isUser) ...[
-                    const Icon(
-                      Icons.person_outline,
-                      size: 16,
-                      color: Color(0xFF7B4E2E),
+                    Container(
+                      width: 24,
+                      height: 24,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFF8B5E3C), Color(0xFF6B3F22)],
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.person_rounded,
+                        size: 14,
+                        color: Colors.white,
+                      ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     const Text(
                       'You',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
+                        letterSpacing: 0.1,
                         color: Color(0xFF7B4E2E),
                       ),
                     ),
@@ -187,26 +200,75 @@ class MessageBubble extends StatelessWidget {
                       if (message.tokenUsage.isNotEmpty && !isUser)
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
-                          child: Text(
-                            message.tokenUsage,
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w500,
-                              color: const Color(0xFF9B8B7A),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF5EFE4),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: const Color(0xFFE7D8C4),
+                                width: 0.6,
+                              ),
+                            ),
+                            child: Text(
+                              message.tokenUsage,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2,
+                                color: Color(0xFF6C5946),
+                              ),
                             ),
                           ),
                         ),
                       if (message.tokensPerSec.isNotEmpty && !isUser)
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
-                          child: Text(
-                            '${message.tokensPerSec} tok/s',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w500,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2.5,
+                            ),
+                            decoration: BoxDecoration(
                               color: animationState != AvatarAnimationState.idle
-                                  ? const Color(0xFF059669)
-                                  : const Color(0xFF9B8B7A),
+                                  ? const Color(0xFFECFDF5)
+                                  : const Color(0xFFF5EFE4),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: animationState != AvatarAnimationState.idle
+                                    ? const Color(0xFF6EE7B7)
+                                    : const Color(0xFFE7D8C4),
+                                width: 0.6,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (animationState != AvatarAnimationState.idle)
+                                  Container(
+                                    width: 5,
+                                    height: 5,
+                                    margin: const EdgeInsets.only(right: 4),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF059669),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                Text(
+                                  '${message.tokensPerSec} tok/s',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.15,
+                                    color: animationState != AvatarAnimationState.idle
+                                        ? const Color(0xFF065F46)
+                                        : const Color(0xFF6C5946),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -270,7 +332,7 @@ class MessageBubble extends StatelessWidget {
             if (message.images.isNotEmpty || message.videos.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 10.0),
-                child: _ChatMediaGrid(
+                child: ChatMediaGrid(
                   images: message.images,
                   videos: message.videos,
                 ),
@@ -332,9 +394,16 @@ class MessageBubble extends StatelessWidget {
                   return Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     decoration: BoxDecoration(
-                      color: headerColor.withOpacity(0.05),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: headerColor.withOpacity(0.2)),
+                      color: headerColor.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: headerColor.withOpacity(0.18)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: headerColor.withOpacity(0.06),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: ExpansionTile(
                       title: Text(
@@ -374,13 +443,29 @@ class MessageBubble extends StatelessWidget {
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 11,
+                  horizontal: 15,
+                  vertical: 13,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFDF9),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFFE7D8C4)),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFFFDF9), Color(0xFFF9F1E3)],
+                  ),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(18),
+                    topRight: Radius.circular(18),
+                    bottomLeft: Radius.circular(18),
+                    bottomRight: Radius.circular(5),
+                  ),
+                  border: Border.all(color: Color(0xFFE7D8C4), width: 0.8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0x0F7B4E2E),
+                      blurRadius: 10,
+                      offset: Offset(0, 3),
+                    ),
+                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -399,11 +484,19 @@ class MessageBubble extends StatelessWidget {
                                     vertical: 5,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFF0EBE1),
-                                    borderRadius: BorderRadius.circular(16),
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(20),
                                     border: Border.all(
-                                      color: const Color(0xFFDCCBB8),
+                                      color: const Color(0xFFE7D8C4),
+                                      width: 0.7,
                                     ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.04),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 1),
+                                      ),
+                                    ],
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -432,10 +525,11 @@ class MessageBubble extends StatelessWidget {
                     SelectableText(
                       message.text,
                       style: const TextStyle(
-                        height: 1.45,
+                        height: 1.55,
                         color: Color(0xFF2D241C),
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w500,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w400,
+                        letterSpacing: -0.1,
                       ),
                     ),
                   ],
@@ -446,10 +540,14 @@ class MessageBubble extends StatelessWidget {
                 ThoughtBlock(thought: message.reasoning),
               ..._parseRichMessageContent(context, message.text),
               if (animationState != AvatarAnimationState.idle)
-                const _StreamingCursor(),
+                const StreamingCursor(),
             ],
-            const SizedBox(height: 4),
-            const Divider(color: Color(0xFFE7D8C4), height: 1),
+            const SizedBox(height: 10),
+            Divider(
+              color: const Color(0xFFE7D8C4).withOpacity(0.5),
+              height: 1,
+              thickness: 0.6,
+            ),
           ],
         ),
       ),
@@ -479,8 +577,8 @@ class MessageBubble extends StatelessWidget {
 
       // Native JSON tool calls: fenced ```json blocks shaped {"t":...} or
       // {"calls":[...]} render as tool blocks, just like the legacy tags.
-      final toolFence = _findNativeToolFence(substring);
-      final researchFence = _findFenceWithKeys(
+      final toolFence = findNativeToolFence(substring);
+      final researchFence = findFenceWithKeys(
         substring,
         const ['research_plan', 'research_state'],
       );
@@ -988,7 +1086,7 @@ class MessageBubble extends StatelessWidget {
           unclosedFence;
       widgets.add(
         streaming
-            ? _StreamingCodeBlock(code: block.content, language: block.language)
+            ? StreamingCodeBlock(code: block.content, language: block.language)
             : _buildSingleBlock(context, block),
       );
     }
@@ -1110,7 +1208,7 @@ class MessageBubble extends StatelessWidget {
       return CodeBlockWidget(
         code: block.content,
         language: block.language,
-        onSave: () => _saveCodeBlock(context, block.content, block.language),
+        onSave: () => saveCodeBlock(context, block.content, block.language),
       );
     } else {
       return Padding(

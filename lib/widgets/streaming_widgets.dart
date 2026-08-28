@@ -80,17 +80,17 @@ class _PulseDotState extends State<PulseDot>
 
 // ── Streaming cursor: the app sparkle, pulsing while the LLM streams ──
 
-class _StreamingCursor extends StatefulWidget {
-  const _StreamingCursor({this.size = 22, this.inline = false, super.key});
+class StreamingCursor extends StatefulWidget {
+  const StreamingCursor({this.size = 22, this.inline = false, super.key});
 
   final double size;
   final bool inline;
 
   @override
-  State<_StreamingCursor> createState() => _StreamingCursorState();
+  State<StreamingCursor> createState() => StreamingCursorState();
 }
 
-class _StreamingCursorState extends State<_StreamingCursor>
+class StreamingCursorState extends State<StreamingCursor>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
@@ -140,8 +140,8 @@ class _StreamingCursorState extends State<_StreamingCursor>
 /// Lightweight code view shown while an artifact/code fence is still open,
 /// so tokens stream in smoothly instead of re-rendering heavy artifact
 /// widgets on every chunk. Swaps to the rich artifact widget on completion.
-class _StreamingCodeBlock extends StatelessWidget {
-  const _StreamingCodeBlock({
+class StreamingCodeBlock extends StatelessWidget {
+  const StreamingCodeBlock({
     required this.code,
     required this.language,
     super.key,
@@ -187,7 +187,7 @@ class _StreamingCodeBlock extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              const _StreamingCursor(size: 16, inline: true),
+              const StreamingCursor(size: 16, inline: true),
             ],
           ),
           if (visual)

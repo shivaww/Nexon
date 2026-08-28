@@ -55,7 +55,7 @@ class ChatSurface extends StatelessWidget {
   final ScrollController scrollController;
   final bool isSending;
   final String toolStatus;
-  final List<_TodoItem> activeTodos;
+  final List<TodoItem> activeTodos;
   final bool todoListVisible;
   final VoidCallback? onCloseTodoList;
   final String fileName;
@@ -102,7 +102,7 @@ class ChatSurface extends StatelessWidget {
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
-                  final nativeTool = _detectNativeToolCall(msg.text);
+                  final nativeTool = detectNativeToolCall(msg.text);
                   if (nativeTool == 'web_search' ||
                       nativeTool == 'search_web') {
                     state = AvatarAnimationState.searching;
@@ -182,7 +182,7 @@ class ChatSurface extends StatelessWidget {
               right: 0,
               bottom: 0,
               width: 280,
-              child: _TodoListPanel(
+              child: TodoListPanel(
                 todos: activeTodos,
                 onClose: onCloseTodoList,
               ),

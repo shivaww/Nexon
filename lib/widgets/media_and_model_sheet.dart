@@ -53,11 +53,13 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onProviderChanged,
     required this.onModelChanged,
     required this.onMaxTokensChanged,
+    required this.onTemperatureChanged,
     required this.onReasoningEnabledChanged,
     required this.onFetchModels,
     required this.onConfigureKey,
     required this.onDeleteCustomProvider,
     required this.sessionId,
+    required this.onSystemMessage,
   });
 
   final ProviderDefinition provider;
@@ -94,11 +96,16 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<String> onProviderChanged;
   final ValueChanged<String> onModelChanged;
   final ValueChanged<int> onMaxTokensChanged;
+  final ValueChanged<double> onTemperatureChanged;
   final ValueChanged<bool> onReasoningEnabledChanged;
   final Future<List<String>> Function() onFetchModels;
   final ValueChanged<String> onConfigureKey;
   final ValueChanged<String> onDeleteCustomProvider;
   final String sessionId;
+
+  /// Appends a system message to the active chat session (e.g. bridge
+  /// availability warnings surfaced from sheet toggles).
+  final Future<void> Function(String text) onSystemMessage;
 
   @override
   State<MediaAndModelSheet> createState() => _MediaAndModelSheetState();
@@ -126,7 +133,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   bool _isFetchingModels = false;
   bool _managedSubscriptionEnabled = false;
   late int _maxTokens;
+  late double _temperature;
+  bool _advancedExpanded = false;
   var _fetching = false;
+
+  /// Compact token-count label: 4096 -> "4k", 128000 -> "128k".
+  static String _fmtTokenCount(int v) {
+    if (v >= 1000) {
+      final k = v / 1000;
+      return k == k.roundToDouble()
+          ? '${k.round()}k'
+          : '${k.toStringAsFixed(1)}k';
+    }
+    return '$v';
+  }
   late String _selectedProviderId;
   late String _selectedModel;
   late bool _reasoningEnabled;
@@ -165,6 +185,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
       }
     });
     _maxTokens = widget.settings.maxTokens;
+    _temperature = widget.settings.temperature;
     _customLocal = List.of(widget.customProviders);
     _selectedProviderId = widget.provider.id;
     _selectedModel = widget.settings.model.isNotEmpty
@@ -250,6 +271,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               : _selectedModel;
         }
         _maxTokens = widget.settings.maxTokens;
+        _temperature = widget.settings.temperature;
         _reasoningEnabled = widget.settings.reasoningEnabled;
         _searchEnabled = widget.searchSettings.enabled;
         _agenticEnabled = widget.agenticEnabled;
@@ -1562,144 +1584,382 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         ),
         const SizedBox(height: 12),
 
-        // Token Slider Section
+        // ── Advanced generation settings ─────────────────────────────
         LiquidGlassSurface(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.zero,
           borderRadius: BorderRadius.circular(18),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Max Output Tokens',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2D241C),
-                    ),
+              InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: () =>
+                    setState(() => _advancedExpanded = !_advancedExpanded),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
                   ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
+                  child: Row(
                     children: [
-                      Text(
-                        '$_maxTokens tokens',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF7B4E2E).withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.tune_rounded,
+                          size: 18,
                           color: Color(0xFF7B4E2E),
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      GestureDetector(
-                        onTap: () async {
-                          final controller = TextEditingController(
-                            text: _maxTokens.toString(),
-                          );
-                          final customVal = await showDialog<int>(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              backgroundColor: const Color(0xFFFFFBF2),
-                              title: const Text(
-                                'Custom Token Limit',
-                                style: TextStyle(
-                                  color: Color(0xFF2D241C),
-                                  fontWeight: FontWeight.bold,
-                                ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Advanced',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF2D241C),
                               ),
-                              content: TextField(
-                                controller: controller,
-                                keyboardType: TextInputType.number,
-                                decoration: const InputDecoration(
-                                  labelText: 'Enter token limit',
-                                  hintText: 'e.g. 32768, 128000',
-                                ),
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx),
-                                  child: const Text('Cancel'),
-                                ),
-                                ElevatedButton(
-                                  onPressed: () {
-                                    final val = int.tryParse(controller.text);
-                                    Navigator.pop(ctx, val);
-                                  },
-                                  child: const Text('Set'),
-                                ),
-                              ],
                             ),
-                          );
-                          if (customVal != null && customVal > 0) {
-                            setState(() {
-                              _maxTokens = customVal;
-                            });
-                            widget.onMaxTokensChanged(customVal);
-                          }
-                        },
+                            SizedBox(height: 1),
+                            Text(
+                              'Temperature · Max output length',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: Color(0xFF8C7A6B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      AnimatedRotation(
+                        turns: _advancedExpanded ? 0.5 : 0,
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
                         child: const Icon(
-                          Icons.edit_outlined,
-                          size: 14,
-                          color: Color(0xFF7B4E2E),
+                          Icons.keyboard_arrow_down_rounded,
+                          color: Color(0xFF8C7A6B),
                         ),
                       ),
                     ],
                   ),
-                ],
+                ),
               ),
-              const SizedBox(height: 4),
-              Slider(
-                value: _maxTokens.toDouble().clamp(128, 16384),
-                min: 128,
-                max: 16384,
-                divisions: 63,
-                activeColor: const Color(0xFF7B4E2E),
-                inactiveColor: const Color(0xFFE7D8C4),
-                onChanged: (val) {
-                  setState(() => _maxTokens = (val as double).round());
-                  widget.onMaxTokensChanged((val as double).round());
-                },
-              ),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [512, 1024, 2048, 4096, 8192].map((preset) {
-                    final selected = _maxTokens == preset;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 6.0),
-                      child: ChoiceChip(
-                        label: Text(
-                          preset.toString(),
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: selected
-                                ? Colors.white
-                                : const Color(0xFF6C5946),
+              AnimatedCrossFade(
+                firstChild: const SizedBox.shrink(),
+                secondChild: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Divider(color: Color(0xFFE7D8C4), height: 1),
+                      const SizedBox(height: 14),
+
+                      // Temperature
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Temperature',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D241C),
+                            ),
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF5EFE4),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: const Color(0xFFE7D8C4),
+                                  ),
+                                ),
+                                child: Text(
+                                  _temperature.toStringAsFixed(2),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF7B4E2E),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() => _temperature = 1.0);
+                                  widget.onTemperatureChanged(1.0);
+                                },
+                                child: const Padding(
+                                  padding: EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.restart_alt_rounded,
+                                    size: 15,
+                                    color: Color(0xFF8C7A6B),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 2.5,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 7,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 16,
                           ),
                         ),
-                        selected: selected,
-                        selectedColor: const Color(0xFF7B4E2E),
-                        backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
+                        child: Slider(
+                          value: _temperature.clamp(0.0, 2.0),
+                          min: 0.0,
+                          max: 2.0,
+                          divisions: 40,
+                          activeColor: const Color(0xFF7B4E2E),
+                          inactiveColor: const Color(0xFFE7D8C4),
+                          onChanged: (val) {
+                            setState(() => _temperature = val);
+                            widget.onTemperatureChanged(val);
+                          },
                         ),
-                        side: BorderSide(
-                          color: selected
-                              ? Colors.transparent
-                              : const Color(0xFFE5DDD3),
-                        ),
-                        onSelected: (sel) {
-                          if (sel == true) {
-                            setState(() => _maxTokens = preset);
-                            widget.onMaxTokensChanged(preset);
-                          }
-                        },
                       ),
-                    );
-                  }).toList(),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Precise',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF8C7A6B),
+                              ),
+                            ),
+                            Text(
+                              'Balanced',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF8C7A6B),
+                              ),
+                            ),
+                            Text(
+                              'Creative',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Color(0xFF8C7A6B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // Max output length
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Max Output Length',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D241C),
+                            ),
+                          ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF5EFE4),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: const Color(0xFFE7D8C4),
+                                  ),
+                                ),
+                                child: Text(
+                                  '${_fmtTokenCount(_maxTokens)} tokens',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF7B4E2E),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              GestureDetector(
+                                onTap: () async {
+                                  final controller = TextEditingController(
+                                    text: _maxTokens.toString(),
+                                  );
+                                  final customVal = await showDialog<int>(
+                                    context: context,
+                                    builder: (ctx) => AlertDialog(
+                                      backgroundColor:
+                                          const Color(0xFFFFFBF2),
+                                      title: const Text(
+                                        'Custom Output Length',
+                                        style: TextStyle(
+                                          color: Color(0xFF2D241C),
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      content: TextField(
+                                        controller: controller,
+                                        keyboardType:
+                                            TextInputType.number,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Enter token limit',
+                                          hintText: 'e.g. 32768, 128000',
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(ctx),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () {
+                                            final val = int.tryParse(
+                                              controller.text,
+                                            );
+                                            Navigator.pop(ctx, val);
+                                          },
+                                          child: const Text('Set'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (customVal != null && customVal > 0) {
+                                    setState(() => _maxTokens = customVal);
+                                    widget.onMaxTokensChanged(customVal);
+                                  }
+                                },
+                                child: const Padding(
+                                  padding: EdgeInsets.all(4),
+                                  child: Icon(
+                                    Icons.edit_outlined,
+                                    size: 14,
+                                    color: Color(0xFF7B4E2E),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 2.5,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 7,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 16,
+                          ),
+                        ),
+                        child: Slider(
+                          value: _maxTokens
+                              .toDouble()
+                              .clamp(1024.0, 128000.0),
+                          min: 1024,
+                          max: 128000,
+                          divisions: 124,
+                          activeColor: const Color(0xFF7B4E2E),
+                          inactiveColor: const Color(0xFFE7D8C4),
+                          onChanged: (val) {
+                            final rounded = val.round();
+                            setState(() => _maxTokens = rounded);
+                            widget.onMaxTokensChanged(rounded);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            4096,
+                            8192,
+                            16384,
+                            32768,
+                            65536,
+                            128000,
+                          ].map((preset) {
+                            final selected = _maxTokens == preset;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 6.0),
+                              child: ChoiceChip(
+                                label: Text(
+                                  _fmtTokenCount(preset),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: selected
+                                        ? Colors.white
+                                        : const Color(0xFF6C5946),
+                                  ),
+                                ),
+                                selected: selected,
+                                selectedColor: const Color(0xFF7B4E2E),
+                                backgroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                side: BorderSide(
+                                  color: selected
+                                      ? Colors.transparent
+                                      : const Color(0xFFE5DDD3),
+                                ),
+                                onSelected: (sel) {
+                                  if (sel == true) {
+                                    setState(() => _maxTokens = preset);
+                                    widget.onMaxTokensChanged(preset);
+                                  }
+                                },
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Defaults to 128k. Lower it to reduce cost and latency, or raise it for long-form generation.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1.35,
+                          color: Color(0xFF8C7A6B),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+                crossFadeState: _advancedExpanded
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 240),
+                sizeCurve: Curves.easeOutCubic,
               ),
             ],
           ),
@@ -2207,7 +2467,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     }
                     final bridgeResult = await _checkBridgeAlive();
                     if (!bridgeResult['alive']) {
-                      _appendSystemMessage(
+                      await widget.onSystemMessage(
                         'Study Mode requires the Python bridge. Start it from Settings or run the bridge manually.',
                       );
                       return;

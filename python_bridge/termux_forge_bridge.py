@@ -441,9 +441,9 @@ class TermuxForgeBridge:
     ) -> dict:
         cmd = "flutter run"
         if device:
-            cmd += f" -d {device}"
+            cmd += f" -d {shlex.quote(str(device))}"
         if flavor:
-            cmd += f" --flavor {flavor}"
+            cmd += f" --flavor {shlex.quote(str(flavor))}"
         result = await self.executor.execute(cmd, cwd=cwd, timeout=300)
         return result.to_dict()
 
@@ -452,7 +452,7 @@ class TermuxForgeBridge:
     ) -> dict:
         cmd = "flutter test"
         if path:
-            cmd += f" {path}"
+            cmd += f" {shlex.quote(str(path))}"
         result = await self.executor.execute(cmd, cwd=cwd, timeout=120)
         return result.to_dict()
 
@@ -460,11 +460,18 @@ class TermuxForgeBridge:
         self, target: str = "apk", cwd: str = DEFAULT_CWD,
         release: bool = True, flavor: str | None = None,
     ) -> dict:
-        cmd = f"flutter build {target}"
+        allowed_targets = {"apk", "appbundle", "bundle", "ios", "web", "linux", "macos", "windows", "aar", "ipa"}
+        clean_target = str(target).strip().lower()
+        if clean_target not in allowed_targets:
+            raise JsonRpcError(
+                ErrorCode.INVALID_PARAMS,
+                f"Invalid build target: {target}. Allowed: {', '.join(sorted(allowed_targets))}",
+            )
+        cmd = f"flutter build {clean_target}"
         if release:
             cmd += " --release"
         if flavor:
-            cmd += f" --flavor {flavor}"
+            cmd += f" --flavor {shlex.quote(str(flavor))}"
         result = await self.executor.execute(cmd, cwd=cwd, timeout=600)
         return result.to_dict()
 
@@ -477,10 +484,17 @@ class TermuxForgeBridge:
     async def _install_package(
         self, package: str, manager: str = "pkg",
     ) -> dict:
+        clean_pkg = str(package).strip()
+        if not re.match(r'^[a-zA-Z0-9._+\-/@:]+$', clean_pkg):
+            raise JsonRpcError(
+                ErrorCode.INVALID_PARAMS,
+                f"Invalid package name format: {package}",
+            )
+        quoted_pkg = shlex.quote(clean_pkg)
         managers = {
-            "pkg": f"pkg install -y {package}",
-            "pip": f"pip install {package}",
-            "npm": f"npm install -g {package}",
+            "pkg": f"pkg install -y {quoted_pkg}",
+            "pip": f"pip install {quoted_pkg}",
+            "npm": f"npm install -g {quoted_pkg}",
         }
         cmd = managers.get(manager)
         if not cmd:
@@ -881,17 +895,11 @@ class TermuxForgeBridge:
                                 result = await self._process_read_url_response(retry_resp, target_url, query)
                         return result
                 except (aiohttp.ClientSSLError, ssl.SSLError) as ssl_err:
-                    logger.warning(
-                        "read_url: SSL verification failed for %s, retrying without verification: %s",
-                        target_url, ssl_err
-                    )
-                    # Retry without SSL verification (insecure but functional on Termux)
-                    async with session.get(
-                        target_url, allow_redirects=True, max_redirects=10,
-                        timeout=aiohttp.ClientTimeout(total=45),
-                        ssl=False
-                    ) as resp:
-                        return await self._process_read_url_response(resp, target_url, query)
+                    logger.error("read_url: SSL verification failed for %s: %s", target_url, ssl_err)
+                    return {
+                        "error": f"SSL verification failed for {target_url}: {ssl_err}. Ensure ca-certificates is installed (pkg install ca-certificates).",
+                        "url": target_url
+                    }
         except Exception as e:
             logger.error("read_url: Fetch failed completely. URL=%s, error=%s", target_url, e)
             return {"error": f"Fetch failed: {e}", "url": target_url}

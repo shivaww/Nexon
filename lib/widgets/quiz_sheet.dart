@@ -4,8 +4,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-class _QuizSheet extends StatefulWidget {
-  const _QuizSheet({required this.questions, super.key});
+class QuizSheet extends StatefulWidget {
+  const QuizSheet({required this.questions, super.key});
   final List<Map<String, dynamic>> questions;
 
   static List<Map<String, dynamic>> parseQuestions(String json) {
@@ -36,10 +36,10 @@ class _QuizSheet extends StatefulWidget {
   }
 
   @override
-  State<_QuizSheet> createState() => _QuizSheetState();
+  State<QuizSheet> createState() => QuizSheetState();
 }
 
-class _QuizSheetState extends State<_QuizSheet> {
+class QuizSheetState extends State<QuizSheet> {
   int _idx = 0;
   bool _review = false;
   final List<Map<String, dynamic>> _answers = [];
@@ -247,8 +247,8 @@ class _QuizSheetState extends State<_QuizSheet> {
   }
 }
 
-class _FeaturePill extends StatelessWidget {
-  const _FeaturePill({required this.icon, required this.label});
+class FeaturePill extends StatelessWidget {
+  const FeaturePill({required this.icon, required this.label});
   final IconData icon;
   final String label;
 

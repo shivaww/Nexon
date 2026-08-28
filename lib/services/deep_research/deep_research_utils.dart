@@ -16,5 +16,5 @@ void resolveToolPaths(Map<String, dynamic> params, String workspace) =>
     _resolveToolPaths(params, workspace);
 
 /// Fenced ```json marker carrying the research state map.
-String _researchStateFence(Map<String, dynamic> stateMap) =>
+String researchStateFence(Map<String, dynamic> stateMap) =>
     '```json\n{"research_state": ${jsonEncode(stateMap)}}\n```';
