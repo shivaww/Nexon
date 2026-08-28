@@ -104,6 +104,7 @@ export 'package:nexon/screens/kaggle_setup_screen.dart';
 
 
 /// Helper class for Text-To-Speech audio playback of model outputs.
+import 'package:nexon/services/tts_service.dart';
 export 'package:nexon/services/tts_service.dart';
 
 export 'package:nexon/widgets/glass_widgets.dart';
@@ -7116,7 +7117,7 @@ jobs:
     if (mounted) {
       setState(() => _toolStatus = '📋 Planning: $prompt');
     }
-    await _sendChatMessage(promptText: planInstruction);
+    await _sendMessage(promptText: planInstruction);
     if (mounted) setState(() => _toolStatus = '');
     return 'Plan initiated.';
   }

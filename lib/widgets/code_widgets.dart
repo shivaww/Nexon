@@ -1,6 +1,7 @@
 // Extracted from main.dart lines 9574-10010
 // Extracted on: 2026-08-26T18:20:45.727866
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';

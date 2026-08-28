@@ -116,7 +116,7 @@ class NativeToolsService {
     final completer = Completer<void>();
     _ensureRunningLock = completer.future;
     try {
-      await _ensureRunningInner(workspace, binaryPath);
+      await _ensureRunningInner(workspace: workspace, binaryPath: binaryPath);
       completer.complete();
     } catch (e) {
       completer.completeError(e);

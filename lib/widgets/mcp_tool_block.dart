@@ -499,6 +499,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
           Icons.account_tree_outlined,
           const Color(0xFF0369A1),
           'Outline  ${shortPath(p('file_path'))}',
+          null,
         );
       case 'workspace_cross_compare':
         return (
