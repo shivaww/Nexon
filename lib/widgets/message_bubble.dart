@@ -14,6 +14,7 @@ import 'package:nexon/main.dart';
 import 'package:nexon/widgets/nexon_chart.dart';
 import 'package:nexon/widgets/diff_viewer_widget.dart';
 import 'package:nexon/widgets/scrollable_table_builder.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 // ══════════════════════════════════════════════════════════════════════════════
 

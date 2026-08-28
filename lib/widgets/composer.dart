@@ -1,12 +1,14 @@
 // Extracted from main.dart lines 12788-13103
 // Extracted on: 2026-08-26T18:20:45.714058
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/widgets/liquid_glass_widgets.dart';
 import 'package:nexon/main.dart';
+import 'package:nexon/services/slash_command/slash_command_service.dart';
 
 class Composer extends StatelessWidget {
   const Composer({

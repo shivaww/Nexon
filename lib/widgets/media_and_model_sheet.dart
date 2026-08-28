@@ -15,6 +15,12 @@ import 'package:nexon/widgets/liquid_glass_widgets.dart';
 import 'package:nexon/main.dart';
 import 'package:nexon/services/voice/live_voice_engine.dart';
 import 'package:nexon/widgets/live_voice_overlay.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:nexon/services/update_service.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:nexon/services/drive_sync_service.dart';
 
 class MediaAndModelSheet extends StatefulWidget {
   const MediaAndModelSheet({
@@ -112,6 +118,9 @@ class MediaAndModelSheet extends StatefulWidget {
 }
 
 class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
+  SearchSettings get _searchSettings => widget.searchSettings;
+  set _searchSettings(SearchSettings s) => widget.onSearchSettingsChanged(s);
+
   List<ProviderDefinition> get _allProviders => [
         ...providerCatalog,
         ...widget.customProviders,
@@ -3081,61 +3090,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                             success: result.success,
                                             needsRelogin: result.needsRelogin,
                                           );
-      } else if (method == 'workspace_cross_compare' && decoded is Map) {
-        final groups = (decoded['results'] as List?) ??
-            (decoded['groups'] as List?) ?? [];
-        header = 'Cross-document comparison (${groups.length} docs)';
-        icon = Icons.compare_arrows;
-        accent = const Color(0xFF7C3AED);
-        for (final g in groups.whereType<Map>().take(6)) {
-          final file = g['file']?.toString() ??
-              g['file_path']?.toString() ??
-              g['document']?.toString() ?? '';
-          final chunks = (g['chunks'] as List?) ?? [];
-          for (final chunk in chunks.whereType<Map>().take(2)) {
-            final excerpt = chunk['content']?.toString() ??
-                chunk['excerpt']?.toString() ?? '';
-            final page = chunk['page']?.toString() ?? '';
-            detailChildren.add(
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFFBF2),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: const Color(0xFFE7D8C4)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      file + (page.isNotEmpty ? ' — Page $page' : ''),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      excerpt,
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF52606D),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }
-        }
-      } else {
+                                        } else {
                                           Future.delayed(const Duration(seconds: 3), () {
                                             if (mounted) setState(() => _backupResultMessage = '');
                                           });

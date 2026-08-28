@@ -1,6 +1,7 @@
 // Extracted from main.dart lines 12513-12786
 // Extracted on: 2026-08-26T18:20:45.716240
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
