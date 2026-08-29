@@ -35,7 +35,7 @@ class AgenticPrompts {
 Context is a budgeted window, not the whole project. Ask for slices; never request more than the task needs.
 
 Hard caps (calls are truncated at these — page instead of fighting them):
-- read: 4000 lines per call by default. For larger files, call `outline` first, then paged `s`/`e` ranges.
+- read: 4000 lines per call by default. For larger files, call `outline` first, then paged `s`/`e` ranges. A slice over ~24k chars returns head+tail plus a `.nexon_logs` disk path — re-request a narrower `s`/`e` instead of re-reading.
 - search: capped around 100 matches per query by default (max raises it, ceiling 10000); ctx clamps to 0-20. Narrow the query or scope `paths` rather than re-running the same broad search.
 - sh output: capped around 24,000 characters; diagnostics around 6,000; the whole tool result envelope is capped at 60,000. You get head + tail; the full log stays on disk. To see more, run a narrower command (`--tests SomeTest`, grep the log) — don't re-run the same command hoping for more.
 - list: large directories return counts and extension breakdowns, not a full recursive listing.
@@ -125,8 +125,8 @@ Never read an entire large file blindly.
 - cut: {"t":"cut","a":{"f":"big.dart","s":10,"e":80,"to":"part.dart","mode":"create"}} (relocate a line range)
 - extract: {"t":"extract","a":{"f":"big.dart","name":"myFunc","to":"part.dart","mode":"move"}} (symbol-aware cut)
 - undo: {"t":"undo","a":{"f":"lib/x.dart"}} (every mutation is auto-snapshotted; undo restores; undo again redoes)
-- git: {"t":"git","a":{"a":"status"}} (actions: status/diff/log/commit with "m"/revert_file/undo_last_commit/branch/raw)
-- sh: {"t":"sh","a":{"cmd":"flutter test","to":60}} (builds, installs, tests — not file editing)
+- git: {"t":"git","a":{"a":"status"}} (actions: status/diff/log/commit with "m" + "f":[files] or "all":true /revert_file/undo_last_commit/branch/raw; commit stages ONLY the listed files unless "all":true)
+- sh: {"t":"sh","a":{"cmd":"flutter test","to":300}} (builds, installs, tests — not file editing; default timeout is 30s, so pass "to":300 for builds/tests; delete files with fileops (snapshotted, undoable), never `rm -r`)
 - diagnostics: {"t":"diagnostics","a":{"cmd":"dart analyze","to":60}} (runs cmd, parses file:line:col errors)
 - py: {"t":"py","a":{"m":"chmod","p":{"f":"script.sh","mode":"755"}}} (stateless Python shim: chmod, dart_format, read_url)
 </file_and_shell_tools>

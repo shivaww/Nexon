@@ -230,6 +230,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   String _shellPermission = 'ask';
   // Per-session always-allow flag (reset when app restarts)
   bool _shellSessionAllow = false;
+  // Approved two-segment command prefixes (e.g. 'flutter test'), persisted.
+  final Set<String> _shellPrefixAllowed = {};
   String _agenticWorkspace = '/data/data/com.termux/files/home';
   String _customMcpUrl = '';
   final Map<String, StreamSubscription<String>> _activeSubscriptions = {};
@@ -1428,6 +1430,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       _artifactsEnabled = artifactsRaw ?? false;
       _svgVisualsEnabled = svgVisualsRaw ?? false;
       _shellPermission = prefs.getString('shell_permission_v1') ?? 'ask';
+      _shellPrefixAllowed
+        ..clear()
+        ..addAll(prefs.getStringList('shell_prefix_allowed_v1') ?? []);
       final loadedWorkspace = (agenticWorkspaceRaw ?? '').trim();
       _agenticWorkspace = loadedWorkspace.isNotEmpty
           ? loadedWorkspace
@@ -2023,6 +2028,29 @@ jobs:
         historyForApi.addAll(
           _compactHistoryForApi(_sessions[idx].messages, assistantMessageIndex),
         );
+
+        // Token budget: degrade oldest long messages to stubs before the
+        // provider hard-fails on context length (chars/4 token estimate).
+        int estTokens = 0;
+        for (final m in historyForApi) {
+          estTokens += m.text.length ~/ 4;
+        }
+        const kHistoryBudget = 90000;
+        for (var i = 1;
+            i < historyForApi.length - 8 && estTokens > kHistoryBudget;
+            i++) {
+          final m = historyForApi[i];
+          if (m.text.length > 200) {
+            final stub = '[context space: earlier turn omitted]';
+            estTokens -= (m.text.length - stub.length) ~/ 4;
+            historyForApi[i] = ChatMessage(
+              role: m.role,
+              text: stub,
+              isError: m.isError,
+              reasoning: m.reasoning,
+            );
+          }
+        }
 
         final stream = _chatClient.sendChatStream(
           provider: provider,
@@ -2686,11 +2714,14 @@ jobs:
                   final diagResult = await NativeToolsService().call(
                     workspace: _agenticWorkspace,
                     tool: 'diagnostics',
-                    args: {'cmd': 'dart analyze ${_verifyShellQuote(filePath)} 2>&1 | head -20', 'to': 30},
+                    args: {'cmd': 'dart analyze ${_verifyShellQuote(filePath)} 2>&1', 'to': 60},
                   );
-                  if (diagResult['out'] != null && (diagResult['out'] as String).contains('error')) {
+                  final diagOut = (diagResult['out'] ?? '').toString();
+                  if (diagOut.contains('error')) {
+                    toolOutputs.add('Tool Result [auto_verify]:\n\n$diagOut');
+                  } else {
                     toolOutputs.add(
-                      'Tool Result [auto_verify]:\n\n${diagResult['out']}',
+                      'Tool Result [auto_verify]: PASSED (dart analyze, 0 errors)',
                     );
                   }
                 } catch (_) {}
@@ -3036,8 +3067,14 @@ jobs:
     // Always keep the first message (initial instruction/goal)
     compacted.add(rawHistory.first);
 
-    // Preserve the last 3 messages fully to maintain immediate conversation flow
-    final intermediateEndIndex = rawHistory.length - 4;
+    // Preserve the last 3 messages fully to maintain immediate conversation flow.
+    // Inside an active tool loop keep a wider verbatim tail (last 8) so a pending
+    // patch's source read is never halved mid-loop.
+    final inToolLoop = rawHistory.reversed.take(12).any(
+      (m) => m.role == MessageRole.system && m.text.startsWith('Tool Result ['),
+    );
+    final tailKeep = inToolLoop ? 8 : 3;
+    final intermediateEndIndex = rawHistory.length - tailKeep - 1;
 
     for (int i = 1; i < rawHistory.length; i++) {
       final msg = rawHistory[i];
@@ -3112,6 +3149,23 @@ jobs:
         String newText = msg.text;
 
         if (newText.length > 2500) {
+          // Stub native ```json tool-call bodies (their edit text already lives
+          // in tool results); prose JSON that fails to parse stays verbatim.
+          newText = newText.replaceAllMapped(
+            RegExp(r'```json\s*\n([\s\S]*?)\n```'),
+            (m) {
+              try {
+                final d = jsonDecode(m.group(1)!);
+                if (d is Map && (d['t'] != null || d['calls'] != null)) {
+                  final names = d['calls'] is List
+                      ? (d['calls'] as List).map((c) => c['t']).join(',')
+                      : d['t'];
+                  return '[tool call: $names - body omitted for context space]';
+                }
+              } catch (_) {}
+              return m.group(0)!;
+            },
+          );
           newText = newText.replaceAllMapped(
             RegExp(r'<content>([\s\S]{1000,})</content>'),
             (match) =>
@@ -3188,11 +3242,17 @@ jobs:
 
     // Hard-deny patterns — deny wins over everything, even always-allow
     final denyPatterns = [
-      RegExp(r'\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)'),
+      RegExp(r'\brm\s+-[a-zA-Z]*[rf]'), // any rm carrying -r or -f
+      RegExp(r'\brm\s+--(recursive|force)'),
+      RegExp(r'\bfind\b.*(-delete|-exec\s+rm)'),
+      RegExp(r'\b(shred|truncate)\b'),
       RegExp(r'\bchmod\s+(777|666)'),
       RegExp(r'\bmkfs\b'),
       RegExp(r'\bdd\s+if='),
+      RegExp(r'>\s*/dev/(sd|block)'),
+      RegExp(r'\b(curl|wget)\b[^|]*\|\s*(ba)?sh'),
       RegExp(r'\bgit\s+push\s+.*(--force|-f|--force-with-lease)'),
+      RegExp(r'\bgit\s+(reset|clean)\s+--hard'),
     ];
 
     for (final seg in segments) {
@@ -3229,6 +3289,12 @@ jobs:
     return 'readonly';
   }
 
+  /// First two command segments, used as the prefix-memory key.
+  String _shellPrefixKey(String cmd) {
+    final s = cmd.trim().split(RegExp(r'\s+'));
+    return s.length >= 2 ? '${s[0]} ${s[1]}' : (s.isNotEmpty ? s[0] : '');
+  }
+
   /// Show permission dialog before executing a shell command.
   /// Returns true if the command should proceed.
   Future<bool> _askShellPermission(String command) async {
@@ -3240,6 +3306,8 @@ jobs:
     if (_shellPermission == 'always') return true;
     // Already allowed for this session
     if (_shellSessionAllow) return true;
+    // Previously approved command prefix (e.g. 'flutter test')
+    if (_shellPrefixAllowed.contains(_shellPrefixKey(command))) return true;
     // User previously denied always
     if (_shellPermission == 'never') return false;
 
@@ -3334,6 +3402,28 @@ jobs:
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(
+                children: [
+                  Expanded(
+                    child: TextButton.icon(
+                      icon: const Icon(
+                        Icons.playlist_add_check,
+                        size: 14,
+                        color: Color(0xFF7B4E2E),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, 'prefix'),
+                      label: Text(
+                        'Always allow "${_shellPrefixKey(command)}"',
+                        style: const TextStyle(
+                          color: Color(0xFF7B4E2E),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton.icon(
@@ -3421,6 +3511,15 @@ jobs:
     }
     if (result == 'session') {
       setState(() => _shellSessionAllow = true);
+      return true;
+    }
+    if (result == 'prefix') {
+      setState(() => _shellPrefixAllowed.add(_shellPrefixKey(command)));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        'shell_prefix_allowed_v1',
+        _shellPrefixAllowed.toList(),
+      );
       return true;
     }
     if (!mounted) return false;

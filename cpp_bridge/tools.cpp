@@ -1367,8 +1367,14 @@ Json toolMultiRead(const Json& args, const fs::path& baseDir) {
         if (lineNumbers) {
             int width = (int)std::to_string(lastLine).size();
             for (long i = start; i <= end && i <= (long)lines.size(); ++i) {
-                char buf[32]; snprintf(buf, sizeof(buf), "%*ld: ", width, i);
-                out << buf << lines[i - 1] << "\n";
+                const bool anchor = (i == start) || (i == end) || (i % 10 == 0);
+                if (anchor) {
+                    char buf[32]; snprintf(buf, sizeof(buf), "%*ld: ", width, i);
+                    out << buf;
+                } else {
+                    out << std::string(width + 2, ' ');
+                }
+                out << lines[i - 1] << "\n";
             }
         } else {
             for (long i = start; i <= end && i <= (long)lines.size(); ++i) {
@@ -1376,7 +1382,14 @@ Json toolMultiRead(const Json& args, const fs::path& baseDir) {
             }
         }
         entry.set("lines", Json::Num((double)lines.size()));
-        entry.set("c", Json::Str(out.str()));
+        std::string content = out.str();
+        const size_t kReadCap = 24000; // spill-to-disk like sh does
+        if (content.size() > kReadCap) {
+            entry.set("c", Json::Str(spillOutput(content, kReadCap, baseDir, "read")));
+            entry.set("spilled", Json::Bool(true));
+        } else {
+            entry.set("c", Json::Str(content));
+        }
         filesOut.arr.push_back(entry);
     }
     Json out = Json::Obj();
@@ -2358,7 +2371,27 @@ Json toolGit(const Json& args, const fs::path& baseDir) {
         // Keep .mpt_backups out of the commit: idempotently ensure it is in
         // .git/info/exclude before staging, so backup snapshots never leak
         // into the repo.
-        cmd = "mkdir -p .git/info && { grep -qxF '.mpt_backups/' .git/info/exclude 2>/dev/null || echo '.mpt_backups/' >> .git/info/exclude; } && git add -A && git commit -m " + shellQuote(m);
+        // Scoped commit: stage only listed files unless "all":true is explicit.
+        // Keeps .mpt_backups out of the commit via .git/info/exclude.
+        std::string ensureExclude = "mkdir -p .git/info && { grep -qxF '.mpt_backups/' .git/info/exclude 2>/dev/null || echo '.mpt_backups/' >> .git/info/exclude; } && ";
+        const std::vector<Json>* files = args.getArr2("f", "files");
+        bool stageAll = args.getBool2("all", "stage_all");
+        if (files && !files->empty()) {
+            std::string adds;
+            for (auto& fj : *files) {
+                if (fj.type == Json::Type::String) {
+                    adds += "git add -- " + shellQuote(fj.str) + " && ";
+                }
+            }
+            if (adds.empty()) {
+                Json r = Json::Obj(); r.set("err", Json::Str("'f' array must contain string paths")); return r;
+            }
+            cmd = ensureExclude + adds + "git commit -m " + shellQuote(m);
+        } else if (stageAll) {
+            cmd = ensureExclude + "git add -A && git commit -m " + shellQuote(m);
+        } else {
+            Json r = Json::Obj(); r.set("err", Json::Str("'f' (files to stage) or \"all\":true required — refusing to stage unrelated changes")); return r;
+        }
     } else if (action == "revert_file" || action == "rv") {
         std::string f = args.getStr2("f", "file");
         if (f.empty()) {
