@@ -1085,9 +1085,13 @@ class MessageBubble extends StatelessWidget {
           i == blocks.length - 1 &&
           block.isCode &&
           unclosedFence;
+      final isVisualLang = const {'svg', 'chart', 'json-chart'}
+          .contains(block.language.toLowerCase());
       widgets.add(
         streaming
-            ? StreamingCodeBlock(code: block.content, language: block.language)
+            ? (isVisualLang
+                  ? const _VisualStreamingPlaceholder()
+                  : StreamingCodeBlock(code: block.content, language: block.language))
             : _buildSingleBlock(context, block),
       );
     }
@@ -1292,5 +1296,37 @@ class MessageBubble extends StatelessWidget {
         ),
       );
     }
+  }
+}
+
+class _VisualStreamingPlaceholder extends StatelessWidget {
+  const _VisualStreamingPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFCF6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE7D8C4)),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 10),
+          Text(
+            'Rendering visual…',
+            style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
+          ),
+        ],
+      ),
+    );
   }
 }

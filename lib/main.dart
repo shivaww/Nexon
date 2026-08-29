@@ -364,9 +364,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   List<TodoItem> _activeTodos = [];
   bool _todoListVisible = false;
 
-  String _promptSig = '';
-  int _promptUseCount = 0;
-  static const int _promptCacheMaxUses = 5;
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -1985,27 +1982,20 @@ jobs:
             _promptEngine.addFeature(VoiceModePrompts.features);
           }
 
-          final newSig = _promptEngine.signature();
-          if (newSig != _promptSig) {
-            _promptSig = newSig;
-            _promptUseCount = 0;
-          }
 
-          systemPromptText = _promptEngine.assembleClean();
+          systemPromptText = _promptEngine.assemble();
         }
 
-        final bool shouldSendSystemPrompt = _deepResearchEnabled ||
-            systemPromptText.isEmpty ||
-            _promptUseCount == 0 ||
-            _promptUseCount >= _promptCacheMaxUses;
-
-        if (shouldSendSystemPrompt && systemPromptText.isNotEmpty) {
+        // System prompt goes out on EVERY request. Chat-completions APIs are
+        // stateless — the provider remembers nothing between calls — so
+        // skipping turns left the model instruction-less (SVG/web-search
+        // prompts never reached it) and the alternating prefix defeated
+        // provider-side KV-cache reuse. A byte-stable repeated prompt is what
+        // makes prefix caching fast.
+        if (systemPromptText.isNotEmpty) {
           historyForApi.add(
             ChatMessage(role: MessageRole.system, text: systemPromptText),
           );
-          _promptUseCount = 1;
-        } else {
-          _promptUseCount++;
         }
 
         final idx = _sessions.indexWhere((s) => s.id == targetSessionId);
@@ -7339,6 +7329,18 @@ jobs:
                   ProviderSettings.defaults(_provider);
               _settings[currentProv] = currentSettings.copyWith(
                 reasoningEnabled: enabled,
+              );
+            });
+            await _saveSettings();
+          },
+          onReasoningEffortChanged: (effort) async {
+            setState(() {
+              final currentProv = _selectedProviderId;
+              final currentSettings =
+                  _settings[currentProv] ??
+                  ProviderSettings.defaults(_provider);
+              _settings[currentProv] = currentSettings.copyWith(
+                reasoningEffort: effort,
               );
             });
             await _saveSettings();

@@ -61,6 +61,7 @@ class MediaAndModelSheet extends StatefulWidget {
     required this.onMaxTokensChanged,
     required this.onTemperatureChanged,
     required this.onReasoningEnabledChanged,
+    required this.onReasoningEffortChanged,
     required this.onFetchModels,
     required this.onConfigureKey,
     required this.onDeleteCustomProvider,
@@ -104,6 +105,7 @@ class MediaAndModelSheet extends StatefulWidget {
   final ValueChanged<int> onMaxTokensChanged;
   final ValueChanged<double> onTemperatureChanged;
   final ValueChanged<bool> onReasoningEnabledChanged;
+  final ValueChanged<String> onReasoningEffortChanged;
   final Future<List<String>> Function() onFetchModels;
   final ValueChanged<String> onConfigureKey;
   final ValueChanged<String> onDeleteCustomProvider;
@@ -159,6 +161,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
   late String _selectedProviderId;
   late String _selectedModel;
   late bool _reasoningEnabled;
+  late String _reasoningEffort;
   late bool _searchEnabled;
   late bool _agenticEnabled;
   late bool _artifactsEnabled;
@@ -201,6 +204,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         ? widget.settings.model
         : widget.provider.models.first;
     _reasoningEnabled = widget.settings.reasoningEnabled;
+    _reasoningEffort = widget.settings.reasoningEffort;
     _searchEnabled = widget.searchSettings.enabled;
     _agenticEnabled = widget.agenticEnabled;
     _artifactsEnabled = widget.artifactsEnabled;
@@ -261,6 +265,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         oldWidget.settings.maxTokens != widget.settings.maxTokens ||
         oldWidget.settings.reasoningEnabled !=
             widget.settings.reasoningEnabled ||
+        oldWidget.settings.reasoningEffort !=
+            widget.settings.reasoningEffort ||
         oldWidget.searchSettings.enabled != widget.searchSettings.enabled ||
         oldWidget.agenticEnabled != widget.agenticEnabled ||
         oldWidget.deepResearchEnabled != widget.deepResearchEnabled ||
@@ -282,6 +288,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         _maxTokens = widget.settings.maxTokens;
         _temperature = widget.settings.temperature;
         _reasoningEnabled = widget.settings.reasoningEnabled;
+      _reasoningEffort = widget.settings.reasoningEffort;
         _searchEnabled = widget.searchSettings.enabled;
         _agenticEnabled = widget.agenticEnabled;
         _artifactsEnabled = widget.artifactsEnabled;
@@ -2011,6 +2018,56 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             ],
           ),
         ),
+        if (_reasoningEnabled) ...[
+          const SizedBox(height: 12),
+          LiquidGlassSurface(
+            padding: const EdgeInsets.all(16),
+            borderRadius: BorderRadius.circular(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Thinking Depth',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF2D241C),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'How hard the model thinks before answering. Lower = faster first token, higher = deeper reasoning.',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: ProviderSettings.reasoningEfforts.map((level) {
+                    final selected = _reasoningEffort == level;
+                    return ChoiceChip(
+                      label: Text(level),
+                      selected: selected,
+                      selectedColor: const Color(0xFF7B4E2E),
+                      backgroundColor: Colors.transparent,
+                      side: const BorderSide(color: Color(0xFFE5DDD3)),
+                      labelStyle: TextStyle(
+                        fontSize: 12,
+                        color: selected ? Colors.white : const Color(0xFF2D241C),
+                      ),
+                      onSelected: (sel) {
+                        if (sel) {
+                          setState(() => _reasoningEffort = level);
+                          widget.onReasoningEffortChanged(level);
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -2342,7 +2399,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
+              const Expanded(
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
@@ -2359,6 +2417,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
+                ),
               ),
               Switch(
                 value: _svgVisualsEnabled,
@@ -2380,7 +2439,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
+              const Expanded(
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
@@ -2397,6 +2457,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                   ),
                 ],
+                ),
               ),
               Switch(
                 value: _deepResearchEnabled,
@@ -2475,7 +2536,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       return;
                     }
                     final bridgeResult = await _checkBridgeAlive();
-                    if (!bridgeResult['alive']) {
+                    if (bridgeResult['ok'] != true) {
                       await widget.onSystemMessage(
                         'Study Mode requires the Python bridge. Start it from Settings or run the bridge manually.',
                       );

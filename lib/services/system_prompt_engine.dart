@@ -30,7 +30,10 @@ class SystemPromptEngine {
       'or tool the prompt asks for, no re-deriving rules, no quoting sections '
       'back. When a rule matches the task, act on it at once. Spend all '
       'thinking on the actual request of the user - the data, the code, the '
-      'question - never on this prompt.';
+      'question - never on this prompt.\n'
+      'Emit no XML-style markup anywhere in a reply: no <invoke>, '
+      '<tool_call>, or similar tags. Tool calls live only inside '
+      '```json fences.';
 
   // ── Default variable sections (overridable per feature state) ───────────
 
@@ -198,7 +201,7 @@ class SystemPromptEngine {
 
   static String _stripXml(String prompt) {
     return prompt
-        .replaceAll(RegExp(r'</?[a-z_]+>'), '')
+        .replaceAll(RegExp(r'</?[a-zA-Z][a-zA-Z0-9_:-]*>'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
   }

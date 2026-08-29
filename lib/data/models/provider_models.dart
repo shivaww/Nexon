@@ -35,6 +35,7 @@ class ProviderSettings {
     required this.maxTokens,
     this.fallbackApiKeys = const [],
     this.reasoningEnabled = true,
+    this.reasoningEffort = 'low',
     this.temperature = 1.0,
   });
 
@@ -49,6 +50,7 @@ class ProviderSettings {
       maxTokens: defaultMaxOutputTokens,
       fallbackApiKeys: const [],
       reasoningEnabled: true,
+      reasoningEffort: 'low',
       temperature: 1.0,
     );
   }
@@ -65,6 +67,7 @@ class ProviderSettings {
               .toList() ??
           const [],
       reasoningEnabled: json['reasoningEnabled'] as bool? ?? true,
+      reasoningEffort: _validEffort(json['reasoningEffort']?.toString()),
       temperature: _readDouble(json['temperature'], 1.0),
     );
   }
@@ -75,6 +78,10 @@ class ProviderSettings {
   final int maxTokens;
   final List<String> fallbackApiKeys;
   final bool reasoningEnabled;
+
+  /// Thinking depth level: low | medium | high | extra | max. Mapped to
+  /// each provider's reasoning knobs (reasoning_effort / thinking budget).
+  final String reasoningEffort;
 
   /// Sampling temperature sent to the provider (0.0 – 2.0). Lower values
   /// are more deterministic, higher values more creative.
@@ -87,6 +94,7 @@ class ProviderSettings {
     int? maxTokens,
     List<String>? fallbackApiKeys,
     bool? reasoningEnabled,
+    String? reasoningEffort,
     double? temperature,
   }) {
     return ProviderSettings(
@@ -96,6 +104,7 @@ class ProviderSettings {
       maxTokens: maxTokens ?? this.maxTokens,
       fallbackApiKeys: fallbackApiKeys ?? this.fallbackApiKeys,
       reasoningEnabled: reasoningEnabled ?? this.reasoningEnabled,
+      reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       temperature: temperature ?? this.temperature,
     );
   }
@@ -108,6 +117,7 @@ class ProviderSettings {
       'maxTokens': maxTokens,
       'fallbackApiKeys': fallbackApiKeys,
       'reasoningEnabled': reasoningEnabled,
+      'reasoningEffort': reasoningEffort,
       'temperature': temperature,
     };
   }
@@ -122,6 +132,19 @@ class ProviderSettings {
     if (value is int) return value;
     if (value is num) return value.round();
     return int.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  static const List<String> reasoningEfforts = [
+    'low',
+    'medium',
+    'high',
+    'extra',
+    'max',
+  ];
+
+  static String _validEffort(String? raw) {
+    final v = (raw ?? '').toLowerCase();
+    return reasoningEfforts.contains(v) ? v : 'low';
   }
 }
 

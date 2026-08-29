@@ -16,7 +16,7 @@ class ChatClient {
   /// chat turns so each request skips a full handshake.
   static final HttpClient _sharedHttpClient = HttpClient()
     ..connectionTimeout = const Duration(seconds: 30)
-    ..idleTimeout = const Duration(seconds: 60)
+    ..idleTimeout = const Duration(seconds: 120)
     ..autoUncompress = true;
 
   /// Models that accept image input (multimodal/vision).
@@ -346,7 +346,7 @@ class ChatClient {
                 errorStr.contains('500') ||
                 errorStr.contains('503');
             if (!isRateLimit) break;
-            if (retry < 2) await Future.delayed(const Duration(seconds: 20));
+            if (retry < 2) await Future.delayed(Duration(milliseconds: retry == 0 ? 2000 : 6000));
           }
         }
 
@@ -486,7 +486,7 @@ class ChatClient {
                 errorStr.contains('500') ||
                 errorStr.contains('503');
             if (!isRateLimit) break;
-            if (retry < 2) await Future.delayed(const Duration(seconds: 20));
+            if (retry < 2) await Future.delayed(Duration(milliseconds: retry == 0 ? 2000 : 6000));
           }
         }
 
@@ -605,12 +605,16 @@ class ChatClient {
               r'\b(latest|recent|current|today|news|update|updated|release|price|pricing|202\d)\b',
               caseSensitive: false,
             ).hasMatch(query);
-            final effectiveTopic = topic ?? (isFreshQuery ? 'news' : null);
+            // Accuracy: never force topic=news — it narrows results to news
+            // outlets and skews non-news queries (pricing, docs, benchmarks).
+            final effectiveTopic = topic;
             final effectiveTimeRange = trVal ?? (isFreshQuery ? 'month' : null);
+            // Speed: Tavily 'advanced' depth is several times slower; use it
+            // only when explicitly requested by the caller.
             final effectiveDepth =
                 searchDepth == 'advanced' || searchDepth == 'basic'
                 ? searchDepth!
-                : (isFreshQuery ? 'advanced' : 'basic');
+                : 'basic';
 
             final Map<String, dynamic> payload = {
               'api_key': currentKey,
@@ -869,7 +873,7 @@ class ChatClient {
         modelLower.contains('o4')) {
       payload.remove('temperature');
       payload.remove('top_p');
-      payload['reasoning_effort'] = 'high';
+      payload['reasoning_effort'] = _openAiEffort(settings.reasoningEffort);
       return;
     }
 
@@ -886,7 +890,7 @@ class ChatClient {
         (modelLower.contains('thinking') || provider.id == 'anthropic')) {
       payload['thinking'] = {
         'type': 'enabled',
-        'budget_tokens': (settings.maxTokens * 0.6).round().clamp(1024, 32768),
+        'budget_tokens': _thinkingBudget(settings.reasoningEffort),
       };
       payload.remove('temperature');
       return;
@@ -905,6 +909,37 @@ class ChatClient {
         modelLower.contains('qwq') ||
         modelLower.contains('qwen3')) {
       payload['enable_thinking'] = true;
+      payload['reasoning_effort'] = _openAiEffort(settings.reasoningEffort);
+    }
+  }
+
+  /// Maps the user's thinking-depth level to OpenAI reasoning_effort values.
+  static String _openAiEffort(String level) {
+    switch (level) {
+      case 'medium':
+        return 'medium';
+      case 'high':
+      case 'extra':
+      case 'max':
+        return 'high';
+      default:
+        return 'low';
+    }
+  }
+
+  /// Maps the user's thinking-depth level to an Anthropic thinking budget.
+  static int _thinkingBudget(String level) {
+    switch (level) {
+      case 'medium':
+        return 4096;
+      case 'high':
+        return 8192;
+      case 'extra':
+        return 16384;
+      case 'max':
+        return 32768;
+      default:
+        return 2048;
     }
   }
 

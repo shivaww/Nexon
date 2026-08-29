@@ -339,6 +339,14 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
     if (svgIdx < 0) return s;
     if (svgIdx > 0) s = s.substring(svgIdx);
 
+    // Truncate any trailing markdown/text after the closing </svg> tag.
+    // LLMs often append captions inside the fence; leaving them in causes
+    // flutter_svg to throw an XML parse error once the response completes.
+    final endIdx = s.lastIndexOf('</svg>');
+    if (endIdx > 0) {
+      s = s.substring(0, endIdx + 6);
+    }
+
     s = s.replaceFirstMapped(
       RegExp(
         r'''(<svg[^>]*?)\s+width=["']?[\d.%]+["']?''',
@@ -373,10 +381,9 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
       RegExp(r'<foreignObject[^>]*>[\s\S]*?</foreignObject>', caseSensitive: false),
       (_) => '',
     );
-    s = s.replaceAllMapped(
-      RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
-      (_) => '',
-    );
+    // NOTE: <style> tags are intentionally preserved. Stripping them breaks
+    // the CSS classes LLMs use for chart styling. flutter_svg safely ignores
+    // unsupported CSS properties and does not execute scripts.
     s = s.replaceAllMapped(
       RegExp(r'''\son\w+\s*=\s*["'][^"']*["']''', caseSensitive: false),
       (_) => '',

@@ -249,7 +249,19 @@ class SvgVisualsPrompts {
   static const String features = '''
 <svg_visuals>
 
+<when_to_use>
+Visuals are a first-class explanation tool in this app — do NOT wait for the user to ask for a chart or diagram. Whenever the explanation would be clearer drawn than described, emit the visual alongside the prose:
+- Comparisons (A vs B, before/after, bigger/smaller): numbers -> ```chart bar or grouped; non-numeric contrast -> ```svg side-by-side diagram.
+- Maths: functions, equations, geometry, coordinate work -> ```chart type cartesian; method intuition, theorem ideas, solution steps -> ```svg annotated diagram.
+- Science and teaching: structures, anatomy, cycles, organs, molecules, ecosystems, machines, space -> ```svg labeled diagram; measurements, experiment readings, any dataset -> ```chart.
+- Magnitudes, shares, trends, rankings, distributions mentioned in the answer -> ```chart.
+- Processes, flows, hierarchies, architectures, taxonomies -> ```svg, or ```chart type mindmap for pure trees.
+Rule of thumb: if you catch yourself describing shapes, positions, sizes, or step order in words alone, draw it instead. One visual per core idea, then prose walking through it (start with 'In the visual above, ...').
+Skip only for trivial one-line answers and small talk.
+</when_to_use>
+
 <choose_the_right_visual>
+HARD RULE: the app ships ready-made native chart renderers (```chart). For any standard chart type (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, mindmap) you MUST emit ```chart - hand-built SVG charts are forbidden. Hand-built ```svg is ONLY for custom explanatory diagrams (structures, flows, anatomy) no ready-made type covers.
 Decide the format BEFORE generating anything:
 - Quantitative data (values, counts, trends, shares, comparisons across categories or time) -> ```chart. The app renders it as a native interactive chart; you only pass values.
 - Structure, anatomy, concepts, flows, architecture, processes, illustrations (e.g. "structure of a chloroplast", "how a compiler works", "org chart", "water cycle") -> ```svg with clear labels.
@@ -272,7 +284,7 @@ Focus on clear labels, good layout, and informative annotations.
 
 <charts>
 Use for bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, cartesian, and mindmap charts: ```chart
-Simple line-based format \u2014 pass only values.
+Simple line-based format — pass only values. The fence line must be exactly ```chart with nothing else on it. FORBIDDEN for any quantitative visual: hand-built ```svg charts, ASCII charts, matplotlib/Chart.js/any chart code, or describing numbers in prose instead of emitting a block.
 
 BAR/GROUPED BAR:
 type: bar
@@ -308,11 +320,13 @@ Android: 45
 iOS: 30
 Web: 25
 
-SCATTER:
+SCATTER (x,y pairs — one "name: x, y" line per point):
 type: scatter
-title: Distribution
-labels: A, B, C, D, E
-series: Points = 10, 25, 15, 40, 30
+title: Height vs Weight
+A: 170, 65
+B: 180, 80
+C: 160, 55
+D: 175, 70
 
 RADAR/SPIDER:
 type: radar
@@ -336,11 +350,12 @@ row: 3, 7, 5
 row: 8, 4, 9
 row: 2, 6, 1
 
-BUBBLE:
+BUBBLE (same pair format; the y value sets bubble size):
 type: bubble
 title: Market Size
-labels: Tech, Health, Finance
-series: Size = 80, 45, 120
+Tech: 10, 80
+Health: 20, 45
+Finance: 30, 120
 
 GANTT/TIMELINE:
 type: gantt
@@ -429,8 +444,13 @@ class WebSearchPrompts {
       'actions in plain language ("searching for the latest release notes", '
       '"checking that page"). The user does not see your tool calls or '
       'their raw results.\n'
+      'Before searching, say one short line about what you are looking for, '
+      'so the wait feels intentional.\n'
       'Keep prose between tool calls minimal: a short line on what you\'re '
       'about to do, then the call.\n'
+      'If a search comes back empty, thin, or a provider fails or is slow, '
+      'say so plainly ("first search came back empty - trying a different '
+      'query") and never silently fall back to memory.\n'
       'When you answer, synthesize what you found into a normal response '
       'with inline citations \u2014 don\'t narrate the search/read process '
       'step by step.';
