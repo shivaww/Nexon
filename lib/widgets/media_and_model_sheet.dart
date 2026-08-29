@@ -21,6 +21,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:nexon/services/drive_sync_service.dart';
+import 'package:nexon/services/termux_bridge/native_tools_service.dart';
 
 class MediaAndModelSheet extends StatefulWidget {
   const MediaAndModelSheet({
@@ -2123,11 +2124,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           _showExclusivitySnackBar('Agentic File Access', 'Study Mode');
                           return;
                         }
-                        final result = await _checkBridgeAlive();
+                        // Agentic's fast path is the C++ tools binary; the Python
+                        // bridge is only needed for background/MCP/dart tools.
+                        final binary = await NativeToolsService.findBinary();
                         if (!mounted) return;
-                        if (result['ok'] != true) {
-                          final reason = result['reason']?.toString() ?? 'bridge_unreachable';
-                          _showDeepResearchSetupDialog(reason: reason);
+                        if (binary == null) {
+                          _showDeepResearchSetupDialog(reason: 'native_tools_missing');
                           return;
                         }
                       }

@@ -1424,16 +1424,33 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       _prefs = prefs;
       _settings = nextSettings;
       _searchSettings = loadedSearchSettings;
-      _agenticEnabled = agenticRaw ?? true;
+      _agenticEnabled = agenticRaw ?? false;
       _artifactsEnabled = artifactsRaw ?? false;
       _svgVisualsEnabled = svgVisualsRaw ?? false;
       _shellPermission = prefs.getString('shell_permission_v1') ?? 'ask';
-      _agenticWorkspace =
-          agenticWorkspaceRaw ?? '/data/data/com.termux/files/home';
+      final loadedWorkspace = (agenticWorkspaceRaw ?? '').trim();
+      _agenticWorkspace = loadedWorkspace.isNotEmpty
+          ? loadedWorkspace
+          : '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
       _deepResearchEnabled = deepResearchRaw ?? false;
       _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
       _userName = prefs.getString('user_name_v1') ?? '';
+      // Enforce mode exclusivity at load: prefs may predate the toggle guards,
+      // and conflicting modes dilute the system prompt (models drop tool
+      // discipline when agentic + search instructions are mixed).
+      if (_studyModeEnabled && _agenticEnabled) _agenticEnabled = false;
+      if (_deepResearchEnabled && _agenticEnabled) _deepResearchEnabled = false;
+      if (_agenticEnabled && _searchSettings.enabled) {
+        _searchSettings = SearchSettings(
+          enabled: false,
+          provider: _searchSettings.provider,
+          apiKey: _searchSettings.apiKey,
+          fallbackApiKeys: _searchSettings.fallbackApiKeys,
+          googleCx: _searchSettings.googleCx,
+          customProviders: _searchSettings.customProviders,
+        );
+      }
       SlashCommandService.agenticAccessEnabled = _agenticEnabled;
       _writerContextBudget = writerContextBudgetRaw ?? 32000;
       _customProviders = loadedCustom;
@@ -2262,12 +2279,28 @@ jobs:
             fullText.contains('"t"') ||
             fullText.contains('<invoke')) {
           final nativeCalls = _findNativeToolCalls(fullText);
+          if (nativeCalls.isEmpty &&
+              (_agenticEnabled || _studyModeEnabled) &&
+              fullText.contains('```json') &&
+              fullText.contains('"t"')) {
+            toolOutputs.add(
+              'Tool Result [format]:\n\n{"error":"a ```json block looked like a tool call but was not valid JSON. Emit exactly one fenced json block: {"t": "tool", "a": {...}} with strictly valid JSON - double quotes, no trailing commas."}',
+            );
+            executedTools = true;
+          }
           for (final nativeCall in nativeCalls) {
             final toolName = (nativeCall['t'] ?? '').toString();
             if (toolName.isEmpty) continue;
             Map<String, dynamic> toolArgs = const {};
             final rawArgs = nativeCall['a'];
-            if (rawArgs is Map<String, dynamic>) toolArgs = rawArgs;
+            if (rawArgs is Map<String, dynamic>) {
+              toolArgs = rawArgs;
+            } else if (rawArgs is String && rawArgs.trim().isNotEmpty) {
+              try {
+                final decodedArgs = jsonDecode(rawArgs);
+                if (decodedArgs is Map<String, dynamic>) toolArgs = decodedArgs;
+              } catch (_) {}
+            }
 
             if (!NativeToolsService.handles(toolName)) {
               // ── Non-cpp JSON tools ──────────────────────────────────────
@@ -2910,7 +2943,6 @@ jobs:
           if (targetSessionId == _activeSessionId) {
             _scrollToBottom();
           }
-          await Future.delayed(const Duration(seconds: 2));
         } else {
           shouldContinue = false;
         }
@@ -7194,8 +7226,12 @@ jobs:
             await _saveSettings();
           },
           onAgenticWorkspaceChanged: (val) async {
+            final trimmed = val.trim();
+            // Never persist a blank workspace: an empty path makes every
+            // tool call fail and the workspace look 'cleared'.
+            if (trimmed.isEmpty) return;
             setState(() {
-              _agenticWorkspace = val;
+              _agenticWorkspace = trimmed;
             });
             await _saveSettings();
           },

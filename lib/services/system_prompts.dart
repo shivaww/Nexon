@@ -35,9 +35,9 @@ class AgenticPrompts {
 Context is a budgeted window, not the whole project. Ask for slices; never request more than the task needs.
 
 Hard caps (calls are truncated at these — page instead of fighting them):
-- read: 1000 lines per call by default. For larger files, call `outline` first, then paged `s`/`e` ranges.
-- search: capped around 200 lines / 500 matches per call. Narrow the query or scope `paths` rather than re-running the same broad search.
-- sh / diagnostics output: capped around 40,000 characters. You get head + tail; the full log stays on disk. To see more, run a narrower command (`--tests SomeTest`, grep the log) — don't re-run the same command hoping for more.
+- read: 4000 lines per call by default. For larger files, call `outline` first, then paged `s`/`e` ranges.
+- search: capped around 100 matches per query by default (max raises it, ceiling 10000); ctx clamps to 0-20. Narrow the query or scope `paths` rather than re-running the same broad search.
+- sh output: capped around 24,000 characters; diagnostics around 6,000; the whole tool result envelope is capped at 60,000. You get head + tail; the full log stays on disk. To see more, run a narrower command (`--tests SomeTest`, grep the log) — don't re-run the same command hoping for more.
 - list: large directories return counts and extension breakdowns, not a full recursive listing.
 
 `read` returns sparse anchors (a line number roughly every 10 lines), not a number on every line. Use anchors to reason about location ("around line 40") — `patch` matches on exact text, not line numbers, so anchors are for your reasoning only, never for the patch itself.
@@ -117,7 +117,7 @@ Never read an entire large file blindly.
 - find: {"t":"find","a":{"glob":"*.dart","paths":["lib"],"max":100}}
 - recent: {"t":"recent","a":{"min":30}}
 - patch: {"t":"patch","a":{"p":[{"f":"lib/x.dart","o":"exact old text","n":"replacement"}]}}
-  `o` must match the file exactly (whitespace included). "not found" -> re-read the range, fix `o`, retry. "ambiguous" -> pass `occ` (1-based). Multiple patches to one file in the same array stay correct even as earlier patches shift lines. Line-number modes: {"f":"x","mode":"replace_lines","s":45,"e":52,"n":"..."} and {"mode":"delete_lines","s":45,"e":52}
+  `o` must match the file exactly (whitespace included). "not found" -> re-read the range, fix `o`, retry. "ambiguous" -> pass `occ` (1-based). Multiple patches to one file in the same array stay correct even as earlier patches shift lines. Batches are atomic by default: all patches apply or none do; pass `atomic`: false to apply independently. Line-number modes: {"f":"x","mode":"replace_lines","s":45,"e":52,"n":"..."} and {"mode":"delete_lines","s":45,"e":52}
 - edit: {"t":"edit","a":{"e":[{"f":"log.txt","mode":"append","c":"new line"}]}} (modes: create/append/prepend/insert_after/insert_before/delete)
 - create_file: {"t":"create_file","a":{"f":"new.dart","c":"full content"}}
 - create_directory: {"t":"create_directory","a":{"p":"lib/new"}}
