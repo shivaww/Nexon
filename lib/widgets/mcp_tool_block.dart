@@ -11,9 +11,8 @@ import 'package:nexon/widgets/tool_card.dart';
 import 'package:nexon/main.dart';
 
 class McpToolBlock extends StatefulWidget {
-  const McpToolBlock({required this.mcpJson, this.isXml = false, super.key});
+  const McpToolBlock({required this.mcpJson, super.key});
   final String mcpJson;
-  final bool isXml;
 
   @override
   State<McpToolBlock> createState() => _McpToolBlockState();
@@ -626,58 +625,12 @@ class _McpToolBlockState extends State<McpToolBlock> {
     Map<String, dynamic> params = {};
     String formattedContent = widget.mcpJson;
 
-    if (widget.isXml) {
-      final methodMatch = RegExp(
-        r'<method[^>]*?>([\s\S]*?)</method\s*>',
-        caseSensitive: false,
-      ).firstMatch(widget.mcpJson);
-      if (methodMatch != null) {
-        method = methodMatch.group(1)?.trim() ?? method;
-      }
-
-      // Parse XML params for description (direct tags)
-      final regex = RegExp(
-        r'<([a-zA-Z0-9_]+)(?:\s+[^>]*?)?>([\s\S]*?)</\1\s*>',
-        caseSensitive: false,
-      );
-      for (final match in regex.allMatches(widget.mcpJson)) {
-        final key = match.group(1)!.toLowerCase();
-        if (key != 'method') {
-          params[key] = match.group(2)?.trim() ?? '';
-        }
-      }
-
-      // Fallback: <PARAM name="key">value</PARAM>
-      final paramRegex = RegExp(
-        r'''<[Pp][Aa][Rr][Aa][Mm]\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp][Aa][Rr][Aa][Mm]>''',
-      );
-      for (final m in paramRegex.allMatches(widget.mcpJson)) {
-        final key = m.group(1)!.toLowerCase();
-        if (key != 'method') {
-          params[key] = m.group(2)?.trim() ?? '';
-        }
-      }
-
-      // Fallback: <parameter name="key">value</parameter>
-      final paramRegex2 = RegExp(
-        r'''<[Pp]arameter\s+name=["']([a-zA-Z0-9_]+)["']\s*>([\s\S]*?)</[Pp]arameter>''',
-        caseSensitive: false,
-      );
-      for (final m in paramRegex2.allMatches(widget.mcpJson)) {
-        final key = m.group(1)!.toLowerCase();
-        if (key != 'method') {
-          params[key] = m.group(2)?.trim() ?? '';
-        }
-      }
-      formattedContent = widget.mcpJson.trim();
-    } else {
-      try {
-        final decoded = jsonDecode(widget.mcpJson) as Map<String, dynamic>;
-        method = decoded['method']?.toString() ?? method;
-        params = (decoded['params'] as Map<String, dynamic>?) ?? {};
-        formattedContent = const JsonEncoder.withIndent('  ').convert(decoded);
-      } catch (_) {}
-    }
+    try {
+      final decoded = jsonDecode(widget.mcpJson) as Map<String, dynamic>;
+      method = decoded['method']?.toString() ?? method;
+      params = (decoded['params'] as Map<String, dynamic>?) ?? {};
+      formattedContent = const JsonEncoder.withIndent('  ').convert(decoded);
+    } catch (_) {}
 
     final (icon, color, label, _) = _describe(method, params);
 

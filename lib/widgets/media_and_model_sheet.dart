@@ -874,7 +874,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             widget.onFileAttached(
               AttachedFile(
                 name: fileName,
-                content: '[Workspace file — use <mcp_request> to query]',
+                content: '[Workspace file — use workspace_search or workspace_read_page to query]',
                 workspacePath: workspacePath,
               ),
             );

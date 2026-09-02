@@ -544,50 +544,24 @@ class MessageBubble extends StatelessWidget {
     final widgets = <Widget>[];
     int currentIndex = 0;
 
-    final tags = [
-      (tag: '<search_request>', isXml: false),
-      (tag: '<read_url>', isXml: false),
-      (tag: '<mcp_request>', isXml: false),
-      (tag: '<tool_request>', isXml: true),
-      (tag: '<command>', isXml: true),
-      (tag: '<workspace_list>', isXml: false),
-      (tag: '<workspace_search>', isXml: false),
-      (tag: '<workspace_cross_compare>', isXml: false),
-      (tag: '<workspace_read_page>', isXml: false),
-      (tag: '<workspace_get_outline>', isXml: false),
-      (tag: '<workspace_ingest>', isXml: false),
-    ];
-
     while (currentIndex < text.length) {
       final substring = text.substring(currentIndex);
 
       // Native JSON tool calls: fenced ```json blocks shaped {"t":...} or
-      // {"calls":[...]} render as tool blocks, just like the legacy tags.
+      // {"calls":[...]} render as tool cards.
       final toolFence = findNativeToolFence(substring);
       final researchFence = findFenceWithKeys(
         substring,
         const ['research_plan', 'research_state'],
       );
-      int earliestIndex = -1;
-      var matchedTag = tags.first;
 
-      for (final tagInfo in tags) {
-        final idx = substring.indexOf(tagInfo.tag);
-        if (idx != -1) {
-          if (earliestIndex == -1 || idx < earliestIndex) {
-            earliestIndex = idx;
-            matchedTag = tagInfo;
-          }
-        }
-      }
-
-      if (researchFence != null &&
+      final useResearch = researchFence != null &&
           (toolFence == null ||
-              (researchFence['start'] as int) < toolFence.start) &&
-          (earliestIndex == -1 ||
-              (researchFence['start'] as int) < earliestIndex)) {
-        final textBefore =
-            substring.substring(0, researchFence['start'] as int).trim();
+              (researchFence['start'] as int) < toolFence!.start);
+
+      if (useResearch) {
+        final start = researchFence!['start'] as int;
+        final textBefore = substring.substring(0, start).trim();
         if (textBefore.isNotEmpty) {
           widgets.addAll(_buildBlocks(context, textBefore));
         }
@@ -602,15 +576,12 @@ class MessageBubble extends StatelessWidget {
               onStartResearch: onStartResearch,
             ),
           );
-        } else {
-          widgets.add(const SizedBox.shrink());
         }
         currentIndex += researchFence['end'] as int;
         continue;
       }
 
-      if (toolFence != null &&
-          (earliestIndex == -1 || toolFence.start < earliestIndex)) {
+      if (toolFence != null) {
         final textBefore = substring.substring(0, toolFence.start).trim();
         if (textBefore.isNotEmpty) {
           widgets.addAll(_buildBlocks(context, textBefore));
@@ -627,7 +598,6 @@ class MessageBubble extends StatelessWidget {
                 'method': fenceCall['t']?.toString() ?? 'tool',
                 'params': fenceCall['a'] ?? <String, dynamic>{},
               }),
-              isXml: false,
             ),
           );
         }
@@ -635,269 +605,16 @@ class MessageBubble extends StatelessWidget {
         continue;
       }
 
-      if (earliestIndex == -1) {
-        final remaining = substring.trim();
-        if (remaining.isNotEmpty) {
-          widgets.addAll(_buildBlocks(context, remaining));
-        }
-        break;
+      final remaining = substring.trim();
+      if (remaining.isNotEmpty) {
+        widgets.addAll(_buildBlocks(context, remaining));
       }
-
-      final textBefore = substring.substring(0, earliestIndex).trim();
-      if (textBefore.isNotEmpty) {
-        widgets.addAll(_buildBlocks(context, textBefore));
-      }
-
-      final tagStartIndex = currentIndex + earliestIndex;
-      final openTag = matchedTag.tag;
-      final closeTag = openTag.replaceFirst('<', '</');
-
-      final tagContentStartIndex = tagStartIndex + openTag.length;
-      final closeTagIndexInFull = text.indexOf(closeTag, tagContentStartIndex);
-
-      if (closeTagIndexInFull == -1) {
-        // Unclosed tag (streaming fallback)
-        final contentStr = text.substring(tagContentStartIndex).trim();
-        widgets.add(
-          _buildSpecializedWidget(openTag, contentStr, matchedTag.isXml),
-        );
-        break;
-      }
-
-      final contentStr = text
-          .substring(tagContentStartIndex, closeTagIndexInFull)
-          .trim();
-      widgets.add(
-        _buildSpecializedWidget(openTag, contentStr, matchedTag.isXml),
-      );
-
-      currentIndex = closeTagIndexInFull + closeTag.length;
+      break;
     }
 
     return widgets;
   }
 
-  Widget _buildSpecializedWidget(String openTag, String content, bool isXml) {
-    try {
-      switch (openTag) {
-        case '<research_plan>':
-          return const SizedBox.shrink();
-        case '<research_state>':
-          {
-            var cleanContent = content;
-            if (cleanContent.contains('<research_plan>')) {
-              final planIndex = cleanContent.indexOf('<research_plan>');
-              final planEndIndex = cleanContent.indexOf(
-                '</research_plan>',
-                planIndex,
-              );
-              if (planEndIndex != -1) {
-                cleanContent =
-                    (cleanContent.substring(0, planIndex) +
-                            cleanContent.substring(planEndIndex + 16))
-                        .trim();
-              } else {
-                cleanContent = cleanContent.substring(0, planIndex).trim();
-              }
-            }
-            final stateMap = jsonDecode(cleanContent) as Map<String, dynamic>;
-            return ResearchPlanWidget(
-              stateMap: stateMap,
-              workspaceDir: agenticWorkspace,
-              fileName: fileName,
-              isSending: isSending,
-              onStartResearch: onStartResearch,
-            );
-          }
-        case '<search_request>':
-          return McpToolBlock(
-            mcpJson: jsonEncode({
-              'method': 'web_search',
-              'params': {'q': content},
-            }),
-            isXml: false,
-          );
-        case '<read_url>':
-          return McpToolBlock(
-            mcpJson: jsonEncode({
-              'method': 'read_url',
-              'params': {'url': content},
-            }),
-            isXml: false,
-          );
-        case '<command>':
-          final contentStr =
-              '<method>run_command</method><command>$content</command>';
-          return McpToolBlock(mcpJson: contentStr, isXml: true);
-        case '<workspace_list>':
-        case '<workspace_search>':
-        case '<workspace_read_page>':
-        case '<workspace_get_outline>':
-        case '<workspace_ingest>':
-          return _buildWorkspaceResultBlock(openTag, content);
-        default: // <mcp_request>, <tool_request>
-          return McpToolBlock(mcpJson: content, isXml: isXml);
-      }
-    } catch (e) {
-      return Text(
-        'Error rendering $openTag: $e',
-        style: const TextStyle(color: Colors.red),
-      );
-    }
-  }
-
-  /// IMPROVEMENT: Renders workspace tool results (<workspace_list>,
-  /// <workspace_search>, etc.) as collapsible blocks instead of raw JSON text.
-  Widget _buildWorkspaceResultBlock(String openTag, String content) {
-    final method = openTag.replaceAll(RegExp('[<>/]'), '');
-    String header;
-    IconData icon;
-    Color accent;
-    final List<Widget> detailChildren = [];
-
-    const monoStyle = TextStyle(
-      fontFamily: 'monospace',
-      fontSize: 11,
-      color: Color(0xFF52606D),
-    );
-
-    try {
-      final decoded = jsonDecode(content);
-      if (method == 'workspace_list' && decoded is Map) {
-        final files = (decoded['files'] as List?) ?? [];
-        final usedMb = decoded['used_quota_mb']?.toString() ??
-            decoded['total_used_mb']?.toString() ?? '';
-        final totalMb = decoded['quota_mb']?.toString() ??
-            decoded['total_quota_mb']?.toString() ?? '';
-        header = 'Workspace files (${files.length})' +
-            (usedMb.isNotEmpty ? ' · $usedMb/$totalMb MB used' : '');
-        icon = Icons.folder_open_outlined;
-        accent = const Color(0xFFD97706);
-        for (final f in files.whereType<Map>()) {
-          final name = f['path']?.toString() ??
-              f['file']?.toString() ??
-              f['name']?.toString() ?? 'file';
-          final sizeBytes = (f['size_bytes'] as num? ??
-              ((f['size_kb'] as num? ?? 0) * 1024));
-          final sizeKb = (sizeBytes / 1024).toStringAsFixed(1);
-          detailChildren.add(
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.insert_drive_file,
-                    size: 14,
-                    color: Color(0xFF8B7355),
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '$sizeKb KB',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF8B7355),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-      } else if (method == 'workspace_search') {
-        List<dynamic> rawMatches = [];
-        if (decoded is Map) {
-          rawMatches = (decoded['matches'] as List?) ??
-              (decoded['results'] as List?) ?? [];
-        } else if (decoded is List) {
-          rawMatches = decoded;
-        }
-        header = 'Workspace search (${rawMatches.length} matches)';
-        icon = Icons.manage_search_outlined;
-        accent = const Color(0xFF0369A1);
-        for (final m in rawMatches.whereType<Map>().take(8)) {
-          final file = m['file_path']?.toString() ??
-              m['file']?.toString() ??
-              m['relative_path']?.toString() ?? '';
-          final section = m['section']?.toString() ??
-              m['chunk_id']?.toString() ?? '';
-          final excerpt = m['excerpt']?.toString() ??
-              m['content']?.toString() ?? '';
-          detailChildren.add(
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFFBF2),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFFE7D8C4)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    file + (section.isNotEmpty ? ' — $section' : ''),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF2D241C),
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    excerpt,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF52606D),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-      } else {
-        header = 'Workspace result';
-        icon = Icons.work_outline;
-        accent = const Color(0xFF059669);
-        detailChildren.add(SelectableText(content, style: monoStyle));
-      }
-    } catch (_) {
-      header = 'Workspace result';
-      icon = Icons.work_outline;
-      accent = const Color(0xFF059669);
-      detailChildren.add(SelectableText(content, style: monoStyle));
-    }
-
-    return ToolCallCard(
-      icon: icon,
-      accent: accent,
-      summary: header,
-      detail: detailChildren.isEmpty
-          ? const SizedBox.shrink()
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: detailChildren,
-            ),
-    );
-  }
 
   Widget _buildMarkdownResult(BuildContext context, String text) {
     final lines = text.split('\n');
