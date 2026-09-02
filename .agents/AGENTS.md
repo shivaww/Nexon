@@ -4,10 +4,11 @@ Welcome, Agent! You are working on the **Nexon** repository. This is an agentic 
 
 ## Critical Guidelines for Project Agents
 
-### 1. Tool Call XML Format Mismatches
-- Inside this codebase, the application parses XML-structured tool calls using the `<tool_request>` format.
-- **Parser Robustness**: The parser in [lib/main.dart](file:///data/data/com.termux/files/home/termux_forge/lib/main.dart) extracts tags like `<method>`, `<path>`, etc. It also supports fallback extraction of `<PARAM name="key">value</PARAM>` and `<parameter name="key">value</parameter>` tags even if a `<method>` tag is present.
-- **Instructing LLMs**: When modifying the system prompt or designing agent prompts inside this app, always instruct the target LLMs to use the direct tag format (e.g. `<path>/foo</path>`) and explicitly advise **against** using `<PARAM name="path">/foo</PARAM>` to maximize parser cleanliness.
+### 1. Tool Call Format — JSON Only
+- This app's tool-call protocol is JSON-only: every call is one fenced ```json block shaped {"t":"toolName","a":{...}}, enforced in lib/services/system_prompts.dart and lib/services/system_prompt_engine.dart.
+- Do NOT instruct target LLMs to use XML tags (`<tool_request>`, `<command>`, `<path>...</path>`, etc.) in any system or agent prompt — this contradicted the app's own policy and was the confirmed root cause of a bug where models emitted XML instead of JSON tool calls.
+- lib/widgets/message_bubble.dart and lib/widgets/mcp_tool_block.dart still contain XML-tag rendering as a dead safety net (the model is never taught these tags in the live prompts) — do not extend it; fix at the prompt/parsing layer instead.
+- The C++ bridge (lib/services/termux_bridge/native_tools_service.dart) is JSON-only end to end. The Python bridge (python_bridge/termux_forge_bridge.py) still has a legacy `<command>` XML fallback parser — treat as legacy, not a pattern to extend.
 
 ### 2. Dart & Flutter Coding Standards
 - Maintain all existing comments and docstrings.

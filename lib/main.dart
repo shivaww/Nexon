@@ -2139,7 +2139,7 @@ jobs:
                     final maxTok = settings.maxTokens;
                     msgs[assistantMessageIndex] = ChatMessage(
                       role: MessageRole.assistant,
-                      text: _fenceBareToolCalls(fullText),
+                      text: _maskStreamingXml(_fenceBareToolCalls(fullText)),
                       reasoning: reasoningText,
                       tokensPerSec: tps > 0 ? tps.toStringAsFixed(1) : '',
                       tokenUsage: formatTokenUsage(estTokens, maxTok),
@@ -2203,8 +2203,8 @@ jobs:
               msgs[assistantMessageIndex] = ChatMessage(
                   role: MessageRole.assistant,
                   text: _svgVisualsEnabled
-                      ? _stripSvgVisuals(_fenceBareToolCalls(fullText))
-                      : _fenceBareToolCalls(fullText),
+                      ? _fenceBareToolCalls(fullText)
+                      : _stripSvgVisuals(_fenceBareToolCalls(fullText)),
                   reasoning: reasoningText,
                   tokensPerSec: finalTps > 0 ? finalTps.toStringAsFixed(1) : '',
                   tokenUsage: finalUsage,
@@ -2305,7 +2305,12 @@ jobs:
         // prefilter skips replies that can't contain a JSON tool block.
         if (fullText.contains('```') ||
             fullText.contains('"t"') ||
-            fullText.contains('<invoke')) {
+            fullText.contains('<invoke') ||
+            fullText.contains('<tool_call') ||
+            fullText.contains('<function_call') ||
+            fullText.contains('<tool_use') ||
+            fullText.contains('<function') ||
+            fullText.contains('<tool_calls')) {
           final nativeCalls = _findNativeToolCalls(fullText);
           if (nativeCalls.isEmpty &&
               (_agenticEnabled || _studyModeEnabled) &&
@@ -4542,27 +4547,65 @@ jobs:
 
   bool _isKnownToolName(String t) => isKnownToolNameGlobal(t);
 
+  /// Masks in-flight XML tool calls during token streaming so unclosed or
+  /// partial tool tags do not flash as raw XML text in the Flutter chat UI.
+  static String _maskStreamingXml(String text) {
+    if (!text.contains('<')) return text;
+
+    // Mask unclosed known XML tool call blocks at the end of the streaming buffer.
+    final unclosedToolRegex = RegExp(
+      r'<(invoke|tool_call|function_call|tool_use|function|tool_calls)\b[^>]*?(?:>|$)(?:(?!<\/\1>)[\s\S])*$',
+      caseSensitive: false,
+    );
+    text = text.replaceFirst(unclosedToolRegex, '');
+
+    // Buffer partial opening tags trailing at the very end (e.g. "<", "<tool").
+    final trailingPartialTag = RegExp(
+      r'<(?:[a-zA-Z_][a-zA-Z0-9_:-]*)?$',
+      caseSensitive: false,
+    );
+    text = text.replaceFirst(trailingPartialTag, '');
+
+    return text;
+  }
+
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
   /// renderer shows them as tool cards instead of raw text.
   String _fenceBareToolCalls(String text) {
-    if (text.contains('<invoke')) {
+    if (text.contains('<tool_calls')) {
       text = text.replaceAllMapped(
         RegExp(r'<tool_calls>([\s\S]*?)</tool_calls>', caseSensitive: false),
         (m) => '\n```json\n${_xmlInvokesToJson(m.group(1) ?? '')}\n```\n',
       );
-      if (text.contains('<invoke')) {
-        text = text.replaceAllMapped(
-          RegExp(
-            r'<invoke\s+name="[^"]+"[^>]*>[\s\S]*?</invoke>',
-            caseSensitive: false,
-          ),
-          (m) => '\n```json\n${_xmlInvokesToJson(m.group(0) ?? '')}\n```\n',
-        );
-      }
       text = text.replaceAll(
         RegExp(r'</?tool_calls>', caseSensitive: false),
         '',
       );
+    }
+    if (text.contains('<invoke')) {
+      text = text.replaceAllMapped(
+        RegExp(
+          r'<invoke\s+name="[^"]+"[^>]*>[\s\S]*?</invoke>',
+          caseSensitive: false,
+        ),
+        (m) => '\n```json\n${_xmlInvokesToJson(m.group(0) ?? '')}\n```\n',
+      );
+    }
+    // Other XML dialects _findXmlToolCalls() already executes: <tool_call>,
+    // <function_call>, <tool_use>, <function name="...">.
+    const otherDialects = <String>[
+      r'<tool_call>[\s\S]*?</tool_call>',
+      r'<function_call>[\s\S]*?</function_call>',
+      r'<tool_use>[\s\S]*?</tool_use>',
+      r'<function\s+name="[^"]+"[^>]*>[\s\S]*?</function>',
+    ];
+    for (final pattern in otherDialects) {
+      final regex = RegExp(pattern, caseSensitive: false);
+      text = text.replaceAllMapped(regex, (m) {
+        final matched = m.group(0) ?? '';
+        if (_findXmlToolCalls(matched).isEmpty) return matched;
+        return '\n```json\n${_xmlInvokesToJson(matched)}\n```\n';
+      });
     }
     if (!text.contains('"t"')) return text;
     if (text.contains('```json')) return text;

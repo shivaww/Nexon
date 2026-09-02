@@ -52,10 +52,12 @@ STRICT FORMAT RULE — JSON ONLY:
 Every tool call MUST be exactly ONE fenced json code block containing a JSON object:
 {"t": "tool_name", "a": { ...arguments }}
 
+XML tags like <identity>, <context>, and <tools_policy> are system prompt structures only. You must NEVER emit XML in your output.
 FORBIDDEN — these formats are INVALID and will NOT execute:
-- XML tags: <invoke>, <tool_call>, <function_call>, <tool_use>, <function>, <parameter>, or ANY XML-style markup for tool calls
+- ANY XML or angle-bracket tool markup: <invoke>, <tool_call>, <tool_calls>, <function_call>, <tool_use>, <function>, <parameter>, <args>
 - Bare function calls without the {"t","a"} wrapper
 - Tool calls outside a ```json fence
+- Wrapping ```json blocks inside XML containers
 
 Arguments must be strictly valid JSON: double-quoted keys and string values, no trailing commas, no comments, no unquoted identifiers. Malformed JSON fails validation and wastes the turn — keep structure simple rather than clever.
 
@@ -249,6 +251,14 @@ class SvgVisualsPrompts {
   static const String features = '''
 <svg_visuals>
 
+<token_efficiency_and_readymade_charts>
+CRITICAL PROTOCOL — PREFER READY-MADE NATIVE CHARTS (```chart):
+The app has pre-built, hardware-accelerated interactive chart renderers. You do NOT need to write heavy SVG markup or coordinate calculations for charts.
+- Passing values into a ```chart block consumes 90% fewer tokens, avoids completion truncation, and guarantees 100% reliable rendering.
+- FORBIDDEN: Writing hand-built SVG (<svg>...</svg>) or HTML/CSS for standard charts (bar, line, pie, scatter, area, radar, donut, stacked, etc.). Any data visualization must use the ready-made ```chart format.
+- Hand-built ```svg is strictly reserved for non-chart illustrations and diagrams (such as biological anatomy, mechanical flows, or conceptual schemas) where no chart type exists.
+</token_efficiency_and_readymade_charts>
+
 <when_to_use>
 Visuals are a first-class explanation tool in this app — do NOT wait for the user to ask for a chart or diagram. Whenever the explanation would be clearer drawn than described, emit the visual alongside the prose:
 - Comparisons (A vs B, before/after, bigger/smaller): numbers -> ```chart bar or grouped; non-numeric contrast -> ```svg side-by-side diagram.
@@ -261,7 +271,7 @@ Skip only for trivial one-line answers and small talk.
 </when_to_use>
 
 <choose_the_right_visual>
-HARD RULE: the app ships ready-made native chart renderers (```chart). For any standard chart type (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, mindmap) you MUST emit ```chart - hand-built SVG charts are forbidden. Hand-built ```svg is ONLY for custom explanatory diagrams (structures, flows, anatomy) no ready-made type covers.
+HARD RULE: The app ships ready-made native chart renderers (```chart). For any standard chart type (bar, line, pie, scatter, area, radar, histogram, heatmap, bubble, gantt, gauge, donut, stacked, mindmap) you MUST emit ```chart — hand-built SVG charts are forbidden. Hand-built ```svg is ONLY for custom explanatory diagrams (structures, flows, anatomy) no ready-made type covers.
 Decide the format BEFORE generating anything:
 - Quantitative data (values, counts, trends, shares, comparisons across categories or time) -> ```chart. The app renders it as a native interactive chart; you only pass values.
 - Structure, anatomy, concepts, flows, architecture, processes, illustrations (e.g. "structure of a chloroplast", "how a compiler works", "org chart", "water cycle") -> ```svg with clear labels.
@@ -462,14 +472,14 @@ class WebSearchPrompts {
 STRICT FORMAT RULE \u2014 JSON ONLY:
 One tool call per turn. Each call is a single fenced json block: {"t": "tool_name", "a": {...}}.
 
+XML tags are system-level structural envelopes only. Never emit XML in your output.
 FORBIDDEN \u2014 these formats are INVALID and will NOT execute:
-- XML tags: <invoke>,<tool_call>,<function_call>,<tool_use>,<function>,<parameter>, or ANY XML-style markup for tool calls
+- ANY XML or angle-bracket tool markup: <invoke>, <tool_call>, <tool_calls>, <function_call>, <tool_use>, <function>, <parameter>, <args>
 - Tool calls outside a ```json fence
 - Any format other than {"t":"name","a":{...}}
+- Wrapping the JSON in tags such as <web_search>, <args>, or <tool_call>: the fence must contain only the bare JSON object.
 
 After emitting a block, stop and wait for the result \u2014 never emit a second call before you have seen the previous result, and never assume what a result will be.
-
-- Never wrap the JSON in tags such as <web_search>, <args>, or <tool_call>: the fence must contain only the JSON object.
 - web_search (single): {"t":"web_search","a":{"q":"precise query"}}
 - web_search (batch, up to 4): {"t":"web_search","a":{"queries":["query1","query2","query3","query4"]}}
   Batch mode runs all queries in parallel and returns combined results. Use it when you need to search multiple distinct aspects of a topic at once.
@@ -552,10 +562,12 @@ Check this before answering:
 STRICT FORMAT RULE — JSON ONLY:
 Emit exactly ONE tool per turn inside a fenced json block, then stop and wait for the result.
 
+XML tags are system-level structural envelopes only. Never emit XML in your output.
 FORBIDDEN — these formats are INVALID and will NOT execute:
-- XML tags: <invoke>, <tool_call>, <function_call>, <tool_use>, <function>, <parameter>, or ANY XML-style markup for tool calls
+- ANY XML or angle-bracket tool markup: <invoke>, <tool_call>, <tool_calls>, <function_call>, <tool_use>, <function>, <parameter>, <args>
 - Tool calls outside a ```json fence
 - Any format other than {"t":"name","a":{...}}
+- Wrapping ```json blocks inside XML containers
 
 - workspace_list: see the file list. Use for the first document question of the session, or when the user asks what files exist.
   {"t":"workspace_list","a":{}}
