@@ -16,9 +16,10 @@ class ChatClient {
   /// Shared keep-alive HTTP client: reuses TCP/TLS connections across
   /// chat turns so each request skips a full handshake.
   static final HttpClient _sharedHttpClient = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 30)
+    ..connectionTimeout = const Duration(seconds: 15)
     ..idleTimeout = const Duration(seconds: 120)
-    ..autoUncompress = true;
+    ..autoUncompress = true
+    ..findProxy = ((uri) => 'DIRECT');
 
   /// Models that accept image input (multimodal/vision).
   static final Set<String> modelsWithVision = {};
@@ -287,6 +288,43 @@ class ChatClient {
             ].map((k) => k.trim()).where((k) => k.isNotEmpty).toList();
       if (allKeys.isEmpty) allKeys.add('');
 
+      final payload = <String, dynamic>{
+        'model': model,
+        'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
+          String finalText = message.text;
+          final inlineFiles = studyModeEnabled
+              ? message.files.where((f) => !f.isWorkspaceFile).toList()
+              : message.files;
+          if (inlineFiles.isNotEmpty) {
+            finalText += '\n\n';
+            for (final file in inlineFiles) {
+              finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+            }
+          }
+          if (message.images.isNotEmpty) {
+            return {
+              'role': message.role.apiName,
+              'content': [
+                {'type': 'text', 'text': finalText},
+                ...message.images.map(
+                  (img) => {
+                    'type': 'image_url',
+                    'image_url': {'url': 'data:image/jpeg;base64,$img'},
+                  },
+                ),
+              ],
+            };
+          }
+          return {'role': message.role.apiName, 'content': finalText};
+        }).toList(),
+        'max_tokens': settings.maxTokens,
+        'temperature': settings.temperature,
+        'top_p': 0.95,
+        'stream': false,
+      };
+      _applyReasoningParams(payload, provider, settings, model);
+      final payloadBytes = utf8.encode(jsonEncode(payload));
+
       for (int i = 0; i < allKeys.length; i++) {
         final currentKey = allKeys[i];
 
@@ -314,47 +352,6 @@ class ChatClient {
             );
             request.headers.contentType = ContentType.json;
 
-            final payload = <String, dynamic>{
-              'model': model,
-              'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
-                String finalText = message.text;
-                // In study mode, workspace files are NOT inlined — LLM queries them via tools.
-                final inlineFiles = studyModeEnabled
-                    ? message.files.where((f) => !f.isWorkspaceFile).toList()
-                    : message.files;
-                if (inlineFiles.isNotEmpty) {
-                  finalText += '\n\n';
-                  for (final file in inlineFiles) {
-                    finalText +=
-                        '--- File: ${file.name} ---\n${file.content}\n\n';
-                  }
-                }
-
-                if (message.images.isNotEmpty) {
-                  return {
-                    'role': message.role.apiName,
-                    'content': [
-                      {'type': 'text', 'text': finalText},
-                      ...message.images.map(
-                        (img) => {
-                          'type': 'image_url',
-                          'image_url': {'url': 'data:image/jpeg;base64,$img'},
-                        },
-                      ),
-                    ],
-                  };
-                }
-                return {'role': message.role.apiName, 'content': finalText};
-              }).toList(),
-              'max_tokens': settings.maxTokens,
-              'temperature': settings.temperature,
-              'top_p': 0.95,
-              'stream': false,
-            };
-            // IMPROVEMENT: Enable thinking/reasoning for all capable models/providers
-            _applyReasoningParams(payload, provider, settings, model);
-
-            final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
             final response = await request.close();
@@ -436,6 +433,42 @@ class ChatClient {
               ...settings.fallbackApiKeys,
             ].map((k) => k.trim()).where((k) => k.isNotEmpty).toList();
       if (allKeys.isEmpty) allKeys.add('');
+      final payload = <String, dynamic>{
+        'model': model,
+        'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
+          String finalText = message.text;
+          final inlineFiles = studyModeEnabled
+              ? message.files.where((f) => !f.isWorkspaceFile).toList()
+              : message.files;
+          if (inlineFiles.isNotEmpty) {
+            finalText += '\n\n';
+            for (final file in inlineFiles) {
+              finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+            }
+          }
+          if (message.images.isNotEmpty) {
+            return {
+              'role': message.role.apiName,
+              'content': [
+                {'type': 'text', 'text': finalText},
+                ...message.images.map(
+                  (img) => {
+                    'type': 'image_url',
+                    'image_url': {'url': 'data:image/jpeg;base64,$img'},
+                  },
+                ),
+              ],
+            };
+          }
+          return {'role': message.role.apiName, 'content': finalText};
+        }).toList(),
+        'max_tokens': settings.maxTokens,
+        'temperature': settings.temperature,
+        'top_p': 0.95,
+        'stream': true,
+      };
+      _applyReasoningParams(payload, provider, settings, model);
+      final payloadBytes = utf8.encode(jsonEncode(payload));
 
       for (int i = 0; i < allKeys.length; i++) {
         final currentKey = allKeys[i];
@@ -464,47 +497,6 @@ class ChatClient {
             );
             request.headers.contentType = ContentType.json;
 
-            final payload = <String, dynamic>{
-              'model': model,
-              'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
-                String finalText = message.text;
-                // In study mode, workspace files are NOT inlined — LLM queries them via tools.
-                final inlineFiles = studyModeEnabled
-                    ? message.files.where((f) => !f.isWorkspaceFile).toList()
-                    : message.files;
-                if (inlineFiles.isNotEmpty) {
-                  finalText += '\n\n';
-                  for (final file in inlineFiles) {
-                    finalText +=
-                        '--- File: ${file.name} ---\n${file.content}\n\n';
-                  }
-                }
-
-                if (message.images.isNotEmpty) {
-                  return {
-                    'role': message.role.apiName,
-                    'content': [
-                      {'type': 'text', 'text': finalText},
-                      ...message.images.map(
-                        (img) => {
-                          'type': 'image_url',
-                          'image_url': {'url': 'data:image/jpeg;base64,$img'},
-                        },
-                      ),
-                    ],
-                  };
-                }
-                return {'role': message.role.apiName, 'content': finalText};
-              }).toList(),
-              'max_tokens': settings.maxTokens,
-              'temperature': settings.temperature,
-              'top_p': 0.95,
-              'stream': true,
-            };
-            // IMPROVEMENT: Enable thinking/reasoning for all capable models/providers
-            _applyReasoningParams(payload, provider, settings, model);
-
-            final payloadBytes = utf8.encode(jsonEncode(payload));
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
             response = await request.close();
