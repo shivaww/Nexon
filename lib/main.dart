@@ -2189,7 +2189,7 @@ jobs:
                     final maxTok = settings.maxTokens;
                     msgs[assistantMessageIndex] = ChatMessage(
                       role: MessageRole.assistant,
-                      text: _maskStreamingXml(_fenceBareToolCalls(fullText)),
+                      text: _fenceBareToolCalls(fullText),
                       reasoning: reasoningText,
                       tokensPerSec: tps > 0 ? tps.toStringAsFixed(1) : '',
                       tokenUsage: formatTokenUsage(estTokens, maxTok),
@@ -2354,13 +2354,7 @@ jobs:
         // too, and workspace tools + quiz in study mode. The cheap fence
         // prefilter skips replies that can't contain a JSON tool block.
         if (fullText.contains('```') ||
-            fullText.contains('"t"') ||
-            fullText.contains('<invoke') ||
-            fullText.contains('<tool_call') ||
-            fullText.contains('<function_call') ||
-            fullText.contains('<tool_use') ||
-            fullText.contains('<function') ||
-            fullText.contains('<tool_calls')) {
+            fullText.contains('"t"')) {
           final nativeCalls = _findNativeToolCalls(fullText);
           if (nativeCalls.isEmpty &&
               (_agenticEnabled || _studyModeEnabled) &&
@@ -4288,87 +4282,25 @@ jobs:
       final lineEnd = fullText.indexOf('\n', fenceStart);
       if (lineEnd == -1) break;
       final contentStart = lineEnd + 1;
-      int depth = 0;
-      bool inStr = false;
-      bool esc = false;
-      int braceEnd = -1;
-      for (int i = contentStart; i < fullText.length; i++) {
-        final c = fullText[i];
-        if (inStr) {
-          if (esc) {
-            esc = false;
-          } else if (c == '\\') {
-            esc = true;
-          } else if (c == '"') {
-            inStr = false;
-          }
-        } else {
-          if (c == '"') {
-            inStr = true;
-          } else if (c == '{' || c == '[') {
-            depth++;
-          } else if (c == '}' || c == ']') {
-            depth--;
-            if (depth == 0) {
-              braceEnd = i;
-              break;
-            }
-          }
+      final fenceEnd = fullText.indexOf('```', contentStart);
+      if (fenceEnd == -1) {
+        searchFrom = contentStart;
+        break;
+      }
+      final raw = fullText.substring(contentStart, fenceEnd).trim();
+      searchFrom = fenceEnd + 2;
+      if (raw.isEmpty) continue;
+
+      final decoded = _decodeRepairedToolJson(raw);
+      if (decoded is Map<String, dynamic>) {
+        _addDecodedToolCall(results, decoded);
+      } else if (decoded is List) {
+        for (final item in decoded) {
+          if (item is Map<String, dynamic>) _addDecodedToolCall(results, item);
         }
       }
-      if (braceEnd == -1) {
-        searchFrom = lineEnd + 1;
-        continue;
-      }
-      final block = fullText.substring(contentStart, braceEnd + 1).trim();
-      if (block.isEmpty) {
-        searchFrom = braceEnd + 1;
-        continue;
-      }
-      if (!block.startsWith('{') && !block.startsWith('[')) {
-        searchFrom = braceEnd + 1;
-        continue;
-      }
-      Map<String, dynamic>? parsed;
-      try {
-        final dynamic decoded = jsonDecode(block);
-        if (decoded is Map<String, dynamic>) parsed = decoded;
-        else if (decoded is List) {
-          for (final item in decoded) {
-            if (item is Map<String, dynamic> && item['t'] != null) results.add(item);
-          }
-        }
-      } catch (_) {
-        searchFrom = braceEnd + 1;
-        continue;
-      }
-      if (parsed != null) {
-        final calls = parsed['calls'];
-        if (calls is List) {
-          for (final c in calls) {
-            if (c is Map<String, dynamic> && c['t'] != null) {
-              results.add(c);
-            } else if (c is Map<String, dynamic>) {
-              results.add({'t': 'error', 'a': {'err': 'batch entry missing "t" field'}});
-            }
-          }
-        } else if (parsed['t'] != null) {
-          results.add(parsed);
-        } else if (parsed['method'] != null) {
-          final method = parsed['method'].toString();
-          final params = parsed['params'];
-          results.add({
-            't': method,
-            'a': params is Map<String, dynamic> ? params : <String, dynamic>{},
-          });
-        }
-      }
-      searchFrom = braceEnd + 1;
     }
-    final xmlCalls = _findXmlToolCalls(fullText);
-    if (xmlCalls.isNotEmpty && results.isEmpty) {
-      results.addAll(xmlCalls);
-    }
+
     final bareCalls = _findBareToolCalls(fullText);
     final existingTools = results.map((r) => r['t']?.toString()).toSet();
     for (final bc in bareCalls) {
@@ -4377,173 +4309,171 @@ jobs:
     return results;
   }
 
-  /// Maps XML-style tool calls emitted by some models onto the native
-  /// {"t","a"} shape so they execute instead of rendering as text.
-  /// Handles multiple XML conventions:
-  ///   <invoke name="x"><parameter name="y">v</parameter></invoke>
-  ///   <tool_call>{"name":"x","arguments":{...}}</tool_call>
-  ///   <function_call>{"name":"x","arguments":{...}}</function_call>
-  ///   <tool_use>{"name":"x","input":{...}}</tool_use>
-  ///   <function name="x"><param name="y">v</param></function>
-  List<Map<String, dynamic>> _findXmlToolCalls(String text) {
-    final results = <Map<String, dynamic>>[];
-
-    String unescape(String s) => s
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .replaceAll('&amp;', '&');
-
-    void addCall(String name, Map<String, dynamic> args) {
-      if (name.isEmpty) return;
-      if (name == 'python3' || name == 'python') {
-        final code = (args['code'] ?? '').toString();
-        results.add({
-          't': 'sh',
-          'a': {'cmd': "python3 << 'NEXON_PY'\n$code\nNEXON_PY"},
-        });
-      } else {
-        results.add({'t': name, 'a': args});
-      }
-    }
-
-    // Format 1: <invoke name="x"><parameter name="y">v</parameter></invoke>
-    final invokeRegex = RegExp(
-      r'<invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)</invoke>',
-      caseSensitive: false,
-    );
-    final paramRegex = RegExp(
-      r'<parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)</parameter>',
-      caseSensitive: false,
-    );
-    for (final m in invokeRegex.allMatches(text)) {
-      final name = unescape(m.group(1) ?? '').trim();
-      if (name.isEmpty) continue;
-      final body = m.group(2) ?? '';
-      final args = <String, dynamic>{};
-      for (final p in paramRegex.allMatches(body)) {
-        args[unescape(p.group(1) ?? '').trim()] = unescape(p.group(2) ?? '');
-      }
-      addCall(name, args);
-    }
-    if (results.isNotEmpty) return results;
-
-    // Format 2: <tool_call>{"name":"x","arguments":{...}}</tool_call>
-    final toolCallRegex = RegExp(
-      r'<tool_call>([\s\S]*?)</tool_call>',
-      caseSensitive: false,
-    );
-    for (final m in toolCallRegex.allMatches(text)) {
-      try {
-        final dynamic d = jsonDecode(unescape(m.group(1) ?? '').trim());
-        if (d is Map<String, dynamic>) {
-          final name = (d['name'] ?? d['function'] ?? d['tool'] ?? '').toString();
-          final rawArgs = d['arguments'] ?? d['parameters'] ?? d['input'] ?? d['params'] ?? d['a'] ?? {};
-          final args = rawArgs is Map<String, dynamic> ? rawArgs : <String, dynamic>{};
-          addCall(name, args);
-        }
-      } catch (_) {}
-    }
-    if (results.isNotEmpty) return results;
-
-    // Format 3: <function_call>{"name":"x","arguments":{...}}</function_call>
-    final funcCallRegex = RegExp(
-      r'<function_call>([\s\S]*?)</function_call>',
-      caseSensitive: false,
-    );
-    for (final m in funcCallRegex.allMatches(text)) {
-      try {
-        final dynamic d = jsonDecode(unescape(m.group(1) ?? '').trim());
-        if (d is Map<String, dynamic>) {
-          final name = (d['name'] ?? d['function'] ?? d['tool'] ?? '').toString();
-          final rawArgs = d['arguments'] ?? d['parameters'] ?? d['input'] ?? d['params'] ?? d['a'] ?? {};
-          final args = rawArgs is Map<String, dynamic> ? rawArgs : <String, dynamic>{};
-          addCall(name, args);
-        }
-      } catch (_) {}
-    }
-    if (results.isNotEmpty) return results;
-
-    // Format 4: <tool_use>{"name":"x","input":{...}}</tool_use>
-    final toolUseRegex = RegExp(
-      r'<tool_use>([\s\S]*?)</tool_use>',
-      caseSensitive: false,
-    );
-    for (final m in toolUseRegex.allMatches(text)) {
-      try {
-        final dynamic d = jsonDecode(unescape(m.group(1) ?? '').trim());
-        if (d is Map<String, dynamic>) {
-          final name = (d['name'] ?? d['function'] ?? d['tool'] ?? '').toString();
-          final rawArgs = d['arguments'] ?? d['parameters'] ?? d['input'] ?? d['params'] ?? d['a'] ?? {};
-          final args = rawArgs is Map<String, dynamic> ? rawArgs : <String, dynamic>{};
-          addCall(name, args);
-        }
-      } catch (_) {}
-    }
-    if (results.isNotEmpty) return results;
-
-    // Format 5: <function name="x"><param name="y">v</param></function>
-    final functionRegex = RegExp(
-      r'<function\s+name="([^"]+)"[^>]*>([\s\S]*?)</function>',
-      caseSensitive: false,
-    );
-    final paramAltRegex = RegExp(
-      r'<param(?:eter)?\s+name="([^"]+)"[^>]*>([\s\S]*?)</param(?:eter)?>',
-      caseSensitive: false,
-    );
-    for (final m in functionRegex.allMatches(text)) {
-      final name = unescape(m.group(1) ?? '').trim();
-      if (name.isEmpty) continue;
-      final body = m.group(2) ?? '';
-      final args = <String, dynamic>{};
-      for (final p in paramAltRegex.allMatches(body)) {
-        args[unescape(p.group(1) ?? '').trim()] = unescape(p.group(2) ?? '');
-      }
-      addCall(name, args);
-    }
-
-    // Format 6: <tool_name><args>{"k":"v"}</args></tool_name> or bare
-    // <tool_name>{...}</tool_name> — the tag itself is the tool name
-    // (e.g. <web_search><args>{"q":"..."}</args></web_search>). Stray
-    // closers like </q> inside the body are trimmed; a non-JSON body
-    // becomes q/url for search/read tools.
-    final argsTagRegex = RegExp(
-      r'<([a-zA-Z_][a-zA-Z0-9_]*)[^>]*>\s*(?:<args>)?([\s\S]*?)(?:</args>)?\s*</\1>',
-      caseSensitive: false,
-    );
-    for (final m in argsTagRegex.allMatches(text)) {
-      final tagName = unescape(m.group(1) ?? '').trim();
-      if (!_isKnownToolName(tagName)) continue;
-      final body = unescape(m.group(2) ?? '').trim();
-      final lb = body.indexOf('{');
-      final rb = body.lastIndexOf('}');
-      Map<String, dynamic> tagArgs = {};
-      if (lb != -1 && rb > lb) {
-        try {
-          final dynamic d = jsonDecode(body.substring(lb, rb + 1));
-          if (d is Map<String, dynamic>) tagArgs = d;
-        } catch (_) {}
-      }
-      if (tagArgs.isEmpty && body.isNotEmpty) {
-        if (tagName == 'web_search' || tagName == 'search_web') {
-          tagArgs = {'q': body};
-        } else if (tagName == 'read_url') {
-          tagArgs = {'url': body};
+  void _addDecodedToolCall(
+    List<Map<String, dynamic>> results,
+    Map<String, dynamic> parsed,
+  ) {
+    final calls = parsed['calls'];
+    if (calls is List) {
+      for (final c in calls) {
+        if (c is Map<String, dynamic> && c['t'] != null) {
+          results.add(c);
+        } else if (c is Map<String, dynamic>) {
+          results.add({
+            't': 'error',
+            'a': {'err': 'batch entry missing "t" field'},
+          });
         }
       }
-      addCall(tagName, tagArgs);
+      return;
     }
-
-    return results;
+    if (parsed['t'] != null) {
+      results.add(parsed);
+      return;
+    }
+    if (parsed['method'] != null) {
+      final method = parsed['method'].toString();
+      final params = parsed['params'];
+      results.add({
+        't': method,
+        'a': params is Map<String, dynamic> ? params : <String, dynamic>{},
+      });
+    }
   }
 
-  String _xmlInvokesToJson(String xml) {
-    final calls = _findXmlToolCalls(xml);
-    if (calls.isEmpty) return xml;
-    if (calls.length == 1) return jsonEncode(calls.first);
-    return jsonEncode({'calls': calls});
+  dynamic _decodeRepairedToolJson(String raw) {
+    var s = raw.trim();
+    if (s.isEmpty) return null;
+    s = s.replaceFirst(RegExp(r'^```[a-zA-Z]*\s*'), '');
+    s = s.replaceFirst(RegExp(r'\s*```$'), '');
+    s = s.trim();
+
+    final firstBrace = s.indexOf('{');
+    final firstBracket = s.indexOf('[');
+    if (firstBrace == -1 && firstBracket == -1) return null;
+    final int start;
+    if (firstBrace == -1) {
+      start = firstBracket;
+    } else if (firstBracket == -1) {
+      start = firstBrace;
+    } else {
+      start = math.min(firstBrace, firstBracket);
+    }
+
+    final stack = <String>[];
+    var inString = false;
+    var esc = false;
+    var end = -1;
+    for (var i = start; i < s.length; i++) {
+      final c = s[i];
+      if (inString) {
+        if (esc) {
+          esc = false;
+        } else if (c == '\\') {
+          esc = true;
+        } else if (c == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c == '"') {
+        inString = true;
+      } else if (c == '{' || c == '[') {
+        stack.add(c);
+      } else if (c == '}' || c == ']') {
+        if (stack.isEmpty) {
+          end = -1;
+          break;
+        }
+        final open = stack.removeLast();
+        if ((open == '{' && c != '}') || (open == '[' && c != ']')) {
+          end = -1;
+          break;
+        }
+        if (stack.isEmpty) {
+          end = i;
+          break;
+        }
+      }
+    }
+
+    if (end == -1) {
+      final suffix = stack.reversed.map((ch) => ch == '{' ? '}' : ']').join();
+      s = s.substring(start) + suffix;
+    } else {
+      s = s.substring(start, end + 1);
+    }
+
+    s = _stripJsonComments(s);
+    s = s.replaceAllMapped(RegExp(r',\s*([}\]])'), (m) => m.group(1)!);
+    s = s.replaceAllMapped(
+      RegExp(r"'([^']*)':"),
+      (m) => '"${m.group(1)}":',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r":\s*'([^']*)'"),
+      (m) => ':"${m.group(1)}"',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:'),
+      (m) => '${m.group(1)}"${m.group(2)}":',
+    );
+    s = s.replaceAll(RegExp(r'\bTrue\b'), 'true');
+    s = s.replaceAll(RegExp(r'\bFalse\b'), 'false');
+    s = s.replaceAll(RegExp(r'\bNone\b'), 'null');
+
+    try {
+      return jsonDecode(s);
+    } catch (_) {
+      return null;
+    }
   }
+
+  String _stripJsonComments(String s) {
+    final out = StringBuffer();
+    var inString = false;
+    var esc = false;
+    for (var i = 0; i < s.length; i++) {
+      final c = s[i];
+      if (inString) {
+        out.write(c);
+        if (esc) {
+          esc = false;
+        } else if (c == '\\') {
+          esc = true;
+        } else if (c == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c == '"') {
+        inString = true;
+        out.write(c);
+        continue;
+      }
+      if (c == '/' && i + 1 < s.length) {
+        final next = s[i + 1];
+        if (next == '/') {
+          while (i < s.length && s[i] != '\n') i++;
+          if (i < s.length) out.write('\n');
+          continue;
+        }
+        if (next == '*') {
+          i += 2;
+          while (i + 1 < s.length && !(s[i] == '*' && s[i + 1] == '/')) {
+            i++;
+          }
+          i++;
+          continue;
+        }
+      }
+      out.write(c);
+    }
+    return out.toString();
+  }
+
+
+
 
   /// Fallback for models that emit tool JSON without a ```json fence:
   /// scans for bare {"t": ...} objects whose tool name is known. Plain JSON
@@ -4597,66 +4527,10 @@ jobs:
 
   bool _isKnownToolName(String t) => isKnownToolNameGlobal(t);
 
-  /// Masks in-flight XML tool calls during token streaming so unclosed or
-  /// partial tool tags do not flash as raw XML text in the Flutter chat UI.
-  static String _maskStreamingXml(String text) {
-    if (!text.contains('<')) return text;
-
-    // Mask unclosed known XML tool call blocks at the end of the streaming buffer.
-    final unclosedToolRegex = RegExp(
-      r'<(invoke|tool_call|function_call|tool_use|function|tool_calls)\b[^>]*?(?:>|$)(?:(?!<\/\1>)[\s\S])*$',
-      caseSensitive: false,
-    );
-    text = text.replaceFirst(unclosedToolRegex, '');
-
-    // Buffer partial opening tags trailing at the very end (e.g. "<", "<tool").
-    final trailingPartialTag = RegExp(
-      r'<(?:[a-zA-Z_][a-zA-Z0-9_:-]*)?$',
-      caseSensitive: false,
-    );
-    text = text.replaceFirst(trailingPartialTag, '');
-
-    return text;
-  }
 
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
   /// renderer shows them as tool cards instead of raw text.
   String _fenceBareToolCalls(String text) {
-    if (text.contains('<tool_calls')) {
-      text = text.replaceAllMapped(
-        RegExp(r'<tool_calls>([\s\S]*?)</tool_calls>', caseSensitive: false),
-        (m) => '\n```json\n${_xmlInvokesToJson(m.group(1) ?? '')}\n```\n',
-      );
-      text = text.replaceAll(
-        RegExp(r'</?tool_calls>', caseSensitive: false),
-        '',
-      );
-    }
-    if (text.contains('<invoke')) {
-      text = text.replaceAllMapped(
-        RegExp(
-          r'<invoke\s+name="[^"]+"[^>]*>[\s\S]*?</invoke>',
-          caseSensitive: false,
-        ),
-        (m) => '\n```json\n${_xmlInvokesToJson(m.group(0) ?? '')}\n```\n',
-      );
-    }
-    // Other XML dialects _findXmlToolCalls() already executes: <tool_call>,
-    // <function_call>, <tool_use>, <function name="...">.
-    const otherDialects = <String>[
-      r'<tool_call>[\s\S]*?</tool_call>',
-      r'<function_call>[\s\S]*?</function_call>',
-      r'<tool_use>[\s\S]*?</tool_use>',
-      r'<function\s+name="[^"]+"[^>]*>[\s\S]*?</function>',
-    ];
-    for (final pattern in otherDialects) {
-      final regex = RegExp(pattern, caseSensitive: false);
-      text = text.replaceAllMapped(regex, (m) {
-        final matched = m.group(0) ?? '';
-        if (_findXmlToolCalls(matched).isEmpty) return matched;
-        return '\n```json\n${_xmlInvokesToJson(matched)}\n```\n';
-      });
-    }
     if (!text.contains('"t"')) return text;
     if (text.contains('```json')) return text;
     final sb = StringBuffer();
