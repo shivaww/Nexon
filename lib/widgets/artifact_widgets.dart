@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:nexon/widgets/liquid_glass_widgets.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -467,8 +468,13 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
       );
     }
 
-    // SVG is complete — render it directly on chat background, no card
-    return RepaintBoundary(
+    // SVG is complete — render inside the shared card chrome
+    return LiquidGlassSurface(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      borderRadius: BorderRadius.circular(14),
+      backgroundColor: const Color(0xFFFFFBF2).withValues(alpha: 0.9),
+      enableBlur: false,
+      child: RepaintBoundary(
       child: LayoutBuilder(
         builder: (context, constraints) {
           // Parse viewBox to derive aspect ratio
@@ -560,6 +566,7 @@ class _SvgDiagramWidgetState extends State<SvgDiagramWidget> {
             ),
           );
         },
+      ),
       ),
     );
   }

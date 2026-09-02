@@ -116,6 +116,8 @@ class ChatSurface extends StatelessWidget {
                   }
                 }
                 final isUser = messages[index].role == MessageRole.user;
+                final isFirstOfGroup = index == 0 ||
+                    messages[index - 1].role != messages[index].role;
                 List<int> branchIndicesForVersions = [];
                 int currentVersionIndex = 0;
 
@@ -155,6 +157,7 @@ class ChatSurface extends StatelessWidget {
                 return MessageBubble(
                   message: messages[index],
                   index: index,
+                  isFirstOfGroup: isFirstOfGroup,
                   providerShortName: provider.shortName,
                   providerName: provider.name,
                   reasoningEnabled: settings.reasoningEnabled,
@@ -280,9 +283,9 @@ class ChatSurface extends StatelessWidget {
                           ),
                           borderRadius: BorderRadius.circular(16),
                           backgroundColor: const Color(
-                            0xFFEEF4FF,
+                            0xFFF5EFE4,
                           ).withValues(alpha: 0.85),
-                          highlightColor: const Color(0xFF93C5FD),
+                          highlightColor: const Color(0xFFDCCBB8),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
@@ -296,7 +299,7 @@ class ChatSurface extends StatelessWidget {
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
                                     valueColor: AlwaysStoppedAnimation<Color>(
-                                      Color(0xFF3B82F6),
+                                      Color(0xFF7B4E2E),
                                     ),
                                   ),
                                 ),
@@ -307,7 +310,7 @@ class ChatSurface extends StatelessWidget {
                                     style: const TextStyle(
                                       fontSize: 12.5,
                                       fontWeight: FontWeight.w500,
-                                      color: Color(0xFF1D4ED8),
+                                      color: Color(0xFF6C5946),
                                       fontFamily: 'monospace',
                                     ),
                                     overflow: TextOverflow.ellipsis,

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/widgets/liquid_glass_widgets.dart';
+import 'package:nexon/widgets/tool_card.dart';
 import 'package:nexon/main.dart';
 
 class McpToolBlock extends StatefulWidget {
@@ -613,7 +614,7 @@ class _McpToolBlockState extends State<McpToolBlock> {
         return (
           Icons.build_circle_outlined,
           const Color(0xFF2B6CB0),
-          method,
+          'Tool call',
           null,
         );
     }
@@ -678,83 +679,13 @@ class _McpToolBlockState extends State<McpToolBlock> {
       } catch (_) {}
     }
 
-    final (icon, color, label, subtitle) = _describe(method, params);
+    final (icon, color, label, _) = _describe(method, params);
 
-    return LiquidGlassSurface(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      borderRadius: BorderRadius.circular(14),
-      backgroundColor: color.withValues(alpha: 0.12),
-      highlightColor: color.withValues(alpha: 0.50),
-      shadowColor: color.withValues(alpha: 0.20),
-      enableBlur: false, // Optimized for scrolling list performance
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Row(
-                children: [
-                  Icon(icon, size: 17, color: color),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          label,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: color,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        if (subtitle != null)
-                          Text(
-                            subtitle,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: color.withValues(alpha: 0.75),
-                              fontFamily: 'monospace',
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    _expanded
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    size: 18,
-                    color: color.withValues(alpha: 0.6),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_expanded)
-            Container(
-              margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1E2E),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: SelectableText(
-                formattedContent,
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  fontFamily: 'monospace',
-                  color: Color(0xFFCDD6F4),
-                  height: 1.5,
-                ),
-              ),
-            ),
-        ],
-      ),
+    return ToolCallCard(
+      icon: icon,
+      accent: color,
+      summary: label,
+      detail: SelectableText(formattedContent, style: toolCardMonoStyle),
     );
   }
 }

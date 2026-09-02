@@ -13,6 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/main.dart';
 import 'package:nexon/widgets/nexon_chart.dart';
 import 'package:nexon/widgets/diff_viewer_widget.dart';
+import 'package:nexon/widgets/tool_card.dart';
 import 'package:nexon/widgets/scrollable_table_builder.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -34,6 +35,7 @@ class MessageBubble extends StatelessWidget {
     this.versionsCount = 0,
     this.currentVersionIndex = 0,
     this.onVersionChanged,
+    this.isFirstOfGroup = true,
     super.key,
   });
 
@@ -50,6 +52,7 @@ class MessageBubble extends StatelessWidget {
   final int versionsCount;
   final int currentVersionIndex;
   final ValueChanged<int>? onVersionChanged;
+  final bool isFirstOfGroup;
   final bool isSending;
 
   @override
@@ -81,10 +84,13 @@ class MessageBubble extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 12),
         padding: const EdgeInsets.symmetric(horizontal: 14),
-        child: Column(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: () => _showMessageActions(context, isUser),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (!isToolOutput) ...[
+            if (!isToolOutput && isFirstOfGroup) ...[
               Row(
                 children: [
                   if (isUser) ...[
@@ -178,7 +184,7 @@ class MessageBubble extends StatelessWidget {
                         ),
                       ),
                     ],
-                  ] else ...[
+                  ] else if (isFirstOfGroup) ...[
                     ProviderAvatar(
                       label: providerShortName,
                       small: true,
@@ -273,57 +279,6 @@ class MessageBubble extends StatelessWidget {
                             ),
                           ),
                         ),
-                      LiquidGlassIconButton(
-                        icon: Icons.content_copy_rounded,
-                        size: 28,
-                        tooltip: 'Copy text',
-                        onPressed: () {
-                          Clipboard.setData(ClipboardData(text: message.text));
-                          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Message copied to clipboard'),
-                              duration: Duration(seconds: 1),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        },
-                      ),
-                      if (!isUser) ...[
-                        const SizedBox(width: 6),
-                        StatefulBuilder(
-                          builder: (context, setTtsState) {
-                            final speaking = NexonTts.isSpeaking(message.text);
-                            return LiquidGlassIconButton(
-                              icon: speaking
-                                  ? Icons.stop_circle_rounded
-                                  : Icons.volume_up_rounded,
-                              size: 28,
-                              tooltip: speaking
-                                  ? 'Stop audio'
-                                  : 'Read aloud (TTS)',
-                              iconColor: speaking
-                                  ? const Color(0xFF9B4D39)
-                                  : const Color(0xFF5C3D26),
-                              onPressed: () {
-                                NexonTts.toggleSpeak(
-                                  message.text,
-                                  () => setTtsState(() {}),
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ],
-                      if (isUser) ...[
-                        const SizedBox(width: 6),
-                        LiquidGlassIconButton(
-                          icon: Icons.edit_rounded,
-                          size: 28,
-                          tooltip: 'Edit message',
-                          onPressed: onEditUserMessage,
-                        ),
-                      ],
                     ],
                   ),
                 ],
@@ -371,78 +326,46 @@ class MessageBubble extends StatelessWidget {
                     final method = toolResultMatch.group(1) ?? 'tool';
                     final sizeKb = (text.length / 1024).toStringAsFixed(1);
                     header = hasError
-                        ? '❌ Failed: $method'
-                        : '✅ Tool Result [$method]  ·  ${sizeKb} KB';
+                        ? 'Failed: $method'
+                        : 'Tool result: $method · ${sizeKb} KB';
                     headerIcon = hasError
                         ? Icons.error_outline
                         : Icons.check_circle_outline;
                   } else if (webSearchMatch) {
-                    header = '🔍 Web Search Results';
+                    header = 'Web search results';
                     headerIcon = Icons.search;
                     headerColor = const Color(0xFF0369A1);
                   } else if (urlMatch) {
-                    header = '🌐 URL Content Fetched';
+                    header = 'URL content fetched';
                     headerIcon = Icons.language;
                     headerColor = const Color(0xFF0369A1);
                   } else if (mcpMatch) {
-                    header = '⚙️ MCP Tool Result';
+                    header = 'MCP tool result';
                     headerIcon = Icons.settings;
                     headerColor = const Color(0xFF059669);
                   } else {
                     header = text.split('\n').first;
                   }
 
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: headerColor.withOpacity(0.06),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: headerColor.withOpacity(0.18)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: headerColor.withOpacity(0.06),
-                          blurRadius: 10,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: ExpansionTile(
-                      title: Text(
-                        header,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          color: headerColor,
-                          fontFamily: 'monospace',
-                        ),
+                    return ToolCallCard(
+                      icon: headerIcon,
+                      accent: headerColor,
+                      summary: header,
+                      detail: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: webSearchMatch
+                            ? [_buildMarkdownResult(context, message.text)]
+                            : _buildToolResultDetails(context, message.text),
                       ),
-                      leading: Icon(headerIcon, color: headerColor, size: 17),
-                      collapsedBackgroundColor: Colors.transparent,
-                      backgroundColor: Colors.transparent,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: webSearchMatch
-                                  ? [_buildMarkdownResult(context, message.text)]
-                                  : _buildToolResultDetails(
-                                      context,
-                                      message.text,
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
+                    );
                 },
               )
             else if (isUser)
-              Container(
-                width: double.infinity,
+              Align(
+                alignment: Alignment.centerRight,
+                child: Container(
+                constraints: const BoxConstraints(maxWidth: 520),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 15,
                   vertical: 13,
@@ -453,12 +376,12 @@ class MessageBubble extends StatelessWidget {
                     end: Alignment.bottomRight,
                     colors: [Color(0xFFFFFDF9), Color(0xFFF9F1E3)],
                   ),
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(18),
-                    topRight: Radius.circular(18),
-                    bottomLeft: Radius.circular(18),
-                    bottomRight: Radius.circular(5),
-                  ),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(18),
+                      topRight: Radius.circular(18),
+                      bottomRight: Radius.circular(18),
+                      bottomLeft: Radius.circular(5),
+                    ),
                   border: Border.all(color: Color(0xFFE7D8C4), width: 0.8),
                   boxShadow: [
                     BoxShadow(
@@ -533,9 +456,10 @@ class MessageBubble extends StatelessWidget {
                         letterSpacing: -0.1,
                       ),
                     ),
-                  ],
-                ),
-              )
+                ],
+              ),
+              ),
+            )
             else ...[
               if (message.reasoning.isNotEmpty && reasoningEnabled)
                 ThoughtBlock(thought: message.reasoning),
@@ -544,12 +468,73 @@ class MessageBubble extends StatelessWidget {
                 const StreamingCursor(),
             ],
             const SizedBox(height: 10),
-            Divider(
-              color: const Color(0xFFE7D8C4).withOpacity(0.5),
-              height: 1,
-              thickness: 0.6,
-            ),
           ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showMessageActions(BuildContext context, bool isUser) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SafeArea(
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFBF3),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFE0CEB8)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(
+                  Icons.content_copy_rounded,
+                  color: Color(0xFF7B4E2E),
+                ),
+                title: const Text('Copy text'),
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: message.text));
+                  Navigator.pop(sheetContext);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Message copied to clipboard'),
+                      duration: Duration(seconds: 1),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+              ),
+              if (!isUser)
+                ListTile(
+                  leading: const Icon(
+                    Icons.volume_up_rounded,
+                    color: Color(0xFF5C3D26),
+                  ),
+                  title: const Text('Read aloud'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    NexonTts.toggleSpeak(message.text, () {});
+                  },
+                ),
+              if (isUser)
+                ListTile(
+                  leading: const Icon(
+                    Icons.edit_rounded,
+                    color: Color(0xFF7B4E2E),
+                  ),
+                  title: const Text('Edit message'),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onEditUserMessage();
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -725,56 +710,20 @@ class MessageBubble extends StatelessWidget {
             );
           }
         case '<search_request>':
-          return Container(
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0F5FA),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFD0E0F0)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.search, color: Color(0xFF2B6CB0), size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Tool Use: Searched the web for "$content"',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2B6CB0),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          return McpToolBlock(
+            mcpJson: jsonEncode({
+              'method': 'web_search',
+              'params': {'q': content},
+            }),
+            isXml: false,
           );
         case '<read_url>':
-          return Container(
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0F5FA),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFD0E0F0)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.link, color: Color(0xFF2B6CB0), size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Tool Use: Reading webpage at "$content"',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2B6CB0),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          return McpToolBlock(
+            mcpJson: jsonEncode({
+              'method': 'read_url',
+              'params': {'url': content},
+            }),
+            isXml: false,
           );
         case '<command>':
           final contentStr =
@@ -936,31 +885,17 @@ class MessageBubble extends StatelessWidget {
       detailChildren.add(SelectableText(content, style: monoStyle));
     }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFBF2),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: accent.withOpacity(0.35)),
-      ),
-      child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        collapsedBackgroundColor: Colors.transparent,
-        backgroundColor: Colors.transparent,
-        leading: Icon(icon, color: accent, size: 18),
-        title: Text(
-          header,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w700,
-            color: accent,
-          ),
-        ),
-        children: detailChildren.isEmpty
-            ? [const SizedBox.shrink()]
-            : detailChildren,
-      ),
+    return ToolCallCard(
+      icon: icon,
+      accent: accent,
+      summary: header,
+      detail: detailChildren.isEmpty
+          ? const SizedBox.shrink()
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: detailChildren,
+            ),
     );
   }
 
