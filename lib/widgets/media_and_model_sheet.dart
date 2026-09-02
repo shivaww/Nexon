@@ -3204,21 +3204,28 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                                               ? result.message
                                               : 'Backup failed: ${result.message}';
                                         });
-                                        if (!result.success || result.needsRelogin) {
+                                        if (result.success && !result.needsRelogin) {
                                           _showSyncResultDialog(
                                             context,
-                                            title: result.success
-                                                ? 'Backup Complete'
-                                                : 'Backup Failed',
+                                            title: 'Backup Complete',
                                             message: result.message,
                                             details: result.details,
-                                            success: result.success,
+                                            success: true,
+                                          );
+                                          Future.delayed(const Duration(seconds: 3), () {
+                                            if (mounted) {
+                                              setState(() => _backupResultMessage = '');
+                                            }
+                                          });
+                                        } else {
+                                          _showSyncResultDialog(
+                                            context,
+                                            title: 'Backup Failed',
+                                            message: result.message,
+                                            details: result.details,
+                                            success: false,
                                             needsRelogin: result.needsRelogin,
                                           );
-                                        } else {
-                                          Future.delayed(const Duration(seconds: 3), () {
-                                            if (mounted) setState(() => _backupResultMessage = '');
-                                          });
                                         }
                                       }
                                     } catch (e) {

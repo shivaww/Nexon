@@ -642,17 +642,17 @@ class ChatClient {
             // outlets and skews non-news queries (pricing, docs, benchmarks).
             final effectiveTopic = topic;
             final effectiveTimeRange = trVal ?? (isFreshQuery ? 'month' : null);
-            // Speed: Tavily 'advanced' depth is several times slower; use it
-            // only when explicitly requested by the caller.
+            // Accuracy: default to Tavily's deeper search. Callers can still
+            // request 'basic' explicitly for low-latency lookups.
             final effectiveDepth =
                 searchDepth == 'advanced' || searchDepth == 'basic'
                 ? searchDepth!
-                : 'basic';
+                : 'advanced';
 
             final Map<String, dynamic> payload = {
               'api_key': currentKey,
               'query': query,
-              'max_results': 6,
+              'max_results': 8,
               'search_depth': effectiveDepth,
             };
             if (effectiveTopic != null) payload['topic'] = effectiveTopic;
