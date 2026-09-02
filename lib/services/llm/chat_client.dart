@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/main.dart';
 import 'package:nexon/data/models/provider_models.dart';
+import 'package:nexon/services/llm/message_pipeline.dart';
 
 class ChatClient {
   /// Shared keep-alive HTTP client: reuses TCP/TLS connections across
@@ -51,6 +52,44 @@ class ChatClient {
         return 'Temporarily unavailable from provider. Try another model or wait a moment.';
       default:
         return 'Provider error (HTTP $statusCode). Try another model or check your connection.';
+    }
+  }
+
+  /// Logs a provider HTTP failure with the real body and a sanitized request
+  /// structure, but never API keys or message text.
+  static void _logLlmHttpError(
+    int statusCode,
+    String body, {
+    String? providerId,
+    String? model,
+    Map<String, dynamic>? payload,
+  }) {
+    try {
+      final messages = payload?['messages'];
+      final messageSummary = messages is List
+          ? messages.map((m) {
+              if (m is! Map) return const <String, dynamic>{};
+              final content = m['content'];
+              return <String, dynamic>{
+                'role': m['role'],
+                'content_type': content is String ? 'text' : 'multipart',
+                if (content is String) 'content_length': content.length,
+              };
+            }).toList()
+          : null;
+      final summary = <String, dynamic>{
+        if (providerId != null) 'provider': providerId,
+        if (model != null) 'model': model,
+        'status': statusCode,
+        if (messageSummary != null) 'messages': messageSummary,
+        if (payload != null) 'max_tokens': payload['max_tokens'],
+        if (payload != null) 'temperature': payload['temperature'],
+        if (payload != null) 'has_tools': payload.containsKey('tools'),
+        'error_body': body,
+      };
+      debugPrint('[LLM] HTTP error: ${jsonEncode(summary)}');
+    } catch (_) {
+      // Diagnostics must never break the request path.
     }
   }
 
@@ -277,7 +316,7 @@ class ChatClient {
 
             final payload = <String, dynamic>{
               'model': model,
-              'messages': messages.map((message) {
+              'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
                 String finalText = message.text;
                 // In study mode, workspace files are NOT inlined — LLM queries them via tools.
                 final inlineFiles = studyModeEnabled
@@ -322,7 +361,8 @@ class ChatClient {
             final body = await response.transform(utf8.decoder).join();
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              _logLlmHttpError(response.statusCode, body, providerId: provider.id, model: model, payload: payload);
+              throw HttpException(_friendlyLlmError(response.statusCode, body));
             }
             final decoded = jsonDecode(body);
             if (decoded is Map<String, dynamic> &&
@@ -426,7 +466,7 @@ class ChatClient {
 
             final payload = <String, dynamic>{
               'model': model,
-              'messages': messages.map((message) {
+              'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
                 String finalText = message.text;
                 // In study mode, workspace files are NOT inlined — LLM queries them via tools.
                 final inlineFiles = studyModeEnabled
@@ -470,8 +510,9 @@ class ChatClient {
             response = await request.close();
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              final body = await response.transform(utf8.decoder).join();
-              throw HttpException(_friendlyLlmError(response.statusCode, body));
+              final errorBody = await response.transform(utf8.decoder).join();
+              _logLlmHttpError(response.statusCode, errorBody, providerId: provider.id, model: model, payload: payload);
+              throw HttpException(_friendlyLlmError(response.statusCode, errorBody));
             }
             success = true;
             break;

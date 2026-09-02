@@ -1969,20 +1969,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           color: Color(0xFF8C7A6B),
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                crossFadeState: _advancedExpanded
-                    ? CrossFadeState.showSecond
-                    : CrossFadeState.showFirst,
-                duration: const Duration(milliseconds: 240),
-                sizeCurve: Curves.easeOutCubic,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-
+                      const SizedBox(height: 18),
         // Thinking / Reasoning Switch Card
         LiquidGlassSurface(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -2027,13 +2014,47 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Thinking Depth',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF2D241C),
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Thinking Depth',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF2D241C),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5EFE4),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: const Color(0xFFE7D8C4),
+                        ),
+                      ),
+                      child: Text(
+                        _reasoningEffort == 'low'
+                            ? 'Low'
+                            : _reasoningEffort == 'medium'
+                                ? 'Medium'
+                                : _reasoningEffort == 'high'
+                                    ? 'High'
+                                    : _reasoningEffort == 'extra'
+                                        ? 'Extra'
+                                        : 'Max',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF7B4E2E),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 2),
                 const Text(
@@ -2041,34 +2062,72 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: ProviderSettings.reasoningEfforts.map((level) {
-                    final selected = _reasoningEffort == level;
-                    return ChoiceChip(
-                      label: Text(level),
-                      selected: selected,
-                      selectedColor: const Color(0xFF7B4E2E),
-                      backgroundColor: Colors.transparent,
-                      side: const BorderSide(color: Color(0xFFE5DDD3)),
-                      labelStyle: TextStyle(
-                        fontSize: 12,
-                        color: selected ? Colors.white : const Color(0xFF2D241C),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 2.5,
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 7,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 16,
+                    ),
+                  ),
+                  child: Slider(
+                    value: ProviderSettings.reasoningEfforts
+                        .indexOf(_reasoningEffort)
+                        .clamp(0, 4)
+                        .toDouble(),
+                    min: 0,
+                    max: 4,
+                    divisions: 4,
+                    activeColor: const Color(0xFF7B4E2E),
+                    inactiveColor: const Color(0xFFE7D8C4),
+                    onChanged: (val) {
+                      final idx = val.round().clamp(0, 4);
+                      final level = ProviderSettings.reasoningEfforts[idx];
+                      setState(() => _reasoningEffort = level);
+                      widget.onReasoningEffortChanged(level);
+                    },
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Low',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Color(0xFF8C7A6B),
+                        ),
                       ),
-                      onSelected: (sel) {
-                        if (sel) {
-                          setState(() => _reasoningEffort = level);
-                          widget.onReasoningEffortChanged(level);
-                        }
-                      },
-                    );
-                  }).toList(),
+                      Text(
+                        'Max',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Color(0xFF8C7A6B),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
         ],
+                    ],
+                  ),
+                ),
+                crossFadeState: _advancedExpanded
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                duration: const Duration(milliseconds: 240),
+                sizeCurve: Curves.easeOutCubic,
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
