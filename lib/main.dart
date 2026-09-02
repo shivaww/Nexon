@@ -241,6 +241,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   bool _deepResearchEnabled = false;
   bool _studyModeEnabled = false;
   String _userName = '';
+  String _promptSig = '';
+  int _promptUseCount = 0;
 
   /// System prompt engine — assembles the XML-tagged prompt from base + features.
   final SystemPromptEngine _promptEngine = SystemPromptEngine();
