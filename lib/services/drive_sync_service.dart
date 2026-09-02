@@ -1154,7 +1154,45 @@ class DriveSyncService {
     }
 
     final mergedList = mergedMap.values.toList();
-    await prefs.setString('chat_sessions_v1', jsonEncode(mergedList));
+
+    // Sort: pinned first, then descending by updatedAt
+    mergedList.sort((a, b) {
+      final aPinned = a['isPinned'] == true;
+      final bPinned = b['isPinned'] == true;
+      if (aPinned != bPinned) return aPinned ? -1 : 1;
+
+      final aTime = DateTime.tryParse(a['updatedAt']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bTime = DateTime.tryParse(b['updatedAt']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return bTime.compareTo(aTime);
+    });
+
+    final allJson = jsonEncode(mergedList);
+    const maxPrefsBytes = 1500 * 1024;
+
+    if (utf8.encode(allJson).length <= maxPrefsBytes) {
+      await prefs.setString('chat_sessions_v1', allJson);
+    } else {
+      final trimmed = mergedList.take(20).toList();
+      await prefs.setString('chat_sessions_v1', jsonEncode(trimmed));
+      try {
+        final docDir = await getApplicationDocumentsDirectory();
+        final backupFile = File('${docDir.path}/sessions/prefs_backup.json');
+        if (!await backupFile.parent.exists()) {
+          await backupFile.parent.create(recursive: true);
+        }
+        final tmp = File('${backupFile.path}.tmp');
+        await tmp.writeAsString(allJson, flush: true);
+        await tmp.rename(backupFile.path);
+        log.add(
+          '📦 Session payload exceeds 1.5MB; offloaded complete set to local backup file.',
+        );
+      } catch (e) {
+        log.add('⚠️ Failed to write local session backup: $e');
+      }
+    }
+
     log.add(
       '✅ Merged $localCount local chats with ${backupSessionsRaw.length} remote chats. Result: ${mergedList.length} chats ($addedFromRemote added, $updatedFromRemote updated).',
     );

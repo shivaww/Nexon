@@ -2436,58 +2436,60 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
         // Agentic Deep Research Card
         LiquidGlassSurface(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           borderRadius: BorderRadius.circular(18),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Expanded(
-                child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Agentic Deep Research',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF2D241C),
-                    ),
+                child: Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Agentic Deep Research',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D241C),
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Multi-step research with web search. Requires Web Search enabled.',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
+                      ),
+                    ],
                   ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Multi-step research with web search. Requires Web Search enabled.',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF6C5946)),
-                  ),
-                ],
                 ),
               ),
               Switch(
                 value: _deepResearchEnabled,
                 activeColor: const Color(0xFF7B4E2E),
-                  onChanged: (val) async {
-                    if (val) {
-                      if (_agenticEnabled) {
-                        _showExclusivitySnackBar('Deep Research', 'Agentic File Access');
-                        return;
-                      }
-                      if (_studyModeEnabled) {
-                        _showExclusivitySnackBar('Deep Research', 'Study Mode');
-                        return;
-                      }
-                      final result = await _checkBridgeAlive();
-                      if (!mounted) return;
-                      if (result['ok'] != true) {
-                        final reason =
-                            result['reason']?.toString() ?? 'bridge_unreachable';
-                        _showDeepResearchSetupDialog(reason: reason);
-                        setState(() => _deepResearchEnabled = false);
-                        widget.onDeepResearchEnabledChanged(false);
-                        return;
-                      }
+                onChanged: (val) async {
+                  if (val) {
+                    if (_agenticEnabled) {
+                      _showExclusivitySnackBar('Deep Research', 'Agentic File Access');
+                      return;
                     }
-                    setState(() => _deepResearchEnabled = val);
-                    widget.onDeepResearchEnabledChanged(val);
-                  },
+                    if (_studyModeEnabled) {
+                      _showExclusivitySnackBar('Deep Research', 'Study Mode');
+                      return;
+                    }
+                    final result = await _checkBridgeAlive();
+                    if (!mounted) return;
+                    if (result['ok'] != true) {
+                      final reason =
+                          result['reason']?.toString() ?? 'bridge_unreachable';
+                      _showDeepResearchSetupDialog(reason: reason);
+                      setState(() => _deepResearchEnabled = false);
+                      widget.onDeepResearchEnabledChanged(false);
+                      return;
+                    }
+                  }
+                  setState(() => _deepResearchEnabled = val);
+                  widget.onDeepResearchEnabledChanged(val);
+                },
               ),
             ],
           ),
@@ -2496,32 +2498,34 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
         // Study Mode / Cross-Document Analysis Card
         LiquidGlassSurface(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           borderRadius: BorderRadius.circular(18),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Study Mode / Cross-Document Analysis',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
+                child: Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Study Mode / Cross-Document Analysis',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2D241C),
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      'Cross-reference sources, synthesize insights, and build study guides across documents',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF6C5946),
+                      SizedBox(height: 2),
+                      Text(
+                        'Cross-reference sources, synthesize insights, and build study guides across documents',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF6C5946),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               Switch(
@@ -2542,7 +2546,6 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       await widget.onSystemMessage(
                         'Study Mode requires the Python bridge. Start it from Settings or run the bridge manually.',
                       );
-                      return;
                     }
                   }
                   setState(() => _studyModeEnabled = val);

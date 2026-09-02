@@ -433,15 +433,41 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
   }
 
-  /// Merges [incoming] sessions into [_sessions], skipping ids that already
-  /// exist (the in-memory copy is newer). Returns how many were added.
+  /// Merges [incoming] sessions into [_sessions]. If an ID already exists,
+  /// preserves whichever copy contains more messages or a newer timestamp.
   int _mergeLoadedSessions(List<ChatSession> incoming) {
     if (incoming.isEmpty) return 0;
-    final existingIds = _sessions.map((s) => s.id).toSet();
-    final older = incoming.where((s) => !existingIds.contains(s.id)).toList();
-    if (older.isEmpty) return 0;
-    _sessions = [..._sessions, ...older];
-    return older.length;
+    int added = 0;
+    final Map<String, ChatSession> map = {
+      for (final s in _sessions) s.id: s,
+    };
+
+    for (final remote in incoming) {
+      if (!map.containsKey(remote.id)) {
+        map[remote.id] = remote;
+        added++;
+      } else {
+        final local = map[remote.id]!;
+        final localMsgs = local.messages.length;
+        final remoteMsgs = remote.messages.length;
+        final localTime = local.updatedAt;
+        final remoteTime = remote.updatedAt;
+
+        if (remoteMsgs > localMsgs || (remoteMsgs == localMsgs && remoteTime.isAfter(localTime))) {
+          map[remote.id] = remote;
+          added++;
+        }
+      }
+    }
+
+    if (added > 0) {
+      _sessions = map.values.toList();
+      _sessions.sort((a, b) {
+        if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
+        return b.updatedAt.compareTo(a.updatedAt);
+      });
+    }
+    return added;
   }
 
   List<ChatMessage> get _messages {
@@ -1103,10 +1129,32 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       final prefs = await SharedPreferences.getInstance();
       final backupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
       if (!backupEnabled) return;
-      final rawSessions = prefs.getString('chat_sessions_v1');
-      if (rawSessions == null) return;
-      final sessions = jsonDecode(rawSessions) as List<dynamic>;
-      await DriveSyncService.syncToDrive(sessions, force: true);
+
+      // Prefer the in-memory full session list to avoid sending truncated history.
+      // Fall back to reading disk backup or SharedPreferences if in-memory is empty.
+      List<dynamic> sessionsToBackup = _sessions;
+      if (sessionsToBackup.isEmpty) {
+        try {
+          final backupFile = await _sessionBackupPrefsFile();
+          if (await backupFile.exists()) {
+            final raw = await backupFile.readAsString();
+            if (raw.trim().isNotEmpty) {
+              sessionsToBackup = jsonDecode(raw) as List<dynamic>;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (sessionsToBackup.isEmpty) {
+        final rawSessions = prefs.getString('chat_sessions_v1');
+        if (rawSessions != null && rawSessions.trim().isNotEmpty) {
+          sessionsToBackup = jsonDecode(rawSessions) as List<dynamic>;
+        }
+      }
+
+      if (sessionsToBackup.isNotEmpty) {
+        await DriveSyncService.syncToDrive(sessionsToBackup, force: true);
+      }
     } catch (_) {}
   }
 
