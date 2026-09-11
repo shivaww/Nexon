@@ -12,6 +12,10 @@ class NexonTts {
   static bool _isSpeaking = false;
   static Map<String, String>? _selectedVoice;
 
+  /// Bumped on every speaking-state change so any read-aloud button in the
+  /// chat can rebuild its icon without holding its own listener.
+  static final ValueNotifier<int> revision = ValueNotifier<int>(0);
+
   static Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -28,6 +32,11 @@ class NexonTts {
     VoidCallback onStateChange,
   ) async {
     text = sanitizeForTts(text);
+    final original = onStateChange;
+    onStateChange = () {
+      original();
+      revision.value++;
+    };
     try {
       if (_isSpeaking && _speakingText == text) {
         await _flutterTts.stop();
@@ -75,6 +84,12 @@ class NexonTts {
 
   static bool isSpeaking(String text) {
     return _isSpeaking && _speakingText == text;
+  }
+
+  /// Same as [isSpeaking] but accepts the raw (unsanitized) message text,
+  /// matching what [toggleSpeak] stores while it is reading.
+  static bool isSpeakingMessage(String rawText) {
+    return _isSpeaking && _speakingText == sanitizeForTts(rawText);
   }
 
   static Future<List<dynamic>> getVoices() async {

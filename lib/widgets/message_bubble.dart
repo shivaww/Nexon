@@ -11,6 +11,7 @@ import 'package:flutter_markdown_latex/flutter_markdown_latex.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/main.dart';
+import 'package:nexon/utils/code_helpers.dart';
 import 'package:nexon/widgets/nexon_chart.dart';
 import 'package:nexon/widgets/diff_viewer_widget.dart';
 import 'package:nexon/widgets/tool_card.dart';
@@ -23,8 +24,6 @@ class MessageBubble extends StatelessWidget {
   const MessageBubble({
     required this.message,
     required this.index,
-    required this.providerShortName,
-    required this.providerName,
     required this.reasoningEnabled,
     required this.onEditUserMessage,
     required this.agenticWorkspace,
@@ -43,8 +42,6 @@ class MessageBubble extends StatelessWidget {
 
   final ChatMessage message;
   final int index;
-  final String providerShortName;
-  final String providerName;
   final bool reasoningEnabled;
   final String agenticWorkspace;
   final String fileName;
@@ -90,6 +87,9 @@ class MessageBubble extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
+          // User messages: a plain tap opens the same action sheet as a
+          // long-press, so copy/edit is one tap away.
+          onTap: isUser ? () => _showMessageActions(context, true) : null,
           onLongPress: () => _showMessageActions(context, isUser),
           child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -188,21 +188,6 @@ class MessageBubble extends StatelessWidget {
                         ),
                       ),
                     ],
-                  ] else if (isFirstOfGroup) ...[
-                    ProviderAvatar(
-                      label: providerShortName,
-                      small: true,
-                      animationState: animationState,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      providerName,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
                   ],
                   const Spacer(),
                   Row(
@@ -351,7 +336,13 @@ class MessageBubble extends StatelessWidget {
                     header = text.split('\n').first;
                   }
 
-                    return ToolCallCard(
+                    final quiet =
+                        webSearchMatch ||
+                        urlMatch ||
+                        text.startsWith('Quiz results') ||
+                        text.startsWith('Quiz Tool Result') ||
+                        isQuietToolName(toolResultMatch?.group(1) ?? '');
+                    final card = ToolCallCard(
                       icon: headerIcon,
                       accent: headerColor,
                       summary: header,
@@ -363,6 +354,10 @@ class MessageBubble extends StatelessWidget {
                             : _buildToolResultDetails(context, message.text),
                       ),
                     );
+                    if (quiet) {
+                      return ThoughtBlock(thought: '', extras: [card]);
+                    }
+                    return card;
                 },
               )
             else if (isUser)
@@ -465,11 +460,31 @@ class MessageBubble extends StatelessWidget {
               ),
             )
             else ...[
-              if (message.reasoning.isNotEmpty && reasoningEnabled)
-                ThoughtBlock(thought: message.reasoning),
-              ..._parseRichMessageContent(context, message.text),
-              if (animationState != AvatarAnimationState.idle)
-                const StreamingCursor(),
+              Builder(
+                builder: (context) {
+                  final quietTools = <Widget>[];
+                  final visible = _parseRichMessageContent(
+                    context,
+                    message.text,
+                    quietSink: quietTools,
+                  );
+                  final hasThought =
+                      message.reasoning.isNotEmpty && reasoningEnabled;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (hasThought || quietTools.isNotEmpty)
+                        ThoughtBlock(
+                          thought: hasThought ? message.reasoning : '',
+                          extras: quietTools,
+                        ),
+                      ...visible,
+                      if (animationState != AvatarAnimationState.idle)
+                        const StreamingCursor(),
+                    ],
+                  );
+                },
+              ),
             ],
             if (isLastMessage &&
                 !isUser &&
@@ -495,11 +510,7 @@ class MessageBubble extends StatelessWidget {
                       },
                     ),
                     const SizedBox(width: 12),
-                    _GhostAction(
-                      icon: Icons.volume_up_rounded,
-                      tooltip: 'Read aloud',
-                      onTap: () => NexonTts.toggleSpeak(message.text, () {}),
-                    ),
+                    _SpeakAction(message: message),
                   ],
                 ),
               ),
@@ -576,7 +587,11 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  List<Widget> _parseRichMessageContent(BuildContext context, String text) {
+  List<Widget> _parseRichMessageContent(
+    BuildContext context,
+    String text, {
+    List<Widget>? quietSink,
+  }) {
     final widgets = <Widget>[];
     int currentIndex = 0;
 
@@ -650,15 +665,19 @@ class MessageBubble extends StatelessWidget {
               resultForCall = idx != -1 ? sections[idx] : null;
             }
           }
-          widgets.add(
-            McpToolBlock(
-              mcpJson: jsonEncode({
-                'method': fenceCall['t']?.toString() ?? 'tool',
-                'params': fenceCall['a'] ?? <String, dynamic>{},
-              }),
-              resultText: resultForCall,
-            ),
+          final toolName = fenceCall['t']?.toString() ?? 'tool';
+          final toolBlock = McpToolBlock(
+            mcpJson: jsonEncode({
+              'method': toolName,
+              'params': fenceCall['a'] ?? <String, dynamic>{},
+            }),
+            resultText: resultForCall,
           );
+          if (quietSink != null && isQuietToolName(toolName)) {
+            quietSink.add(toolBlock);
+          } else {
+            widgets.add(toolBlock);
+          }
         }
         currentIndex += toolFence.end;
         continue;
@@ -1038,6 +1057,31 @@ class _VisualStreamingPlaceholder extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Read-aloud toggle: a speaker while idle, and a stop (square-in-circle)
+/// badge while this message is the one being spoken.
+class _SpeakAction extends StatelessWidget {
+  const _SpeakAction({required this.message});
+
+  final ChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: NexonTts.revision,
+      builder: (context, _, __) {
+        final speaking = NexonTts.isSpeakingMessage(message.text);
+        return _GhostAction(
+          icon: speaking
+              ? Icons.stop_circle_outlined
+              : Icons.volume_up_rounded,
+          tooltip: speaking ? 'Stop reading' : 'Read aloud',
+          onTap: () => NexonTts.toggleSpeak(message.text, () {}),
+        );
+      },
     );
   }
 }

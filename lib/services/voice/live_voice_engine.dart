@@ -459,8 +459,23 @@ String sanitizeForTts(String text) {
   result = result.replaceAll(RegExp(r'\\[^a-zA-Z\s]'), ' ');
   result = result.replaceAll(RegExp(r'[\u2200-\u22FF\u2A00-\u2AFF\u27C0-\u27EF]'), ' ');
 
-  // Fenced code blocks ```...``` -> "code block".
-  result = result.replaceAll(RegExp(r'```[\s\S]*?```'), ' code block ');
+  // Fenced blocks: describe visuals/artifacts instead of reading raw
+  // content out loud (chart coordinates and document markup read horribly).
+  result = result.replaceAllMapped(
+    RegExp(r'```(\w[\w-]*)?[ \t]*\n?([\s\S]*?)```'),
+    (m) {
+      final lang = (m[1] ?? '').toLowerCase();
+      const visual = {'svg', 'chart', 'json-chart', 'mermaid', 'graph'};
+      const document = {'html', 'artifact', 'xml', 'docx'};
+      if (visual.contains(lang)) {
+        return ' . You can see the visual about it in the chat. ';
+      }
+      if (document.contains(lang)) {
+        return ' . Check the document in the chat for it. ';
+      }
+      return ' code block ';
+    },
+  );
 
   // Inline `code`.
   result = result.replaceAll(RegExp(r'`[^`\n]*`'), ' code ');
@@ -506,6 +521,12 @@ String sanitizeForTts(String text) {
   result = result.replaceAll(RegExp(r'__'), ' ');
   result = result.replaceAll(RegExp(r'~~'), ' ');
 
+  // Markdown tables -> a spoken pointer, never the raw pipe-delimited cells.
+  result = result.replaceAll(
+    RegExp(r'(^[ \t]*\|.*\|[ \t]*\n?)+', multiLine: true),
+    ' . You can see the table about it in the chat. ',
+  );
+
   // Symbols TTS would otherwise read out as words (after currency/percent).
   result = result.replaceAll(RegExp(r'[*#%^&{}\[\]@\\|/<>+=~`_\-]'), ' ');
 
@@ -549,8 +570,22 @@ String sanitizeForNaturalTts(String text) {
   result = result.replaceAll(RegExp(r'\\[^a-zA-Z\s]'), ' ');
   result = result.replaceAll(RegExp(r'[\u2200-\u22FF\u2A00-\u2AFF\u27C0-\u27EF]'), ' ');
 
-  // Fenced code blocks ```...``` -> ' . Code block. '
-  result = result.replaceAll(RegExp(r'```[\s\S]*?```'), ' . Code block. ');
+  // Fenced blocks: describe visuals/artifacts instead of reading them out.
+  result = result.replaceAllMapped(
+    RegExp(r'```(\w[\w-]*)?[ \t]*\n?([\s\S]*?)```'),
+    (m) {
+      final lang = (m[1] ?? '').toLowerCase();
+      const visual = {'svg', 'chart', 'json-chart', 'mermaid', 'graph'};
+      const document = {'html', 'artifact', 'xml', 'docx'};
+      if (visual.contains(lang)) {
+        return ' . You can see the visual about it in the chat. ';
+      }
+      if (document.contains(lang)) {
+        return ' . Check the document in the chat for it. ';
+      }
+      return ' . Code block. ';
+    },
+  );
 
   // Inline `code`.
   result = result.replaceAll(RegExp(r'`[^`\n]*`'), ' code ');
@@ -631,6 +666,12 @@ String sanitizeForNaturalTts(String text) {
   result = result.replaceAll(RegExp(r'\*\*'), ' ');
   result = result.replaceAll(RegExp(r'__'), ' ');
   result = result.replaceAll(RegExp(r'~~'), ' ');
+
+  // Markdown tables -> a spoken pointer, never the raw cells.
+  result = result.replaceAll(
+    RegExp(r'(^[ \t]*\|.*\|[ \t]*\n?)+', multiLine: true),
+    ' . You can see the table about it in the chat. ',
+  );
 
   // Remove decorative symbols.
   result = result.replaceAll(RegExp(r'[*#\$%\^&{}\[\]@\\|/<>=+~`]+'), ' ');

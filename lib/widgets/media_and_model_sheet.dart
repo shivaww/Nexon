@@ -348,8 +348,24 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     }
   }
 
-  void _showDeepResearchSetupDialog({required String reason}) {
+  void _showFeatureSetupDialog({
+    required String reason,
+    required bool forAgentic,
+  }) {
     final isUnreachable = reason == 'bridge_unreachable';
+    final title = isUnreachable
+        ? 'Bridge Not Running'
+        : (forAgentic
+            ? 'Native Tools Required'
+            : 'Deep Research Setup Required');
+    final body = isUnreachable
+        ? "The Python bridge process isn't currently running. Please start it in Termux:"
+        : (forAgentic
+            ? 'Agentic File Access needs the native tools binary. Install or build it in Termux:'
+            : 'Deep Research requires the Python bridge. Please run this setup command in Termux:');
+    final setupCommand = isUnreachable
+        ? 'cd ~/nexon_bridge && python3 mcp_server.py'
+        : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash';
     showDialog(
       context: context,
       builder: (ctx) {
@@ -357,20 +373,12 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           builder: (ctx, setDialogState) {
             bool rechecking = false;
             return AlertDialog(
-              title: Text(
-                isUnreachable
-                    ? 'Bridge Not Running'
-                    : 'Deep Research Setup Required',
-              ),
+              title: Text(title),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    isUnreachable
-                        ? "The Python bridge process isn't currently running. Please start it in Termux:"
-                        : 'Deep Research requires the Python bridge. Please run this setup command in Termux:',
-                  ),
+                  Text(body),
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(8),
@@ -379,9 +387,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       children: [
                         Expanded(
                           child: SelectableText(
-                            isUnreachable
-                                ? 'cd ~/nexon_bridge && python3 mcp_server.py'
-                                : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
+                            setupCommand,
                             style: const TextStyle(
                               color: Colors.green,
                               fontFamily: 'monospace',
@@ -397,11 +403,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           ),
                           onPressed: () {
                             Clipboard.setData(
-                              ClipboardData(
-                                text: isUnreachable
-                                    ? 'cd ~/nexon_bridge && python3 mcp_server.py'
-                                    : 'curl -sL https://raw.githubusercontent.com/shivaww/Nexon/main/install_bridge.sh | bash',
-                              ),
+                              ClipboardData(text: setupCommand),
                             );
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
@@ -427,25 +429,37 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           ? null
                           : () async {
                               setRecheckState(() => rechecking = true);
-                              final result = await _checkBridgeAlive();
+                              final ready = forAgentic
+                                  ? (await NativeToolsService.findBinary()) !=
+                                      null
+                                  : (await _checkBridgeAlive())['ok'] == true;
                               if (!mounted) return;
-                              if (result['ok'] == true) {
+                              if (ready) {
                                 Navigator.of(ctx).pop();
-                                setState(() => _deepResearchEnabled = true);
-                                widget.onDeepResearchEnabledChanged(true);
+                                if (forAgentic) {
+                                  setState(() => _agenticEnabled = true);
+                                  widget.onAgenticEnabledChanged(true);
+                                } else {
+                                  setState(() => _deepResearchEnabled = true);
+                                  widget.onDeepResearchEnabledChanged(true);
+                                }
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
+                                  SnackBar(
                                     content: Text(
-                                      'Bridge is running! Deep Research enabled.',
+                                      forAgentic
+                                          ? 'Native tools found! Agentic File Access enabled.'
+                                          : 'Bridge is running! Deep Research enabled.',
                                     ),
                                   ),
                                 );
                               } else {
                                 setRecheckState(() => rechecking = false);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
+                                  SnackBar(
                                     content: Text(
-                                      'Bridge still not reachable. Please check it is running.',
+                                      forAgentic
+                                          ? 'Native tools binary still not found.'
+                                          : 'Bridge still not reachable. Please check it is running.',
                                     ),
                                   ),
                                 );
@@ -1414,6 +1428,26 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     child: DropdownButtonFormField<String>(
                       value: _isCustomSel ? 'custom' : _selectedProviderId,
                       dropdownColor: const Color(0xFFFFFBF2),
+                      // Let the field constrain the label instead of the label
+                      // stretching and colliding with the dropdown arrow.
+                      isExpanded: true,
+                      selectedItemBuilder: (context) => providerCatalog
+                          .map(
+                            (p) => Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                p.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                  height: 1.15,
+                                ),
+                              ),
+                            ),
+                          )
+                          .toList(),
                       decoration: const InputDecoration(
                         labelText: 'AI Provider',
                         labelStyle: TextStyle(
@@ -1445,6 +1479,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           value: p.id,
                           child: Text(
                             p.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 14,
@@ -2188,7 +2224,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         final binary = await NativeToolsService.findBinary();
                         if (!mounted) return;
                         if (binary == null) {
-                          _showDeepResearchSetupDialog(reason: 'native_tools_missing');
+                          _showFeatureSetupDialog(
+                            reason: 'native_tools_missing',
+                            forAgentic: true,
+                          );
                           return;
                         }
                       }
@@ -2540,7 +2579,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                     if (result['ok'] != true) {
                       final reason =
                           result['reason']?.toString() ?? 'bridge_unreachable';
-                      _showDeepResearchSetupDialog(reason: reason);
+                      _showFeatureSetupDialog(
+                        reason: reason,
+                        forAgentic: false,
+                      );
                       setState(() => _deepResearchEnabled = false);
                       widget.onDeepResearchEnabledChanged(false);
                       return;

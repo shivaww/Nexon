@@ -569,13 +569,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
             final newSession = ChatSession(
               id: newId,
               title: 'New Chat',
-              messages: [
-                const ChatMessage(
-                  role: MessageRole.assistant,
-                  text:
-                      'New chat ready. Choose any configured provider and model.',
-                ),
-              ],
+              messages: const [],
               providerId: _selectedProviderId,
               model: _activeModel,
             );
@@ -6865,12 +6859,7 @@ jobs:
     final newSession = ChatSession(
       id: newId,
       title: 'New Chat',
-      messages: [
-        const ChatMessage(
-          role: MessageRole.assistant,
-          text: 'New chat ready. Choose any configured provider and model.',
-        ),
-      ],
+      messages: const [],
       providerId: _selectedProviderId,
       model: _activeModel,
     );
@@ -6932,12 +6921,7 @@ jobs:
     final newSession = ChatSession(
       id: newId,
       title: resolvedTitle,
-      messages: const [
-        ChatMessage(
-          role: MessageRole.assistant,
-          text: 'New chat ready. Choose any configured provider and model.',
-        ),
-      ],
+      messages: const [],
       providerId: _selectedProviderId,
       model: _activeModel,
     );

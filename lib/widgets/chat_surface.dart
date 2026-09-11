@@ -200,8 +200,6 @@ class ChatSurface extends StatelessWidget {
                           _isPairedResult(messages, index + 1))
                       ? messages[index + 1].text
                       : null,
-                  providerShortName: provider.shortName,
-                  providerName: provider.name,
                   reasoningEnabled: settings.reasoningEnabled,
                   animationState: state,
                   agenticWorkspace: agenticWorkspace,

@@ -32,8 +32,12 @@ String formatMathText(String text) {
 }
 
 class ThoughtBlock extends StatefulWidget {
-  const ThoughtBlock({required this.thought, super.key});
+  const ThoughtBlock({required this.thought, this.extras, super.key});
   final String thought;
+
+  /// Extra rows — folded tool call/result capsules — rendered beneath the
+  /// reasoning text inside this same disclosure.
+  final List<Widget>? extras;
 
   @override
   State<ThoughtBlock> createState() => _ThoughtBlockState();
@@ -90,14 +94,21 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
           if (_expanded)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-              child: Text(
-                widget.thought,
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  fontStyle: FontStyle.italic,
-                  color: Color(0xFF5C4E40),
-                  height: 1.4,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.thought.trim().isNotEmpty)
+                    Text(
+                      widget.thought,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontStyle: FontStyle.italic,
+                        color: Color(0xFF5C4E40),
+                        height: 1.4,
+                      ),
+                    ),
+                  if (widget.extras != null) ...widget.extras!,
+                ],
               ),
             ),
         ],

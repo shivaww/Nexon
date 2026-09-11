@@ -85,6 +85,27 @@ bool isKnownToolNameGlobal(String t) {
   return false;
 }
 
+/// General-purpose tools — web search, study/quiz, workspace browsing —
+/// whose call and result rows are folded into the assistant's Thought
+/// Process block instead of rendering as standalone chat capsules.
+/// Agentic file-access tools and deep-research calls stay visible so the
+/// user can audit what actually touched their machine.
+bool isQuietToolName(String t) {
+  const quiet = {
+    'web_search',
+    'search_web',
+    'read_url',
+    'quiz',
+    'quiz_request',
+    'step_complete',
+    'todo_create',
+    'todo_done',
+  };
+  if (quiet.contains(t)) return true;
+  if (t.startsWith('workspace_')) return true;
+  return false;
+}
+
 String? detectNativeToolCall(String text) {
   if (!text.contains('```')) return null;
   final m = RegExp(r'"t"\s*:\s*"([a-z_][a-zA-Z0-9_]*)"').firstMatch(text);
