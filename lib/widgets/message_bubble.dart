@@ -37,6 +37,7 @@ class MessageBubble extends StatelessWidget {
     this.onVersionChanged,
     this.isFirstOfGroup = true,
     this.isLastMessage = false,
+    this.pairedResultText,
     super.key,
   });
 
@@ -55,6 +56,7 @@ class MessageBubble extends StatelessWidget {
   final ValueChanged<int>? onVersionChanged;
   final bool isFirstOfGroup;
   final bool isLastMessage;
+  final String? pairedResultText;
   final bool isSending;
 
   @override
@@ -625,13 +627,36 @@ class MessageBubble extends StatelessWidget {
                   .whereType<Map<String, dynamic>>()
                   .toList()
             : <Map<String, dynamic>>[toolFence.json];
-        for (final fenceCall in fenceCalls) {
+        final sections = (pairedResultText == null ||
+                pairedResultText!.trim().isEmpty)
+            ? <String>[]
+            : pairedResultText!
+                  .split(RegExp(r'\n\n---\n\n'))
+                  .where((s) => s.trim().isNotEmpty)
+                  .toList();
+        for (var ci = 0; ci < fenceCalls.length; ci++) {
+          final fenceCall = fenceCalls[ci];
+          String? resultForCall;
+          if (sections.isNotEmpty) {
+            if (fenceCalls.length == 1) {
+              resultForCall = sections.join('\n\n---\n\n');
+            } else if (sections.length == fenceCalls.length) {
+              resultForCall = sections[ci];
+            } else {
+              final m = fenceCall['t']?.toString() ?? '';
+              final idx = sections.indexWhere(
+                (s) => s.startsWith('Tool Result [$m]'),
+              );
+              resultForCall = idx != -1 ? sections[idx] : null;
+            }
+          }
           widgets.add(
             McpToolBlock(
               mcpJson: jsonEncode({
                 'method': fenceCall['t']?.toString() ?? 'tool',
                 'params': fenceCall['a'] ?? <String, dynamic>{},
               }),
+              resultText: resultForCall,
             ),
           );
         }

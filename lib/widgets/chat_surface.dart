@@ -129,6 +129,9 @@ class ChatSurface extends StatelessWidget {
                     ),
                   );
                 }
+                if (_isPairedResult(messages, index)) {
+                  return const SizedBox.shrink();
+                }
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
@@ -146,8 +149,12 @@ class ChatSurface extends StatelessWidget {
                   }
                 }
                 final isUser = messages[index].role == MessageRole.user;
-                final isFirstOfGroup = index == 0 ||
-                    messages[index - 1].role != messages[index].role;
+                int groupPrev = index - 1;
+                while (groupPrev >= 0 && _isPairedResult(messages, groupPrev)) {
+                  groupPrev--;
+                }
+                final isFirstOfGroup = groupPrev < 0 ||
+                    messages[groupPrev].role != messages[index].role;
                 List<int> branchIndicesForVersions = [];
                 int currentVersionIndex = 0;
 
@@ -188,7 +195,11 @@ class ChatSurface extends StatelessWidget {
                   message: messages[index],
                   index: index,
                   isFirstOfGroup: isFirstOfGroup,
-                  isLastMessage: index == messages.length - 1,
+                  isLastMessage: index == _lastVisibleIndex(messages),
+                  pairedResultText: (index + 1 < messages.length &&
+                          _isPairedResult(messages, index + 1))
+                      ? messages[index + 1].text
+                      : null,
                   providerShortName: provider.shortName,
                   providerName: provider.name,
                   reasoningEnabled: settings.reasoningEnabled,
@@ -326,4 +337,28 @@ class ChatSurface extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _isToolOutputMessage(ChatMessage m) =>
+    m.role == MessageRole.system ||
+    m.text.startsWith('Tool Result [') ||
+    m.text.startsWith('Search results:\n') ||
+    m.text.startsWith('URL Content:\n') ||
+    m.text.startsWith('MCP Result:\n') ||
+    m.text.startsWith('Web Search results') ||
+    m.text.startsWith('Content of URL');
+
+bool _isPairedResult(List<ChatMessage> msgs, int i) =>
+    i > 0 &&
+    i < msgs.length &&
+    _isToolOutputMessage(msgs[i]) &&
+    msgs[i - 1].role != MessageRole.user &&
+    findNativeToolFence(msgs[i - 1].text) != null;
+
+int _lastVisibleIndex(List<ChatMessage> msgs) {
+  int i = msgs.length - 1;
+  while (i > 0 && _isPairedResult(msgs, i)) {
+    i--;
+  }
+  return i;
 }

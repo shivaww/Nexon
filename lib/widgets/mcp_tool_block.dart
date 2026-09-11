@@ -11,8 +11,9 @@ import 'package:nexon/widgets/tool_card.dart';
 import 'package:nexon/main.dart';
 
 class McpToolBlock extends StatefulWidget {
-  const McpToolBlock({required this.mcpJson, super.key});
+  const McpToolBlock({required this.mcpJson, this.resultText, super.key});
   final String mcpJson;
+  final String? resultText;
 
   @override
   State<McpToolBlock> createState() => _McpToolBlockState();
@@ -638,7 +639,34 @@ class _McpToolBlockState extends State<McpToolBlock> {
       icon: icon,
       accent: color,
       summary: label,
-      detail: SelectableText(formattedContent, style: toolCardMonoStyle),
+      detail: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SelectableText(formattedContent, style: toolCardMonoStyle),
+          if (widget.resultText != null && widget.resultText!.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Output',
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.2,
+                      color: Color(0xFF8A7765),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(widget.resultText!, style: toolCardMonoStyle),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
