@@ -3013,6 +3013,10 @@ jobs:
               );
             }
           });
+          // Persist each tool round-trip as it completes. Without this the
+          // whole loop only hit disk after it exited, so killing the app
+          // mid-loop lost the tool call and every result with it.
+          await _saveSessions();
 
           if (targetSessionId == _activeSessionId) {
             _scrollToBottom();
@@ -3113,9 +3117,24 @@ jobs:
     // Preserve the last 3 messages fully to maintain immediate conversation flow.
     // Inside an active tool loop keep a wider verbatim tail (last 8) so a pending
     // patch's source read is never halved mid-loop.
-    final inToolLoop = rawHistory.reversed.take(12).any(
-      (m) => m.role == MessageRole.system && m.text.startsWith('Tool Result ['),
-    );
+    // Any tool-result shape counts, not just 'Tool Result [...]'. Web-search
+    // and URL results use their own prefixes — missing them shrank the verbatim
+    // tail to 3 and stubbed live results out to "omitted for context space",
+    // which made the model report that its tools had returned nothing.
+    bool isToolResultMessage(ChatMessage m) {
+      if (m.role != MessageRole.system) return false;
+      final t = m.text;
+      return t.startsWith('Tool Result [') ||
+          t.startsWith('Web Search results') ||
+          t.startsWith('Search results:') ||
+          t.startsWith('Content of URL') ||
+          t.startsWith('URL Content:') ||
+          t.startsWith('MCP Result:') ||
+          t.startsWith('Quiz ') ||
+          t.startsWith('Quiz Tool Result');
+    }
+
+    final inToolLoop = rawHistory.reversed.take(12).any(isToolResultMessage);
     final tailKeep = inToolLoop ? 8 : 3;
     final intermediateEndIndex = rawHistory.length - tailKeep - 1;
 
@@ -3160,14 +3179,16 @@ jobs:
                 '[System: Detailed MCP tool output (${newText.length} characters) omitted for context space. Operation completed successfully.]';
           } else if (newText.startsWith('Search results:\n') ||
               newText.startsWith('Web Search results')) {
+            // Keep a real head slice — stubbing to "omitted" alone left the
+            // model with no evidence that the search had returned anything.
             newText =
-                '🔍 Web Search Results:\n\n'
-                '[System: Search results omitted for context space.]';
+                '🔍 Web Search Results:\n\n${newText.substring(0, 3000)}\n\n'
+                '[System: remainder of search results omitted for context space.]';
           } else if (newText.startsWith('URL Content:\n') ||
               newText.startsWith('Content of URL')) {
             newText =
-                '🌐 URL Content:\n\n'
-                '[System: Webpage content omitted for context space.]';
+                '🌐 URL Content:\n\n${newText.substring(0, 3000)}\n\n'
+                '[System: remainder of page content omitted for context space.]';
           } else {
             // General truncation for very long intermediate system messages
             newText =

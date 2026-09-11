@@ -83,6 +83,16 @@ class ChatSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Everything after the last user message belongs to the in-flight turn.
+    // The Thought Process block uses this to stay open across the whole tool
+    // loop, instead of collapsing the moment a result message is appended.
+    int lastUserIndex = -1;
+    for (int i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role == MessageRole.user) {
+        lastUserIndex = i;
+        break;
+      }
+    }
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -100,6 +110,11 @@ class ChatSurface extends StatelessWidget {
               itemCount: messages.length + (isSending ? 1 : 0),
               itemBuilder: (context, int index) {
                 if (index == messages.length) {
+                  // No generic "Thinking" placeholder — the assistant bubble's
+                  // own StreamingCursor already signals that a reply is being
+                  // generated. This row now appears only when there is real
+                  // live tool progress worth reporting (e.g. a search running).
+                  if (toolStatus.isEmpty) return const SizedBox.shrink();
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Row(
@@ -117,7 +132,7 @@ class ChatSurface extends StatelessWidget {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            toolStatus.isNotEmpty ? toolStatus : 'Thinking',
+                            toolStatus,
                             style: const TextStyle(
                               fontSize: 12.5,
                               color: Color(0xFF6C5946),
@@ -205,6 +220,8 @@ class ChatSurface extends StatelessWidget {
                   agenticWorkspace: agenticWorkspace,
                   fileName: fileName,
                   isSending: isSending,
+                  isLiveTurn:
+                      isSending && !isUser && index > lastUserIndex,
                   onEditUserMessage: () => onEditUserMessage(index),
                   onStartResearch: ([editedStateMap]) =>
                       onStartResearch(index, editedStateMap),

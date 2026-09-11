@@ -29,6 +29,7 @@ class MessageBubble extends StatelessWidget {
     required this.agenticWorkspace,
     required this.fileName,
     required this.isSending,
+    this.isLiveTurn = false,
     this.animationState = AvatarAnimationState.idle,
     this.onStartResearch,
     this.versionsCount = 0,
@@ -45,6 +46,11 @@ class MessageBubble extends StatelessWidget {
   final bool reasoningEnabled;
   final String agenticWorkspace;
   final String fileName;
+
+  /// True while this message belongs to the turn currently being generated —
+  /// i.e. it sits after the last user message and the session is still
+  /// sending. Keeps the Thought Process block open through every tool call.
+  final bool isLiveTurn;
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
   final void Function([Map<String, dynamic>? editedStateMap])? onStartResearch;
@@ -477,6 +483,9 @@ class MessageBubble extends StatelessWidget {
                         ThoughtBlock(
                           thought: hasThought ? message.reasoning : '',
                           extras: quietTools,
+                          // Stays open for the entire live turn — across tool
+                          // calls, their results, and the re-think after them.
+                          active: isLiveTurn,
                         ),
                       ...visible,
                       if (animationState != AvatarAnimationState.idle)

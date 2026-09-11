@@ -32,19 +32,40 @@ String formatMathText(String text) {
 }
 
 class ThoughtBlock extends StatefulWidget {
-  const ThoughtBlock({required this.thought, this.extras, super.key});
+  const ThoughtBlock({
+    required this.thought,
+    this.extras,
+    this.active = false,
+    super.key,
+  });
   final String thought;
 
   /// Extra rows — folded tool call/result capsules — rendered beneath the
   /// reasoning text inside this same disclosure.
   final List<Widget>? extras;
 
+  /// True while this assistant turn is still running. The block opens itself
+  /// and stays open for the whole tool loop (call → result → re-think), then
+  /// hands control back to the user once the turn finishes.
+  final bool active;
+
   @override
   State<ThoughtBlock> createState() => _ThoughtBlockState();
 }
 
 class _ThoughtBlockState extends State<ThoughtBlock> {
-  bool _expanded = false;
+  late bool _expanded = widget.active;
+  bool _userToggled = false;
+
+  @override
+  void didUpdateWidget(covariant ThoughtBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Follow the turn's active state until the user takes manual control, so
+    // a tool loop reopening the block never fights a deliberate collapse.
+    if (!_userToggled && widget.active != oldWidget.active) {
+      _expanded = widget.active;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +80,10 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
+            onTap: () => setState(() {
+              _expanded = !_expanded;
+              _userToggled = true;
+            }),
             borderRadius: BorderRadius.circular(12),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
