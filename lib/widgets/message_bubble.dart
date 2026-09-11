@@ -36,6 +36,7 @@ class MessageBubble extends StatelessWidget {
     this.currentVersionIndex = 0,
     this.onVersionChanged,
     this.isFirstOfGroup = true,
+    this.isLastMessage = false,
     super.key,
   });
 
@@ -53,6 +54,7 @@ class MessageBubble extends StatelessWidget {
   final int currentVersionIndex;
   final ValueChanged<int>? onVersionChanged;
   final bool isFirstOfGroup;
+  final bool isLastMessage;
   final bool isSending;
 
   @override
@@ -467,6 +469,38 @@ class MessageBubble extends StatelessWidget {
               if (animationState != AvatarAnimationState.idle)
                 const StreamingCursor(),
             ],
+            if (isLastMessage &&
+                !isUser &&
+                !isToolOutput &&
+                !isSending)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _GhostAction(
+                      icon: Icons.content_copy_rounded,
+                      tooltip: 'Copy text',
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: message.text));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Message copied to clipboard'),
+                            duration: Duration(seconds: 1),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 12),
+                    _GhostAction(
+                      icon: Icons.volume_up_rounded,
+                      tooltip: 'Read aloud',
+                      onTap: () => NexonTts.toggleSpeak(message.text, () {}),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 10),
           ],
           ),
@@ -978,6 +1012,33 @@ class _VisualStreamingPlaceholder extends StatelessWidget {
             style: TextStyle(fontSize: 12, color: Color(0xFF6C5946)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _GhostAction extends StatelessWidget {
+  const _GhostAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Icon(icon, size: 15, color: const Color(0xFF8B7355)),
+        ),
       ),
     );
   }

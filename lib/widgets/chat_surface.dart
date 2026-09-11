@@ -97,8 +97,38 @@ class ChatSurface extends StatelessWidget {
             child: ListView.builder(
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(18, 84, 18, 90),
-              itemCount: messages.length,
+              itemCount: messages.length + (isSending ? 1 : 0),
               itemBuilder: (context, int index) {
+                if (index == messages.length) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Color(0xFF7B4E2E),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            toolStatus.isNotEmpty ? toolStatus : 'Thinking',
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              color: Color(0xFF6C5946),
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
                 AvatarAnimationState state = AvatarAnimationState.idle;
                 if (isSending && index == messages.length - 1) {
                   final msg = messages[index];
@@ -158,6 +188,7 @@ class ChatSurface extends StatelessWidget {
                   message: messages[index],
                   index: index,
                   isFirstOfGroup: isFirstOfGroup,
+                  isLastMessage: index == messages.length - 1,
                   providerShortName: provider.shortName,
                   providerName: provider.name,
                   reasoningEnabled: settings.reasoningEnabled,
@@ -272,56 +303,6 @@ class ChatSurface extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  child: toolStatus.isNotEmpty
-                      ? LiquidGlassSurface(
-                          margin: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 6,
-                          ),
-                          borderRadius: BorderRadius.circular(16),
-                          backgroundColor: const Color(
-                            0xFFF5EFE4,
-                          ).withValues(alpha: 0.85),
-                          highlightColor: const Color(0xFFDCCBB8),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 9,
-                            ),
-                            child: Row(
-                              children: [
-                                const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Color(0xFF7B4E2E),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    toolStatus,
-                                    style: const TextStyle(
-                                      fontSize: 12.5,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFF6C5946),
-                                      fontFamily: 'monospace',
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
                 Composer(
                   controller: messageController,
                   isSending: isSending,
