@@ -2924,7 +2924,18 @@ jobs:
                 try {
                   final parsed = jsonDecode(body);
                   dynamic resultData;
-                  if (parsed is Map<String, dynamic>) {
+                  // JSON-RPC error envelope: {'jsonrpc':..,'id':..,'error':{..}}
+                  // with no 'result'. Unwrap the message so a bridge failure
+                  // reads as a real sentence instead of a stringified map.
+                  if (parsed is Map<String, dynamic> &&
+                      parsed['error'] != null &&
+                      parsed['result'] == null) {
+                    final err = parsed['error'];
+                    final msg = err is Map
+                        ? (err['message'] ?? err['code'] ?? err).toString()
+                        : err.toString();
+                    resultData = {'error': msg};
+                  } else if (parsed is Map<String, dynamic>) {
                     resultData = parsed['result'] ?? parsed;
                   } else {
                     resultData = parsed;
@@ -2967,8 +2978,21 @@ jobs:
                     'tree_rich',
                     'multi_read_rich',
                   };
+                  // These return one result group per document, in order.
+                  // A middle slice removes whole documents, so keep a wider
+                  // head plus the tail and trim only the middle.
+                  const dataBearingMethods = {
+                    'workspace_search',
+                    'workspace_cross_compare',
+                    'workspace_list',
+                  };
                   if (fileReadMethods.contains(toolMethod)) {
                     mcpResult = mcpResult.substring(0, 20000);
+                  } else if (dataBearingMethods.contains(toolMethod)) {
+                    mcpResult =
+                        mcpResult.substring(0, 22000) +
+                        '\n\n...[middle truncated — ${mcpResult.length - 30000} chars removed]...\n\n' +
+                        mcpResult.substring(mcpResult.length - 8000);
                   } else {
                     mcpResult =
                         mcpResult.substring(0, 16000) +
@@ -3162,6 +3186,9 @@ jobs:
             'find_files', 'symbol_search', 'symbol_references',
             'workspace_list', 'workspace_search', 'workspace_read_page',
             'workspace_get_outline', 'workspace_cross_compare',
+            // Ingest/validate report which files indexed and which failed —
+            // the model needs that detail, not a "completed successfully" stub.
+            'workspace_ingest', 'workspace_validate', 'workspace_check_deps',
             'read', 'search', 'outline', 'list', 'find', 'recent',
           };
 
