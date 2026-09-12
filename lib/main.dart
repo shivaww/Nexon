@@ -58,6 +58,7 @@ import 'package:nexon/widgets/chat_header.dart';
 import 'package:nexon/widgets/thought_block.dart';
 import 'package:nexon/widgets/mcp_tool_block.dart';
 import 'package:nexon/widgets/code_widgets.dart';
+import 'package:nexon/widgets/tool_permission_dialog.dart';
 import 'package:nexon/utils/content_parser.dart';
 import 'package:nexon/widgets/chat_media_widgets.dart';
 import 'package:nexon/widgets/message_bubble.dart';
@@ -2656,6 +2657,23 @@ jobs:
             }
             executedTools = true;
 
+            // Codex/Claude Code style approval gate for patch and edit:
+            // show the exact -/+ line changes in a dialog and run the tool
+            // only if the user allows it after reviewing them.
+            if (toolName == 'patch' || toolName == 'edit') {
+              final allowed = await showToolPermissionDialog(
+                context,
+                toolName,
+                toolArgs,
+              );
+              if (!allowed) {
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"error":"User denied permission after reviewing the proposed line changes."}',
+                );
+                continue;
+              }
+            }
+
             // Safety checkpoint before heavy file mutations (parity with the
             // legacy patch_file/write_file_rich/delete_path checkpointing).
             if (toolName == 'patch' ||
@@ -2702,7 +2720,8 @@ jobs:
             // File-mutation permission gate. Native arg names differ from the
             // legacy tools (f/to vs path/src/dest), so map them onto the keys
             // the existing permission dialog understands.
-            if (_nativeIsFileMutation(toolName, toolArgs)) {
+            if ((toolName != 'patch' && toolName != 'edit') &&
+                _nativeIsFileMutation(toolName, toolArgs)) {
               final permParams = _nativePermParams(toolName, toolArgs);
               if (!_allPathsTrusted(permParams)) {
                 final allowed = await _askFileMutationPermission(

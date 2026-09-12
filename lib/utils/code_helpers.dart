@@ -125,32 +125,123 @@ NativeToolFence? findNativeToolFence(String text) {
     if (contentStart == -1) return null;
     final closeIdx = text.indexOf('```', contentStart + 1);
     if (closeIdx == -1) return null;
-    final inner = text.substring(contentStart + 1, closeIdx).trim();
-    Map<String, dynamic>? parsed;
-    try {
-      final dynamic decoded = jsonDecode(inner);
-      if (decoded is Map<String, dynamic>) {
-        final t = decoded['t']?.toString() ?? '';
-        final calls = decoded['calls'];
-        if (calls is List) {
-          bool allKnown = calls.every((c) =>
-              c is Map<String, dynamic> &&
-              isKnownToolNameGlobal(c['t']?.toString() ?? ''));
-          if (allKnown && calls.isNotEmpty) parsed = decoded;
-        } else if (t.isNotEmpty && isKnownToolNameGlobal(t)) {
-          parsed = decoded;
-        } else if (decoded['method'] != null) {
-          parsed = decoded;
+    final body = text.substring(contentStart + 1, closeIdx);
+    final direct = _decodeToolJson(body.trim());
+    if (direct != null) {
+      return NativeToolFence(openIdx, closeIdx + 3, direct);
+    }
+    // Repair path for long payloads: nested ``` fences or raw newlines
+    // inside string values break the naive fence scan and would otherwise
+    // leak the call into chat as an overflowing raw code block. Brace-match
+    // the first JSON object from the fence body, sanitise control chars,
+    // and consume the real closing fence when one follows the object.
+    final braceStart = body.indexOf('{');
+    if (braceStart != -1) {
+      final absBrace = contentStart + 1 + braceStart;
+      final span = _balancedObjectEnd(text.substring(absBrace));
+      if (span != null) {
+        final absEnd = absBrace + span;
+        final repaired = _decodeToolJson(
+          _escapeRawControlChars(text.substring(absBrace, absEnd)),
+        );
+        if (repaired != null) {
+          int fenceEnd = absEnd;
+          final rest = text.substring(absEnd);
+          final lead = rest.length - rest.trimLeft().length;
+          if (rest.trimLeft().startsWith('```')) fenceEnd = absEnd + lead + 3;
+          return NativeToolFence(openIdx, fenceEnd, repaired);
         }
       }
-    } catch (_) {
-      parsed = null;
-    }
-    if (parsed != null) {
-      return NativeToolFence(openIdx, closeIdx + 3, parsed);
     }
     searchFrom = closeIdx + 3;
   }
+}
+
+/// Decode a fenced tool payload, accepting only known native tool shapes.
+Map<String, dynamic>? _decodeToolJson(String inner) {
+  try {
+    final dynamic decoded = jsonDecode(inner);
+    if (decoded is Map<String, dynamic>) {
+      final t = decoded['t']?.toString() ?? '';
+      final calls = decoded['calls'];
+      if (calls is List) {
+        final allKnown = calls.every((c) =>
+            c is Map<String, dynamic> &&
+            isKnownToolNameGlobal(c['t']?.toString() ?? ''));
+        if (allKnown && calls.isNotEmpty) return decoded;
+      } else if (t.isNotEmpty && isKnownToolNameGlobal(t)) {
+        return decoded;
+      } else if (decoded['method'] != null) {
+        return decoded;
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+/// Index just past the '}' balancing the first '{' of [s], string- and
+/// escape-aware so nested ``` fences inside payloads cannot cut it short.
+int? _balancedObjectEnd(String s) {
+  int depth = 0;
+  bool inStr = false;
+  bool esc = false;
+  for (int i = 0; i < s.length; i++) {
+    final c = s[i];
+    if (inStr) {
+      if (esc) {
+        esc = false;
+      } else if (c == '\\') {
+        esc = true;
+      } else if (c == '"') {
+        inStr = false;
+      }
+    } else if (c == '"') {
+      inStr = true;
+    } else if (c == '{') {
+      depth++;
+    } else if (c == '}') {
+      depth--;
+      if (depth == 0) return i + 1;
+    }
+  }
+  return null;
+}
+
+/// Escape raw newlines/CR/tabs inside JSON string literals so malformed
+/// model payloads still decode after brace-matching.
+String _escapeRawControlChars(String s) {
+  final sb = StringBuffer();
+  bool inStr = false;
+  bool esc = false;
+  for (int i = 0; i < s.length; i++) {
+    final c = s[i];
+    if (inStr) {
+      if (esc) {
+        sb.write(c);
+        esc = false;
+      } else if (c == '\\') {
+        sb.write(c);
+        esc = true;
+      } else if (c == '"') {
+        inStr = false;
+        sb.write(c);
+      } else if (c == '\n') {
+        sb.write('\\n');
+      } else if (c == '\r') {
+        sb.write('\\r');
+      } else if (c == '\t') {
+        sb.write('\\t');
+      } else {
+        sb.write(c);
+      }
+    } else {
+      if (c == '"') inStr = true;
+      sb.write(c);
+    }
+  }
+  return sb.toString();
 }
 
 class NativeToolFence {
