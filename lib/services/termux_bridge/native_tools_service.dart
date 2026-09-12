@@ -2,9 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-/// Thrown when the native tools bridge cannot start at all (binary missing,
-/// spawn failed). Per-call failures are returned as result maps instead, so
-/// the LLM sees them and can react — this exception is for setup errors only.
+/// Thrown when the native tools bridge cannot be reached at all (HTTP
+/// unreachable, or the binary not found server-side). Per-call tool
+/// failures are returned as result maps instead, so the LLM sees them and
+/// can react -- this exception is for setup/connectivity errors only.
 class NativeToolsException implements Exception {
   final String message;
   NativeToolsException(this.message);
@@ -12,27 +13,19 @@ class NativeToolsException implements Exception {
   String toString() => message;
 }
 
-class _PendingCall {
-  final Completer<Map<String, dynamic>> completer;
-  final String tool;
-  _PendingCall(this.completer, this.tool);
-}
-
-/// Native C++ tools bridge — the low-latency fast path for agentic file ops.
+/// Native C++ tools bridge -- proxied over the Python bridge's HTTP server.
 ///
-/// Spawns ONE persistent `tools --plain --max-output=N <workspace>` process
-/// and pipes one compact JSON command per line into its stdin, reading one
-/// JSON result per line back from stdout. No Python interpreter, no HTTP
-/// hop, no XML anywhere in the chain.
+/// Nexon is a separate installed Android app (applicationId
+/// com.termuxforge.app), sandboxed away from Termux's private storage, so
+/// it can never see or execute the `tools` binary directly -- regardless of
+/// whether the binary is present and healthy. The Python bridge runs
+/// inside Termux and CAN see it, so it spawns `tools` as a subprocess
+/// (NativeToolsManager) and this class talks to that subprocess over the
+/// same loopback HTTP port (8390) already trusted for /mcp, via
+/// GET /native/health and POST /native/call.
 ///
-/// Routing contract (kept in sync with the AGENTIC IDE system prompt):
-///   * tools listed in [cppTools] execute here;
-///   * everything else (background services, MCP, deep research, dart
-///     tooling) keeps using the Python bridge over HTTP, exactly as before.
-///
-/// The process is restarted automatically when the workspace changes or the
-/// binary dies. Calls are serialized through an in-order queue: the tools
-/// binary answers commands strictly in the order they are received.
+/// Mirrors `_checkBridgeAlive()`'s HttpClient pattern in
+/// media_and_model_sheet.dart, including its `customUrl` override.
 class NativeToolsService {
   NativeToolsService._();
   static final NativeToolsService instance = NativeToolsService._();
@@ -48,313 +41,119 @@ class NativeToolsService {
 
   static bool handles(String toolName) => cppTools.contains(toolName);
 
-  /// Result cap per tool call. Mirrors the paging guidance in tools.cpp:
-  /// anything bigger comes back wrapped with a truncation note instead of
-  /// flooding the model context.
-  static const int _maxOutputChars = 60000;
-
-  Process? _process;
-  String _workspace = '';
-  String _binaryPath = '';
-  StreamSubscription<String>? _stdoutSub;
-  StreamSubscription<String>? _stderrSub;
-  final List<_PendingCall> _queue = [];
-  final List<String> _stderrTail = [];
-  Future<void>? _ensureRunningLock;
-
-  /// Consecutive restart counter. Reset to 0 on any successful tool call.
-  int _restartCount = 0;
-
-  /// Maximum consecutive restarts before refusing to restart.
-  static const int _maxRestarts = 5;
-
-  /// Timestamp of the last restart attempt (for cool-down enforcement).
-  DateTime? _lastRestartTime;
-
-  /// Cool-down duration after hitting the restart cap.
-  static const Duration _restartCooldown = Duration(seconds: 30);
-
-  bool get isRunning => _process != null;
-  String get workspace => _workspace;
-  String get binaryPath => _binaryPath;
-
-  /// Locate the tools binary. Order: explicit override, then known install
-  /// spots. Returns null when nothing is found.
-  static Future<String?> findBinary({String? preferred}) async {
-    final home =
-        Platform.environment['HOME'] ?? '/data/data/com.termux/files/home';
-    final candidates = <String>[
-      if (preferred != null && preferred.trim().isNotEmpty) preferred.trim(),
-      '$home/nexon_bridge/tools',
-      '$home/nexon_bridge/nexon_code',
-      '$home/projects/termux_forge/cpp_bridge/tools',
-      '$home/projects/termux_forge/cpp_bridge/nexon_code',
-      '$home/codetools/tools',
-      '$home/codetools/nexon_code',
-      '$home/Nexon/cpp_bridge/tools',
-      '$home/Nexon/cpp_bridge/nexon_code',
-      '$home/nexon/cpp_bridge/tools',
-      '$home/nexon/cpp_bridge/nexon_code',
-      '$home/projects/Nexon/cpp_bridge/tools',
-      '$home/projects/Nexon/cpp_bridge/nexon_code',
-      '$home/projects/nexon/cpp_bridge/tools',
-      '$home/projects/nexon/cpp_bridge/nexon_code',
-      '$home/termux_forge/cpp_bridge/tools',
-      '$home/termux_forge/cpp_bridge/nexon_code',
-      '$home/storage/shared/Download/tools',
-      '$home/storage/shared/Download/nexon_code',
-      '/data/data/com.termux/files/usr/bin/nexon_code',
-    ];
-    for (final candidate in candidates) {
-      try {
-        if (await File(candidate).exists()) return candidate;
-      } catch (_) {}
+  static String _baseUrl(String? customUrl) {
+    if (customUrl != null && customUrl.isNotEmpty) {
+      // customUrl mirrors the /mcp override -- strip a trailing /mcp so
+      // /native/* routes hang off the same host:port.
+      return customUrl.endsWith('/mcp')
+          ? customUrl.substring(0, customUrl.length - 4)
+          : customUrl;
     }
-    return null;
+    return 'http://127.0.0.1:8390';
   }
 
-  /// Start (or restart, when the workspace changed) the tools process.
-  Future<void> ensureRunning({
-    required String workspace,
-    String? binaryPath,
-  }) async {
-    if (_process != null && _workspace == workspace) return;
-    if (_ensureRunningLock != null) {
-      await _ensureRunningLock;
-      if (_process != null && _workspace == workspace) return;
-    }
-    final completer = Completer<void>();
-    _ensureRunningLock = completer.future;
+  /// GET /native/health -- is the tools binary found / running server-side?
+  /// Never throws; connectivity failures come back as
+  /// {'binary_found': false, 'running': false, 'reason': 'bridge_unreachable'}
+  /// so callers can treat the map uniformly.
+  static Future<Map<String, dynamic>> health({String? customUrl}) async {
+    final endpoint = '${_baseUrl(customUrl)}/native/health';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 3);
     try {
-      await _ensureRunningInner(workspace: workspace, binaryPath: binaryPath);
-      completer.complete();
-    } catch (e) {
-      completer.completeError(e);
-      rethrow;
-    } finally {
-      _ensureRunningLock = null;
-    }
-  }
-
-  Future<void> _ensureRunningInner({
-    required String workspace,
-    String? binaryPath,
-  }) async {
-    if (_process != null && _workspace == workspace) return;
-
-    // Restart loop safety: refuse to restart if we've hit the cap and the
-    // cool-down window hasn't elapsed. This prevents an infinite restart
-    // loop when the binary is broken or the workspace is inaccessible.
-    if (_restartCount >= _maxRestarts) {
-      final elapsed = _lastRestartTime != null
-          ? DateTime.now().difference(_lastRestartTime!)
-          : Duration.zero;
-      if (elapsed < _restartCooldown) {
-        final remaining = _restartCooldown - elapsed;
-        throw NativeToolsException(
-          'tools binary restarted $_restartCount consecutive times (cap: '
-          '$_maxRestarts). Cool-down: ${remaining.inSeconds}s remaining. '
-          'Check the binary at $_binaryPath and workspace "$workspace".');
+      final request = await client
+          .getUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 3));
+      final response =
+          await request.close().timeout(const Duration(seconds: 3));
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 3));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic>) return decoded;
       }
-      // Cool-down elapsed — reset and try again.
-      _restartCount = 0;
+      return {
+        'binary_found': false,
+        'running': false,
+        'reason': 'bridge_error',
+      };
+    } catch (_) {
+      return {
+        'binary_found': false,
+        'running': false,
+        'reason': 'bridge_unreachable',
+      };
+    } finally {
+      client.close(force: true);
     }
-
-    await _teardown();
-    if (_process == null) {
-      _restartCount++;
-      _lastRestartTime = DateTime.now();
-    }
-    final bin = binaryPath ?? await findBinary();
-    if (bin == null) {
-      throw NativeToolsException(
-        'tools binary not found. Compile cpp_bridge/tools.cpp or set the '
-        'native tools binary path in settings.');
-    }
-    try {
-      _process = await Process.start(bin, [
-        '--plain',
-        '--max-output=$_maxOutputChars',
-        workspace,
-      ]);
-    } catch (e) {
-      _process = null;
-      throw NativeToolsException('failed to start tools binary: $e');
-    }
-    _binaryPath = bin;
-    _workspace = workspace;
-    _stdoutSub = _process!.stdout
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(_onStdoutLine);
-    _stderrSub = _process!.stderr
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(_onStderrLine);
-    _process!.exitCode.then((_) => _handleExit()).ignore();
   }
 
-  /// Auto-retry policy: one retry on timeout or process death, EXCEPT for
-  /// shell commands that sleep / background themselves (a retry would double
-  /// the wait or double-launch the process). Background-service tools are not
-  /// native and never reach this path.
-  static bool _retryable(String tool, Map<String, dynamic> args) {
-    if (tool != 'sh') return true;
-    final cmd = args['cmd']?.toString() ?? '';
-    return !cmd.contains('sleep') &&
-        !cmd.contains('nohup') &&
-        !cmd.contains('background') &&
-        !cmd.contains(' &') &&
-        !cmd.startsWith('&');
-  }
-
-  /// Execute one tool call and return the parsed JSON result. Never throws
-  /// for tool-level failures — those come back as {'err': ...} maps the LLM
-  /// can read. Honors the tool's own `to` (timeout seconds) argument instead
-  /// of a fixed cap, and retries once on transient failures (timeout, process
-  /// death, stdin write error) per [_retryable].
-  Future<Map<String, dynamic>> call({
+  /// POST /native/call -- proxy one tool call to the tools binary over the
+  /// Python bridge. Honors the tool's own `to` (timeout seconds) argument.
+  /// Throws [NativeToolsException] for connectivity/setup failures (bridge
+  /// unreachable, binary not found server-side, HTTP 503) -- same role the
+  /// old "binary not found"/"failed to start" exceptions played. A call
+  /// that reaches the binary but times out returns an {'err': ...} map
+  /// instead, matching the old per-call timeout behavior so callers don't
+  /// need to change their catch logic.
+  static Future<Map<String, dynamic>> call({
     required String workspace,
     required String tool,
     Map<String, dynamic> args = const {},
-    Duration? timeout,
-    String? binaryPath,
+    String? customUrl,
   }) async {
     final int toSec = args['to'] is int
         ? args['to'] as int
         : int.tryParse(args['to']?.toString() ?? '') ?? 120;
-    final Duration effective =
-        timeout ?? Duration(seconds: toSec.clamp(5, 600) + 10);
-    final int attempts = _retryable(tool, args) ? 2 : 1;
-    Map<String, dynamic> result = const {};
-    for (int attempt = 1; attempt <= attempts; attempt++) {
-      result = await _callOnce(
-        workspace: workspace,
-        tool: tool,
-        args: args,
-        timeout: effective,
-        binaryPath: binaryPath,
-      );
-      final err = result['err'];
-      final transient = err is String &&
-          (err.contains('timed out') ||
-              err.contains('tools process') ||
-              err.contains('failed to write'));
-      if (err == null || !transient || attempt == attempts) return result;
-    }
-    return result;
-  }
-
-  Future<Map<String, dynamic>> _callOnce({
-    required String workspace,
-    required String tool,
-    required Duration timeout,
-    Map<String, dynamic> args = const {},
-    String? binaryPath,
-  }) async {
-    await ensureRunning(workspace: workspace, binaryPath: binaryPath);
-    final completer = Completer<Map<String, dynamic>>();
-    _queue.add(_PendingCall(completer, tool));
-    final line = jsonEncode({'t': tool, 'a': args});
+    final Duration effective = Duration(seconds: toSec.clamp(5, 600) + 10);
+    final endpoint = '${_baseUrl(customUrl)}/native/call';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 5);
     try {
-      _process!.stdin.writeln(line);
-      await _process!.stdin.flush();
-    } catch (e) {
-      _queue.removeWhere((p) => p.completer == completer);
-      await _teardown();
-      return {
-        'err': 'failed to write to tools process: $e',
-        't': tool,
-      };
-    }
-    try {
-      return await completer.future.timeout(timeout);
+      final request = await client
+          .postUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 5));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({
+        'tool': tool,
+        'workspace': workspace,
+        'args': args,
+      }));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(effective);
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode == 503) {
+        final decoded = jsonDecode(body);
+        final msg = decoded is Map && decoded['err'] != null
+            ? decoded['err'].toString()
+            : 'native tools bridge unavailable';
+        throw NativeToolsException(msg);
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic>) return decoded;
+        throw NativeToolsException(
+            'malformed response from native tools bridge');
+      }
+      throw NativeToolsException(
+          'native tools bridge returned HTTP ${response.statusCode}');
     } on TimeoutException {
-      _queue.removeWhere((p) => p.completer == completer);
-      await _teardown();
       return {
-        'err':
-            'native tools call timed out after ${timeout.inSeconds}s; the bridge was restarted',
+        'err': 'native tools call timed out after ${effective.inSeconds}s',
         't': tool,
       };
+    } on NativeToolsException {
+      rethrow;
+    } catch (e) {
+      throw NativeToolsException('failed to reach native tools bridge: $e');
+    } finally {
+      client.close(force: true);
     }
   }
-
-  // ------------------------------------------------------------------ stdout
-
-  void _onStdoutLine(String line) {
-    final trimmed = line.trim();
-    if (trimmed.isEmpty || _queue.isEmpty) return;
-    Map<String, dynamic>? parsed;
-    try {
-      final dynamic decoded = jsonDecode(trimmed);
-      if (decoded is Map<String, dynamic>) parsed = decoded;
-    } catch (_) {
-      if (trimmed.startsWith('{') && _queue.isNotEmpty) {
-        final pending = _queue.removeAt(0);
-        if (!pending.completer.isCompleted) {
-          pending.completer.complete({
-            'err': 'malformed JSON result (likely truncated at output cap)',
-            't': pending.tool,
-            'partial': trimmed.length > 200
-                ? '${trimmed.substring(0, 200)}…'
-                : trimmed,
-          });
-          _restartCount = 0;
-        }
-      }
-      return;
-    }
-    final pending = _queue.removeAt(0);
-    if (!pending.completer.isCompleted) pending.completer.complete(parsed);
-    // A successful result means the process is healthy — reset restart counter.
-    _restartCount = 0;
-  }
-
-  void _onStderrLine(String line) {
-    _stderrTail.add(line);
-    while (_stderrTail.length > 40) {
-      _stderrTail.removeAt(0);
-    }
-  }
-
-  void _handleExit() {
-    final message =
-        'tools process exited unexpectedly; stderr tail: ${_stderrTail.isEmpty ? "(none)" : _stderrTail.join(" | ")}';
-    for (final pending in _queue) {
-      if (!pending.completer.isCompleted) {
-        pending.completer.complete({'err': message, 't': pending.tool});
-      }
-    }
-    _queue.clear();
-    _process = null;
-  }
-
-  Future<void> _teardown() async {
-    final proc = _process;
-    _process = null;
-    await _stdoutSub?.cancel();
-    await _stderrSub?.cancel();
-    _stdoutSub = null;
-    _stderrSub = null;
-    for (final pending in _queue) {
-      if (!pending.completer.isCompleted) {
-        pending.completer.complete({
-          'err': 'tools bridge restarted before this call completed',
-          't': pending.tool,
-        });
-      }
-    }
-    _queue.clear();
-    if (proc != null) {
-      try {
-        proc.kill(ProcessSignal.sigkill);
-      } catch (_) {}
-      try {
-        await proc.exitCode.timeout(const Duration(seconds: 2));
-      } catch (_) {}
-    }
-  }
-
-  Future<void> dispose() => _teardown();
 }

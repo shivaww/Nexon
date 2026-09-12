@@ -430,8 +430,10 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           : () async {
                               setRecheckState(() => rechecking = true);
                               final ready = forAgentic
-                                  ? (await NativeToolsService.findBinary()) !=
-                                      null
+                                  ? (await NativeToolsService.health(
+                                        customUrl: widget.customMcpUrl,
+                                      ))['binary_found'] ==
+                                      true
                                   : (await _checkBridgeAlive())['ok'] == true;
                               if (!mounted) return;
                               if (ready) {
@@ -2221,9 +2223,11 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                         }
                         // Agentic's fast path is the C++ tools binary; the Python
                         // bridge is only needed for background/MCP/dart tools.
-                        final binary = await NativeToolsService.findBinary();
+                        final health = await NativeToolsService.health(
+                          customUrl: widget.customMcpUrl,
+                        );
                         if (!mounted) return;
-                        if (binary == null) {
+                        if (health['binary_found'] != true) {
                           _showFeatureSetupDialog(
                             reason: 'native_tools_missing',
                             forAgentic: true,

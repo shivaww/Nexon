@@ -66,6 +66,7 @@ from hybrid_tools import (
     build_registry,
     OutputRenderer,
 )
+from native_tools_manager import get_manager as get_native_tools_manager
 from background_service_manager import (
     BackgroundServiceManager,
     detect_server_command,
@@ -1757,6 +1758,50 @@ class TermuxForgeBridge:
             logger.error("Workspace dep check failed: %s", exc)
             return web.json_response({"error": str(exc)}, status=500)
 
+    # ══════════════════════════════════════════════════════════════════
+    #  NATIVE TOOLS HANDLERS
+    #  Proxy for the C++ `tools` binary, run as a subprocess by
+    #  NativeToolsManager. The Flutter app is a separate installed app
+    #  (sandboxed away from Termux's private storage), so it talks to
+    #  these two routes instead of touching the binary path/process
+    #  directly.
+    # ══════════════════════════════════════════════════════════════════
+
+    async def _handle_native_health(self, request: web.Request) -> web.Response:
+        """GET /native/health -- is the tools binary found / running?"""
+        manager = get_native_tools_manager()
+        status = await manager.health()
+        return web.json_response(status)
+
+    async def _handle_native_call(self, request: web.Request) -> web.Response:
+        """POST /native/call -- proxy one tool call to the tools binary."""
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"err": "invalid JSON body"}, status=400)
+        tool = data.get("tool")
+        if not tool:
+            return web.json_response({"err": "'tool' is required"}, status=400)
+        workspace = data.get("workspace")
+        if not workspace:
+            import os as _os
+            workspace = _os.environ.get("HOME", "/data/data/com.termux/files/home")
+        args = data.get("args") or {}
+        to = data.get("to")
+        try:
+            timeout = float(to) if to is not None else 130.0
+        except (TypeError, ValueError):
+            timeout = 130.0
+        timeout = max(5.0, min(timeout, 600.0))
+        manager = get_native_tools_manager()
+        try:
+            result = await manager.call(
+                workspace=workspace, tool=tool, args=args, timeout=timeout
+            )
+        except RuntimeError as e:
+            return web.json_response({"err": str(e)}, status=503)
+        return web.json_response(result)
+
     async def _handle_http_post(self, request: web.Request) -> web.Response:
         """Handle HTTP POST requests to /mcp from the legacy Dart client."""
         if request.path != '/mcp':
@@ -1940,6 +1985,8 @@ class TermuxForgeBridge:
         self._http_app.router.add_post('/workspace/reindex', self._handle_workspace_reindex)
         self._http_app.router.add_post('/workspace/clear', self._handle_workspace_clear)
         self._http_app.router.add_get('/workspace/deps', self._handle_workspace_deps)
+        self._http_app.router.add_get('/native/health', self._handle_native_health)
+        self._http_app.router.add_post('/native/call', self._handle_native_call)
         
         # Also support OPTIONS for CORS if needed
         async def handle_options(request):
@@ -1974,7 +2021,10 @@ class TermuxForgeBridge:
 
         # Shutdown MCP servers
         await self.mcp.shutdown()
-        
+
+        # Shutdown native tools subprocess
+        await get_native_tools_manager().dispose()
+
         # Stop HTTP server
         if hasattr(self, '_http_runner'):
             await self._http_runner.cleanup()

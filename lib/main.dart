@@ -2726,10 +2726,11 @@ jobs:
 
             Map<String, dynamic> result;
             try {
-              result = await NativeToolsService().call(
+              result = await NativeToolsService.call(
                 workspace: _agenticWorkspace,
                 tool: toolName,
                 args: toolArgs,
+                customUrl: _customMcpUrl,
               );
             } on NativeToolsException catch (e) {
               result = {'err': e.message, 't': toolName};
@@ -2754,10 +2755,11 @@ jobs:
               }
               if (filePath != null && filePath.endsWith('.dart') && !resultJson.contains('"err"')) {
                 try {
-                  final diagResult = await NativeToolsService().call(
+                  final diagResult = await NativeToolsService.call(
                     workspace: _agenticWorkspace,
                     tool: 'diagnostics',
                     args: {'cmd': 'dart analyze ${_verifyShellQuote(filePath)} 2>&1', 'to': 60},
+                    customUrl: _customMcpUrl,
                   );
                   final diagOut = (diagResult['out'] ?? '').toString();
                   if (diagOut.contains('error')) {
