@@ -484,18 +484,19 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     return active.messages;
   }
 
+  static bool _isWelcomePlaceholder(String text) {
+    final t = text.trim();
+    return t ==
+            'Select a provider, add its API key, fetch or type a model, then start chatting.' ||
+        t == 'New chat ready. Choose any configured provider and model.';
+  }
+
   void _initDefaultSession() {
     final nextId = DateTime.now().millisecondsSinceEpoch.toString();
     final newSession = ChatSession(
       id: nextId,
       title: 'Welcome Chat',
-      messages: [
-        const ChatMessage(
-          role: MessageRole.assistant,
-          text:
-              'Select a provider, add its API key, fetch or type a model, then start chatting.',
-        ),
-      ],
+      messages: const [],
       providerId: _selectedProviderId,
       model: _activeModel,
     );
@@ -541,6 +542,21 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         final loadedSessions = decoded
             .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
             .toList();
+        // Purge legacy welcome placeholders from saved history so they
+        // never render or flash on startup.
+        for (var i = 0; i < loadedSessions.length; i++) {
+          final s = loadedSessions[i];
+          final cleaned = s.messages
+              .where(
+                (m) =>
+                    m.role != MessageRole.assistant ||
+                    !_isWelcomePlaceholder(m.text),
+              )
+              .toList();
+          if (cleaned.length != s.messages.length) {
+            loadedSessions[i] = s.copyWith(messages: cleaned);
+          }
+        }
         setState(() {
           _sessions = loadedSessions;
 

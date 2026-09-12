@@ -81,6 +81,14 @@ class MessageBubble extends StatelessWidget {
         text.startsWith('Content of URL');
     final isUser = message.role == MessageRole.user;
 
+    // Folded prior rounds with no visible cards of their own vanish
+    // entirely — no empty shell, no floating token chips.
+    if (foldThoughtIntoLater &&
+        !isToolOutput &&
+        !_foldedRoundHasCards(message.text)) {
+      return const SizedBox.shrink();
+    }
+
     return TweenAnimationBuilder<double>(
       duration: Duration(milliseconds: 240 + (index % 5) * 24),
       curve: Curves.easeOutCubic,
@@ -704,6 +712,23 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
   if (t == 'todo_create' || t == 'todo_done') return 'Updating todo list';
   if (t == 'quiz' || t == 'quiz_request') return 'Quiz';
   return t;
+}
+
+/// True when a folded prior turn round still owns visible (non-quiet)
+/// tool cards that must keep their own bubble.
+bool _foldedRoundHasCards(String text) {
+  String rest = text;
+  while (true) {
+    final f = findNativeToolFence(rest);
+    if (f == null) return false;
+    final calls = f.json['calls'] is List
+        ? (f.json['calls'] as List).whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[f.json];
+    for (final c in calls) {
+      if (!isQuietToolName(c['t']?.toString() ?? '')) return true;
+    }
+    rest = rest.substring(f.end);
+  }
 }
 
   List<Widget> _parseRichMessageContent(
