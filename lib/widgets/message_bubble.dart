@@ -495,10 +495,9 @@ class MessageBubble extends StatelessWidget {
                 },
               ),
             ],
-            if (isLastMessage &&
-                !isUser &&
+            if (!isUser &&
                 !isToolOutput &&
-                !isSending)
+                !(isSending && isLastMessage))
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
