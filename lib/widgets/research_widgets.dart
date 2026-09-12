@@ -40,8 +40,11 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   late final Stopwatch _stopwatch;
   Timer? _timer;
 
+  Map<String, dynamic>? _editedStateMap;
+
   Future<void> _editPlan() async {
-    final originalSteps = widget.stateMap['steps'] as List? ?? [];
+    final originalSteps =
+        (_editedStateMap ?? widget.stateMap)['steps'] as List? ?? [];
     final controllers = originalSteps.map((step) {
       final value = step as Map;
       return TextEditingController(
@@ -108,7 +111,12 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
         step['query_text'] = controllers[index].text.trim();
         updatedSteps.add(step);
       }
-      setState(() => widget.stateMap['steps'] = updatedSteps);
+      setState(() {
+        // Copy-on-edit: never mutate the parent's live stateMap, so a
+        // re-entrant Start click cannot race a running loop's writes.
+        _editedStateMap = Map<String, dynamic>.from(widget.stateMap)
+          ..['steps'] = updatedSteps;
+      });
     }
     for (final controller in controllers) {
       controller.dispose();
@@ -183,7 +191,12 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
         targetFileName = docxName;
       } else {
         bytesList = utf8.encode(contentToSave);
-        targetFileName = widget.fileName;
+        final baseName = widget.fileName.isNotEmpty
+            ? widget.fileName
+            : 'research_report';
+        targetFileName = baseName.endsWith('.md')
+            ? baseName
+            : '$baseName.md';
       }
 
       final bytes = Uint8List.fromList(bytesList);
@@ -299,8 +312,11 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                       if (status == 'pending') const SizedBox(width: 4),
                       if (widget.onStartResearch != null)
                         FilledButton.icon(
-                          onPressed: () =>
-                              widget.onStartResearch!(widget.stateMap),
+                          onPressed: widget.isSending
+                              ? null
+                              : () => widget.onStartResearch!(
+                                    _editedStateMap ?? widget.stateMap,
+                                  ),
                           icon: Icon(
                             status == 'running'
                                 ? Icons.play_arrow
@@ -334,56 +350,49 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                       color: Color(0xFF2C5282),
                     ),
                   ),
-                if (status == 'completed')
-                  PopupMenuButton<String>(
+                if (status == 'completed') ...[
+                  IconButton(
+                    tooltip: 'Save as Markdown',
+                    constraints: const BoxConstraints(),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
+                    onPressed: () => _downloadFile(asDocx: false),
                     icon: const Icon(
-                      Icons.download,
-                      size: 20,
+                      Icons.article_outlined,
+                      size: 19,
                       color: Color(0xFF2C5282),
                     ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onSelected: (value) {
-                      if (value == 'markdown') {
-                        _downloadFile(asDocx: false);
-                      } else if (value == 'docx') {
-                        _downloadFile(asDocx: true);
-                      }
-                    },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'docx',
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.description,
-                              size: 18,
-                              color: Color(0xFF2C5282),
-                            ),
-                            SizedBox(width: 8),
-                            Text('Save as DOCX'),
-                          ],
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'markdown',
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.article,
-                              size: 18,
-                              color: Color(0xFF2C5282),
-                            ),
-                            SizedBox(width: 8),
-                            Text('Save as Markdown'),
-                          ],
-                        ),
-                      ),
-                    ],
                   ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    tooltip: 'Save as DOCX',
+                    constraints: const BoxConstraints(),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
+                    onPressed: () => _downloadFile(asDocx: true),
+                    icon: const Icon(
+                      Icons.description_outlined,
+                      size: 19,
+                      color: Color(0xFF2C5282),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
+          if (status == 'completed' &&
+              (widget.stateMap['report_path'] ?? '').toString().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+              child: Text(
+                'Report saved: ${(widget.stateMap['report_path'] ?? '').toString().split('/').last}',
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF4A6785)),
+              ),
+            ),
           if (steps.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),

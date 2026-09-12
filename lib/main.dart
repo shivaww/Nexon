@@ -844,10 +844,13 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     for (final entry in sources.entries) {
       combinedContent.writeln('=== SOURCE: ${entry.key} ===');
       final content = entry.value;
-      if (content.length > 8000) {
-        combinedContent.writeln(content.substring(0, 6000));
-        combinedContent.writeln('\n...[${content.length - 7000} chars omitted]...\n');
-        combinedContent.writeln(content.substring(content.length - 1000));
+      // The bridge cleaner already relevance-filters fetched pages to
+      // ~6000 chars; apply this second, wider budget only to outliers so
+      // the two trims never stack on typical content.
+      if (content.length > 12000) {
+        combinedContent.writeln(content.substring(0, 9000));
+        combinedContent.writeln('\n...[${content.length - 11000} chars omitted]...\n');
+        combinedContent.writeln(content.substring(content.length - 2000));
       } else {
         combinedContent.writeln(content);
       }
@@ -2017,7 +2020,7 @@ jobs:
 
         if (_deepResearchEnabled &&
             !currentSession.messages.any(
-              (m) => m.text.contains('"research_state"'),
+              (m) => findFenceWithKeys(m.text, ['research_state']) != null,
             )) {
           systemPromptText = DeepResearchPrompts.plannerSystemPrompt;
         } else {
@@ -2289,28 +2292,15 @@ jobs:
                           rawPlan['phases'] is List
                       ? rawPlan['phases'] as List
                       : const <dynamic>[]);
-            final List<Map<String, dynamic>> stepsList = [];
-            int phaseNum = 1;
-            for (final entry in phaseList) {
-              if (entry is! Map) continue;
-              final textContent = (entry['prompt'] ?? '').toString().trim();
-              var title = (entry['title'] ?? '').toString().trim();
-              final prompt = textContent;
-              if (title.isEmpty) {
-                final separatorIndex = textContent.indexOf(RegExp(r' - | \| | success:', caseSensitive: false));
-                if (separatorIndex != -1 && separatorIndex < 35) {
-                  title = textContent.substring(0, separatorIndex).trim();
-                } else {
-                  title = 'Phase $phaseNum';
-                }
+            // Normalize once here so the state fence always carries the
+            // canonical id/title/query_text/prompt/status/content/events
+            // shape that _runResearchLoop and the widgets expect.
+            final List<Map<String, dynamic>> stepsList =
+                DeepResearchHelpers.normalizeSteps(phaseList);
+            for (var si = 0; si < stepsList.length; si++) {
+              if ((stepsList[si]['title'] ?? '').toString().trim().isEmpty) {
+                stepsList[si]['title'] = 'Phase ${si + 1}';
               }
-              stepsList.add({
-                "title": title,
-                "prompt": prompt.isNotEmpty ? prompt : title,
-                "status": "pending",
-                "content": "",
-              });
-              phaseNum++;
             }
 
             if (stepsList.isNotEmpty) {
@@ -5374,7 +5364,8 @@ jobs:
         phaseFailedFetches.clear();
 
         // Skip already-completed phases when resuming a usable plan.
-        if (steps[i]['status'] == 'completed') {
+        if (steps[i]['status'] == 'completed' ||
+            steps[i]['status'] == 'completed_with_issues') {
           continue;
         }
 
@@ -5506,6 +5497,12 @@ jobs:
               _publishResearchState(sessionIndex, messageIndex, stateMap);
             };
 
+        final handoffBrief = (steps[i]['handoff_brief'] ?? '')
+            .toString()
+            .trim();
+        final nextPhaseHeading = i + 1 < steps.length
+            ? (steps[i + 1]['title'] ?? '').toString()
+            : '';
         final List<ChatMessage> stepMessages = [
           const ChatMessage(
             role: MessageRole.system,
@@ -5516,6 +5513,8 @@ jobs:
             text:
                 "Your current research stage is: \"$phaseTitle\"\n"
                 "Focus Area Instructions: $queryText\n\n"
+                "${handoffBrief.isNotEmpty ? '━━ HANDOFF BRIEF FROM PREVIOUS PHASE (PRIMARY DIRECTIVE) ━━\nThe previous phase finished its work and wrote these concrete search directives for you. Follow them FIRST, then cover anything they miss from the Focus Area above:\n$handoffBrief\n\n' : ''}"
+                "${nextPhaseHeading.isNotEmpty ? '━━ NEXT PHASE AHEAD ━━\nAfter you, the pipeline runs phase \"$nextPhaseHeading\". When cheap, also grab evidence it will obviously need, and fold remaining gaps into your next_brief.\n\n' : ''}"
                 "${crossPhaseContext.length > 0 ? '━━ PREVIOUS PHASE RESULTS (MANDATORY RESEARCH TARGETS) ━━\nBelow are the entities, facts, and sources discovered in earlier phases. Your current phase MUST build on these:\n- Use the EXACT entity names listed below as your search queries (e.g. search \"[model name] specs\" not \"coding model specs\").\n- Use read_url on the source URLs listed below if they contain information relevant to your current phase.\n- NEVER search for generic terms when specific entities were already discovered. Search for the specific entity + your phase\'s focus.\n- If a previous phase found models A, B, C, your phase about specs should search \"A specs\", \"B specs\", \"C specs\" — not \"coding model specs\".\n\n$crossPhaseContext\n' : ''}"
                 "━━ RECENCY MANDATE ━━\n"
                 "Current date and time: $phaseCurrentTime.\n"
@@ -5526,8 +5525,9 @@ jobs:
                 "3. If the newest source you find is >6 months old, explicitly note this.\n"
                 "4. NEVER state a fact from your training data. If you haven't found it via search/fetch, you don't know it.\n\n"
                 "Please formulate search queries or read specific URLs to gather evidence. "
-                "Cite specific metrics, comparisons, and sources in your final response. "
-                "When you are finished, write a concise summary of your findings and emit {\"t\":\"step_complete\"} in its own ```json block.",
+                "Do NOT write a report-style summary: end with a short bullet list of what you established and what remains open. "
+                "When finished, emit {\"t\":\"step_complete\",\"a\":{\"next_brief\":\"<concrete search directives for the NEXT phase: exact queries to run and URLs to read, based on what you found and what is still missing>\"}} in its own ```json block. "
+                "If this is the last phase, set next_brief to an empty string.",
           ),
         ];
 
@@ -5705,6 +5705,54 @@ jobs:
                   ),
                 );
                 continue;
+              }
+              // Handoff chain: the finishing phase writes the next phase's
+              // search directives so phase N+1 never searches blind.
+              if (i + 1 < steps.length) {
+                final scIdx = responseText.indexOf('"step_complete"');
+                final braceStart = scIdx == -1
+                    ? -1
+                    : responseText.lastIndexOf('{', scIdx);
+                if (braceStart != -1) {
+                  int depth = 0;
+                  bool inStr = false;
+                  bool esc = false;
+                  int objEnd = -1;
+                  for (int ci = braceStart; ci < responseText.length; ci++) {
+                    final c = responseText[ci];
+                    if (inStr) {
+                      if (esc) {
+                        esc = false;
+                      } else if (c == '\\') {
+                        esc = true;
+                      } else if (c == '"') {
+                        inStr = false;
+                      }
+                    } else if (c == '"') {
+                      inStr = true;
+                    } else if (c == '{') {
+                      depth++;
+                    } else if (c == '}') {
+                      depth--;
+                      if (depth == 0) {
+                        objEnd = ci + 1;
+                        break;
+                      }
+                    }
+                  }
+                  if (objEnd != -1) {
+                    final obj = DeepResearchHelpers.parseJsonObject(
+                      responseText.substring(braceStart, objEnd),
+                    );
+                    final a = obj?['a'];
+                    final brief = a is Map
+                        ? (a['next_brief'] ?? '').toString().trim()
+                        : '';
+                    if (brief.isNotEmpty) {
+                      steps[i + 1]['handoff_brief'] = brief;
+                    }
+                  }
+                }
               }
               final contentClean = responseText
                   .replaceAll(
@@ -6372,6 +6420,7 @@ jobs:
                         'parse_format': 'html',
                         'facts_count': urlFacts,
                         'findings_count': urlFindings,
+                        'new_chunks_added': urlFacts + urlFindings,
                         'result_payload': {
                           'summary': 'Batch summarized',
                         },
@@ -6462,17 +6511,26 @@ jobs:
                     // Extract gaps and append as guidance for next search
                     final gaps = reflectJson['gaps'];
                     if (gaps is List && gaps.isNotEmpty) {
+                      // Drop gaps duplicating already-executed queries so the
+                      // researcher never gets an "already executed" stub.
                       final gapText = gaps
                           .whereType<String>()
+                          .where(
+                            (g) => !executedQueries.contains(
+                              _normalizeQueryOrUrl(g.trim()),
+                            ),
+                          )
                           .take(4)
                           .map((g) => '- $g')
                           .join('\n');
-                      stepMessages.add(
-                        ChatMessage(
-                          role: MessageRole.user,
-                          text: 'Reflection identified gaps. Focus next searches on:\n$gapText',
-                        ),
-                      );
+                      if (gapText.isNotEmpty) {
+                        stepMessages.add(
+                          ChatMessage(
+                            role: MessageRole.user,
+                            text: 'Reflection identified gaps. Focus next searches on:\n$gapText',
+                          ),
+                        );
+                      }
                     }
                   }
                 } else {
@@ -6504,6 +6562,13 @@ jobs:
           skippedPdfs: phaseSkippedPdfs,
           failedFetches: phaseFailedFetches,
         );
+        final hadIssues = !stepFailed &&
+            (phaseFailedFetches.isNotEmpty ||
+                phaseSkippedPdfs.isNotEmpty ||
+                (steps[i]['checkpoint_warning'] ?? '').toString().isNotEmpty);
+        final phaseStatus = stepFailed
+            ? 'failed'
+            : (hadIssues ? 'completed_with_issues' : 'completed');
         try {
           await _updateDeepResearchPhase(
             stageId: stageId,
@@ -6513,14 +6578,14 @@ jobs:
             findings: phaseFindings,
             skippedPdfs: phaseSkippedPdfs,
             failedFetches: phaseFailedFetches,
-            status: stepFailed ? 'failed' : 'completed',
+            status: phaseStatus,
           );
         } catch (e) {
           stepFailed = true;
           stepFailure = 'Could not persist this phase to temp.json: $e';
         }
 
-        steps[i]['status'] = stepFailed ? 'failed' : 'completed';
+        steps[i]['status'] = phaseStatus;
         if (stepFailed) {
           steps[i]['error'] = stepFailure;
         }
@@ -6588,11 +6653,21 @@ jobs:
           );
         } catch (e) {
           debugPrint('Checkpoint save failed after phase ${i + 1}: $e');
+          steps[i]['checkpoint_warning'] = 'Checkpoint save failed: $e';
         }
       }
 
       // ── STAGE 3: WRITING THE REPORT ──
       final executionIssues = <Map<String, dynamic>>[];
+      for (final stepValue in steps) {
+        final cw = (stepValue as Map)['checkpoint_warning'];
+        if (cw != null && cw.toString().isNotEmpty) {
+          executionIssues.add({
+            'kind': 'checkpoint',
+            'message': cw.toString(),
+          });
+        }
+      }
       for (final stepValue in steps) {
         final step = stepValue as Map;
         final eventErrors = (step['events'] as List? ?? [])
@@ -6837,6 +6912,12 @@ jobs:
           writerRetries++;
           if (writerRetries >= 3) {
             writerFailure = e.toString();
+          } else {
+            // Back off like _retryLlmCall so a transient rate limit at
+            // stage 3 does not fail the whole run immediately.
+            await Future<void>.delayed(
+              Duration(seconds: writerRetries == 1 ? 2 : 4),
+            );
           }
         }
       }
@@ -7339,6 +7420,17 @@ jobs:
           onDeepResearchEnabledChanged: (val) async {
             setState(() {
               _deepResearchEnabled = val;
+              // Deep Research requires Web Search; enable it together so
+              // the loop never bails with a red-flag system message.
+              if (val && !_searchSettings.enabled) {
+                _searchSettings = SearchSettings(
+                  enabled: true,
+                  provider: _searchSettings.provider,
+                  apiKey: _searchSettings.apiKey,
+                  fallbackApiKeys: _searchSettings.fallbackApiKeys,
+                  googleCx: _searchSettings.googleCx,
+                );
+              }
             });
             await _saveSettings();
           },

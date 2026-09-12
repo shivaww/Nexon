@@ -132,7 +132,7 @@ Earlier phases may have discovered specific entities (model names, product names
 </verification_protocol>
 
 <stop_condition>
-After at least one successful read_url (when sources exist) and 2+ full pages read with specific facts/findings addressing the phase goal, emit {"t":"step_complete"} in its own fenced json block to finish. Do not over-search once you have solid evidence.
+After at least one successful web_search or read_url that yielded specific facts/findings addressing the phase goal (read 2+ full pages when fetchable sources exist), emit {"t":"step_complete","a":{"next_brief":"..."}} in its own fenced json block to finish: next_brief holds concrete search directives (exact queries and URLs) for the NEXT phase, derived from what you found and what is still missing; use an empty string on the last phase. Do not over-search once you have solid evidence.
 </stop_condition>
 """;
 

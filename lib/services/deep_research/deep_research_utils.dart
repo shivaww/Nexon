@@ -1,4 +1,4 @@
-// Extracted from main.dart lines 19865-19875
+// Deep Research helpers: tool-path resolution plus the research_state fence builder
 // Extracted on: 2026-08-26T18:20:45.692448
 
 import 'dart:convert';
