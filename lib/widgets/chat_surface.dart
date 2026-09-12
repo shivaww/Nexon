@@ -168,12 +168,56 @@ class ChatSurface extends StatelessWidget {
                   }
                 }
                 final isUser = messages[index].role == MessageRole.user;
+                // One assistant turn = one run of consecutive non-user
+                // messages. Earlier rounds fold their thinking and quiet
+                // tool rows into the turn's last visible bubble, keeping
+                // one Thought Process block per user message.
+                int runStart = index;
+                bool foldThoughtIntoLater = false;
+                List<ChatMessage> mergedPrior = const [];
+                List<String?> mergedPriorResults = const [];
+                if (!isUser) {
+                  while (runStart - 1 >= 0 &&
+                      messages[runStart - 1].role != MessageRole.user) {
+                    runStart--;
+                  }
+                  int runEnd = index;
+                  while (runEnd + 1 < messages.length &&
+                      messages[runEnd + 1].role != MessageRole.user) {
+                    runEnd++;
+                  }
+                  int displayIndex = runEnd;
+                  while (displayIndex > runStart &&
+                      _isPairedResult(messages, displayIndex)) {
+                    displayIndex--;
+                  }
+                  foldThoughtIntoLater = index != displayIndex;
+                  if (!foldThoughtIntoLater) {
+                    final prior = <ChatMessage>[];
+                    final priorResults = <String?>[];
+                    for (int k = runStart; k < displayIndex; k++) {
+                      if (_isPairedResult(messages, k)) continue;
+                      prior.add(messages[k]);
+                      priorResults.add(
+                        k + 1 < messages.length &&
+                                _isPairedResult(messages, k + 1)
+                            ? messages[k + 1].text
+                            : null,
+                      );
+                    }
+                    mergedPrior = prior;
+                    mergedPriorResults = priorResults;
+                  }
+                }
                 int groupPrev = index - 1;
                 while (groupPrev >= 0 && _isPairedResult(messages, groupPrev)) {
                   groupPrev--;
                 }
-                final isFirstOfGroup = groupPrev < 0 ||
-                    messages[groupPrev].role != messages[index].role;
+                final isFirstOfGroup = isUser
+                    ? (groupPrev < 0 ||
+                        messages[groupPrev].role != messages[index].role)
+                    : (runStart <= 0 ||
+                        messages[runStart - 1].role != messages[index].role);
                 List<int> branchIndicesForVersions = [];
                 int currentVersionIndex = 0;
 
@@ -213,6 +257,9 @@ class ChatSurface extends StatelessWidget {
                 return MessageBubble(
                   message: messages[index],
                   index: index,
+                  mergedPrior: mergedPrior,
+                  mergedPriorResults: mergedPriorResults,
+                  foldThoughtIntoLater: foldThoughtIntoLater,
                   isFirstOfGroup: isFirstOfGroup,
                   isLastMessage: index == _lastVisibleIndex(messages),
                   pairedResultText: (index + 1 < messages.length &&

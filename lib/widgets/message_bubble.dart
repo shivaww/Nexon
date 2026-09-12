@@ -38,6 +38,9 @@ class MessageBubble extends StatelessWidget {
     this.isFirstOfGroup = true,
     this.isLastMessage = false,
     this.pairedResultText,
+    this.mergedPrior = const [],
+    this.mergedPriorResults = const [],
+    this.foldThoughtIntoLater = false,
     super.key,
   });
 
@@ -60,6 +63,9 @@ class MessageBubble extends StatelessWidget {
   final bool isFirstOfGroup;
   final bool isLastMessage;
   final String? pairedResultText;
+  final List<ChatMessage> mergedPrior;
+  final List<String?> mergedPriorResults;
+  final bool foldThoughtIntoLater;
   final bool isSending;
 
   @override
@@ -477,29 +483,63 @@ class MessageBubble extends StatelessWidget {
               Builder(
                 builder: (context) {
                   final thoughtEntries = <ThoughtEntry>[];
-                  if (message.reasoning.isNotEmpty && reasoningEnabled) {
-                    thoughtEntries.add(
-                      ThoughtEntry(
-                        icon: Icons.psychology_outlined,
-                        accent: const Color(0xFF7B4E2E),
-                        summary: 'Thinking',
-                        detail: Text(
-                          message.reasoning,
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontStyle: FontStyle.italic,
-                            color: Color(0xFF5C4E40),
-                            height: 1.4,
+                  if (!foldThoughtIntoLater) {
+                    for (var pi = 0; pi < mergedPrior.length; pi++) {
+                      final prior = mergedPrior[pi];
+                      if (prior.reasoning.isNotEmpty && reasoningEnabled) {
+                        thoughtEntries.add(
+                          ThoughtEntry(
+                            icon: Icons.psychology_outlined,
+                            accent: const Color(0xFF7B4E2E),
+                            summary: 'Thinking',
+                            detail: Text(
+                              prior.reasoning,
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                fontStyle: FontStyle.italic,
+                                color: Color(0xFF5C4E40),
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      _parseRichMessageContent(
+                        context,
+                        prior.text,
+                        thoughtSink: thoughtEntries,
+                        resultText: mergedPriorResults[pi],
+                        mergeOnly: true,
+                      );
+                    }
+                    if (message.reasoning.isNotEmpty && reasoningEnabled) {
+                      thoughtEntries.add(
+                        ThoughtEntry(
+                          icon: Icons.psychology_outlined,
+                          accent: const Color(0xFF7B4E2E),
+                          summary: 'Thinking',
+                          detail: Text(
+                            message.reasoning,
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              fontStyle: FontStyle.italic,
+                              color: Color(0xFF5C4E40),
+                              height: 1.4,
+                            ),
                           ),
                         ),
-                      ),
-                    );
+                      );
+                    }
                   }
                   final visible = _parseRichMessageContent(
                     context,
                     message.text,
-                    thoughtSink: thoughtEntries,
+                    thoughtSink: foldThoughtIntoLater ? null : thoughtEntries,
+                    cardsOnly: foldThoughtIntoLater,
                   );
+                  if (visible.isEmpty && thoughtEntries.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -520,7 +560,8 @@ class MessageBubble extends StatelessWidget {
             ],
             if (!isUser &&
                 !isToolOutput &&
-                !(isSending && isLastMessage))
+                !(isSending && isLastMessage) &&
+                !foldThoughtIntoLater)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
@@ -669,6 +710,9 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
     BuildContext context,
     String text, {
     List<ThoughtEntry>? thoughtSink,
+    String? resultText,
+    bool mergeOnly = false,
+    bool cardsOnly = false,
   }) {
     final widgets = <Widget>[];
     // Prose that arrives before a quiet tool call is thinking, not answer:
@@ -754,10 +798,10 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
                   .whereType<Map<String, dynamic>>()
                   .toList()
             : <Map<String, dynamic>>[toolFence.json];
-        final sections = (pairedResultText == null ||
-                pairedResultText!.trim().isEmpty)
+        final paired = resultText ?? pairedResultText;
+        final sections = (paired == null || paired.trim().isEmpty)
             ? <String>[]
-            : pairedResultText!
+            : paired
                   .split(RegExp(r'\n\n---\n\n'))
                   .where((s) => s.trim().isNotEmpty)
                   .toList();
@@ -778,7 +822,8 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
             }
           }
           final toolName = fenceCall['t']?.toString() ?? 'tool';
-          if (thoughtSink != null && isQuietToolName(toolName)) {
+          final isQuiet = isQuietToolName(toolName);
+          if (isQuiet && thoughtSink != null && !cardsOnly) {
             // Thinking prose before this call becomes its own bullet.
             if (pendingThink.trim().isNotEmpty) {
               addThinkEntry(pendingThink.trim());
@@ -801,8 +846,15 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
                 ),
               ),
             );
-          } else {
-            flushThinkToBody();
+          } else if (!isQuiet && !mergeOnly) {
+            // Visible card (own bubble, or a folded prior round keeping
+            // its agentic cards); prose before it is body text unless
+            // this bubble folds its thinking into a later bubble.
+            if (cardsOnly) {
+              pendingThink = '';
+            } else {
+              flushThinkToBody();
+            }
             widgets.add(
               McpToolBlock(
                 mcpJson: jsonEncode({
@@ -813,6 +865,8 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
               ),
             );
           }
+          // mergeOnly drops visible cards (the prior round's own bubble
+          // renders them); cardsOnly drops quiet rows (they stay folded).
         }
         currentIndex += toolFence.end;
         continue;
@@ -828,6 +882,12 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
     }
     // Prose left after the last tool call is the user-facing answer; when
     // no quiet tool ran at all everything stays in the body unchanged.
+    // Folded rounds (mergeOnly/cardsOnly) never emit body prose: leftover
+    // thinking becomes a bullet, or is dropped when no sink exists.
+    if ((mergeOnly || cardsOnly) && pendingThink.trim().isNotEmpty) {
+      addThinkEntry(pendingThink.trim());
+      pendingThink = '';
+    }
     flushThinkToBody();
 
     return widgets;
