@@ -375,17 +375,20 @@ class TermuxForgeBridge:
 
         try:
             if stream:
-                result = await self.executor.execute_streaming(
-                    command=command, cwd=cwd, timeout=timeout,
-                    env=env, process_id=process_id,
-                    on_output=lambda s, l: asyncio.ensure_future(
-                        self._broadcast({
+                _output_sem = asyncio.Semaphore(50)
+                async def _throttled_output(s, l):
+                    async with _output_sem:
+                        await self._broadcast({
                             "type": "output",
                             "stream": s,
                             "line": l,
                             "processId": process_id,
                         })
-                    ),
+
+                result = await self.executor.execute_streaming(
+                    command=command, cwd=cwd, timeout=timeout,
+                    env=env, process_id=process_id,
+                    on_output=lambda s, l: asyncio.ensure_future(_throttled_output(s, l)),
                 )
             else:
                 result = await self.executor.execute(
@@ -896,11 +899,21 @@ class TermuxForgeBridge:
                                 result = await self._process_read_url_response(retry_resp, target_url, query)
                         return result
                 except (aiohttp.ClientSSLError, ssl.SSLError) as ssl_err:
-                    logger.error("read_url: SSL verification failed for %s: %s", target_url, ssl_err)
-                    return {
-                        "error": f"SSL verification failed for {target_url}: {ssl_err}. Ensure ca-certificates is installed (pkg install ca-certificates).",
-                        "url": target_url
-                    }
+                    logger.warning("read_url: SSL failed for %s, retrying without verification: %s", target_url, ssl_err)
+                    try:
+                        async with session.get(
+                            target_url, allow_redirects=True, max_redirects=10,
+                            timeout=aiohttp.ClientTimeout(total=45),
+                            ssl=False
+                        ) as retry_resp:
+                            result = await self._process_read_url_response(retry_resp, target_url, query)
+                            return result
+                    except Exception as retry_err:
+                        logger.error("read_url: SSL fallback also failed for %s: %s", target_url, retry_err)
+                        return {
+                            "error": f"Fetch failed (SSL fallback): {retry_err}",
+                            "url": target_url
+                        }
         except Exception as e:
             logger.error("read_url: Fetch failed completely. URL=%s, error=%s", target_url, e)
             return {"error": f"Fetch failed: {e}", "url": target_url}
@@ -1532,12 +1545,23 @@ class TermuxForgeBridge:
         client_addr = websocket.remote_address
         logger.info("Client connected: %s", client_addr)
         self._clients.add(websocket)
+        pending_tasks: set[asyncio.Task] = set()
+
+        async def _dispatch_one(ws, raw):
+            try:
+                response = await self._process_message(str(raw))
+                if response:
+                    await ws.send(response)
+            except websockets.exceptions.ConnectionClosed:
+                pass
+            except Exception:
+                logger.exception("Error dispatching message for %s", client_addr)
 
         try:
             async for raw_message in websocket:
-                response = await self._process_message(str(raw_message))
-                if response:
-                    await websocket.send(response)
+                task = asyncio.create_task(_dispatch_one(websocket, raw_message))
+                pending_tasks.add(task)
+                task.add_done_callback(pending_tasks.discard)
         except websockets.exceptions.ConnectionClosedOK:
             logger.info("Client disconnected gracefully: %s", client_addr)
         except websockets.exceptions.ConnectionClosedError as exc:
@@ -1545,6 +1569,11 @@ class TermuxForgeBridge:
         except Exception as exc:
             logger.exception("Unhandled error for client %s", client_addr)
         finally:
+            # Cancel any still-running tasks for this client
+            for t in pending_tasks:
+                t.cancel()
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
             self._clients.discard(websocket)
 
     def translate_termux_path(self, path_str: Any) -> Any:
@@ -1815,6 +1844,7 @@ class TermuxForgeBridge:
             body = await request.text()
             # 1. Try parsing <command> XML fallback
             import re
+            request_id = "http-req"
             cmd_match = re.search(r'<command>(.*?)</command>', body, re.DOTALL)
             if cmd_match:
                 command = cmd_match.group(1).strip()
@@ -1843,6 +1873,7 @@ class TermuxForgeBridge:
                         "error": {"code": -32700, "message": "Invalid request format"},
                     }, status=400)
                     
+                request_id = data.get("id", "http-req")
                 method = data.get("method")
                 params = data.get("params", {})
                 
@@ -1857,7 +1888,7 @@ class TermuxForgeBridge:
             params = self.resolve_params_paths(params)
             
             # Dispatch as internal JSON-RPC
-            rpc_req = JsonRpcRequest(method=method, params=params, id="http-req", jsonrpc="2.0")
+            rpc_req = JsonRpcRequest(method=method, params=params, id=request_id, jsonrpc="2.0")
             try:
                 # Legacy ingest was removed; all evidence now flows through
                 # update_phase / read_url / export_*.
@@ -1865,7 +1896,7 @@ class TermuxForgeBridge:
                     return web.json_response(
                         {
                             "jsonrpc": "2.0",
-                            "id": "http-req",
+                            "id": request_id,
                             "error": {
                                 "code": -32008,
                                 "message": (
@@ -1885,7 +1916,7 @@ class TermuxForgeBridge:
                 return web.json_response(
                     {
                         "jsonrpc": "2.0",
-                        "id": "http-req",
+                        "id": request_id,
                         "error": {
                             "code": -32002,
                             "message": f"MCP request timed out after {MCP_HTTP_TIMEOUT_SECONDS:g}s",
@@ -1898,7 +1929,7 @@ class TermuxForgeBridge:
                 return web.json_response(
                     {
                         "jsonrpc": "2.0",
-                        "id": "http-req",
+                        "id": request_id,
                         "error": rpc_resp.error,
                     },
                     status=200,
@@ -1907,7 +1938,7 @@ class TermuxForgeBridge:
             return web.json_response(
                 {
                     "jsonrpc": "2.0",
-                    "id": "http-req",
+                    "id": request_id,
                     "result": rpc_resp.result,
                 },
             )
@@ -1916,7 +1947,7 @@ class TermuxForgeBridge:
             return web.json_response(
                 {
                     "jsonrpc": "2.0",
-                    "id": "http-req",
+                    "id": request_id,
                     "error": {"code": -32603, "message": str(e)},
                 },
                 status=500,

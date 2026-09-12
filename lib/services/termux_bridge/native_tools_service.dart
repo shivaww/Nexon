@@ -31,6 +31,11 @@ class NativeToolsService {
   static final NativeToolsService instance = NativeToolsService._();
   factory NativeToolsService() => instance;
 
+  static final HttpClient _sharedHttpClient = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 5)
+    ..idleTimeout = const Duration(seconds: 60)
+    ..autoUncompress = true;
+
   /// Tool names the C++ binary implements (short aliases; the binary also
   /// accepts the long *_tool names, but the prompt only emits these).
   static const Set<String> cppTools = {
@@ -58,10 +63,8 @@ class NativeToolsService {
   /// so callers can treat the map uniformly.
   static Future<Map<String, dynamic>> health({String? customUrl}) async {
     final endpoint = '${_baseUrl(customUrl)}/native/health';
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 3);
     try {
-      final request = await client
+      final request = await _sharedHttpClient
           .getUrl(Uri.parse(endpoint))
           .timeout(const Duration(seconds: 3));
       final response =
@@ -85,8 +88,6 @@ class NativeToolsService {
         'running': false,
         'reason': 'bridge_unreachable',
       };
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -109,10 +110,8 @@ class NativeToolsService {
         : int.tryParse(args['to']?.toString() ?? '') ?? 120;
     final Duration effective = Duration(seconds: toSec.clamp(5, 600) + 10);
     final endpoint = '${_baseUrl(customUrl)}/native/call';
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 5);
     try {
-      final request = await client
+      final request = await _sharedHttpClient
           .postUrl(Uri.parse(endpoint))
           .timeout(const Duration(seconds: 5));
       request.headers.contentType = ContentType.json;
@@ -127,7 +126,7 @@ class NativeToolsService {
       final body = await response
           .transform(utf8.decoder)
           .join()
-          .timeout(const Duration(seconds: 5));
+          .timeout(effective);
       if (response.statusCode == 503) {
         final decoded = jsonDecode(body);
         final msg = decoded is Map && decoded['err'] != null
@@ -152,8 +151,6 @@ class NativeToolsService {
       rethrow;
     } catch (e) {
       throw NativeToolsException('failed to reach native tools bridge: $e');
-    } finally {
-      client.close(force: true);
     }
   }
 }
