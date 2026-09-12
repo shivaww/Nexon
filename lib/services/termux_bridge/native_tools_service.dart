@@ -86,14 +86,24 @@ class NativeToolsService {
     final candidates = <String>[
       if (preferred != null && preferred.trim().isNotEmpty) preferred.trim(),
       '$home/nexon_bridge/tools',
+      '$home/nexon_bridge/nexon_code',
       '$home/projects/termux_forge/cpp_bridge/tools',
+      '$home/projects/termux_forge/cpp_bridge/nexon_code',
       '$home/codetools/tools',
+      '$home/codetools/nexon_code',
       '$home/Nexon/cpp_bridge/tools',
+      '$home/Nexon/cpp_bridge/nexon_code',
       '$home/nexon/cpp_bridge/tools',
+      '$home/nexon/cpp_bridge/nexon_code',
       '$home/projects/Nexon/cpp_bridge/tools',
+      '$home/projects/Nexon/cpp_bridge/nexon_code',
       '$home/projects/nexon/cpp_bridge/tools',
+      '$home/projects/nexon/cpp_bridge/nexon_code',
       '$home/termux_forge/cpp_bridge/tools',
+      '$home/termux_forge/cpp_bridge/nexon_code',
       '$home/storage/shared/Download/tools',
+      '$home/storage/shared/Download/nexon_code',
+      '/data/data/com.termux/files/usr/bin/nexon_code',
     ];
     for (final candidate in candidates) {
       try {
