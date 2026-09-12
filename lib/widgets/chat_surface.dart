@@ -23,6 +23,8 @@ class ChatSurface extends StatelessWidget {
     this.activeTodos = const [],
     this.todoListVisible = false,
     this.onCloseTodoList,
+    this.agenticEnabled = false,
+    this.onToggleTodoList,
     required this.onOpenProvider,
     required this.onOpenModel,
     required this.onSend,
@@ -58,6 +60,8 @@ class ChatSurface extends StatelessWidget {
   final List<TodoItem> activeTodos;
   final bool todoListVisible;
   final VoidCallback? onCloseTodoList;
+  final bool agenticEnabled;
+  final VoidCallback? onToggleTodoList;
   final String fileName;
   final VoidCallback onOpenProvider;
   final VoidCallback onOpenModel;
@@ -238,7 +242,7 @@ class ChatSurface extends StatelessWidget {
           ),
           if (todoListVisible && activeTodos.isNotEmpty)
             Positioned(
-              top: 0,
+              top: 84,
               right: 0,
               bottom: 0,
               width: 280,
@@ -322,6 +326,28 @@ class ChatSurface extends StatelessWidget {
               ),
             ),
           ),
+          if (agenticEnabled && activeTodos.isNotEmpty)
+            Positioned(
+              top: 0,
+              right: 76,
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: LiquidGlassIconButton(
+                    icon: Icons.checklist_rounded,
+                    size: 40,
+                    tooltip: todoListVisible
+                        ? 'Close todo list'
+                        : 'Open todo list',
+                    iconColor: todoListVisible
+                        ? const Color(0xFF059669)
+                        : const Color(0xFF5C3D26),
+                    onPressed: () => onToggleTodoList?.call(),
+                  ),
+                ),
+              ),
+            ),
           Positioned(
             bottom: 0,
             left: 0,

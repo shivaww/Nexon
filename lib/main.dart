@@ -7660,7 +7660,11 @@ jobs:
                  toolStatus: _toolStatus,
                  activeTodos: _activeTodos,
                  todoListVisible: _todoListVisible,
-                 onCloseTodoList: () => setState(() => _todoListVisible = false),
+                  onCloseTodoList: () => setState(() => _todoListVisible = false),
+                  agenticEnabled: _agenticEnabled,
+                  onToggleTodoList: () => setState(() {
+                    _todoListVisible = !_todoListVisible;
+                  }),
                 onOpenProvider: () => _openProviderSheet(_selectedProviderId),
                 onOpenModel: _openModelSheet,
                 onSend: _sendMessage,

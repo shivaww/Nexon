@@ -182,6 +182,7 @@ class TodoListPanel extends StatelessWidget {
       borderRadius: const BorderRadius.horizontal(left: Radius.circular(20)),
       color: const Color(0xFFFBF9F4),
       child: SafeArea(
+        top: false,
         bottom: false,
         child: Column(
           children: [
