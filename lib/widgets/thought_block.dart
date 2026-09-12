@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:nexon/widgets/tool_card.dart';
 
 String formatMathText(String text) {
   var formatted = text;
@@ -31,18 +32,32 @@ String formatMathText(String text) {
   return formatted;
 }
 
+/// One timeline row inside the Thought Process disclosure: a thinking
+/// bullet or a folded tool call with its result.
+class ThoughtEntry {
+  const ThoughtEntry({
+    required this.icon,
+    required this.accent,
+    required this.summary,
+    required this.detail,
+  });
+
+  final IconData icon;
+  final Color accent;
+  final String summary;
+  final Widget detail;
+}
+
 class ThoughtBlock extends StatefulWidget {
   const ThoughtBlock({
-    required this.thought,
-    this.extras,
+    this.entries = const [],
     this.active = false,
     super.key,
   });
-  final String thought;
 
-  /// Extra rows — folded tool call/result capsules — rendered beneath the
-  /// reasoning text inside this same disclosure.
-  final List<Widget>? extras;
+  /// Timeline rows — thinking bullets and folded tool calls with their
+  /// results — rendered in order inside this disclosure.
+  final List<ThoughtEntry> entries;
 
   /// True while this assistant turn is still running. The block opens itself
   /// and stays open for the whole tool loop (call → result → re-think), then
@@ -121,17 +136,13 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (widget.thought.trim().isNotEmpty)
-                    Text(
-                      widget.thought,
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        fontStyle: FontStyle.italic,
-                        color: Color(0xFF5C4E40),
-                        height: 1.4,
-                      ),
+                  for (final entry in widget.entries)
+                    ToolCallCard(
+                      icon: entry.icon,
+                      accent: entry.accent,
+                      summary: entry.summary,
+                      detail: entry.detail,
                     ),
-                  if (widget.extras != null) ...widget.extras!,
                 ],
               ),
             ),

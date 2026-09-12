@@ -348,20 +348,28 @@ class MessageBubble extends StatelessWidget {
                         text.startsWith('Quiz results') ||
                         text.startsWith('Quiz Tool Result') ||
                         isQuietToolName(toolResultMatch?.group(1) ?? '');
+                    final detail = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: webSearchMatch
+                          ? [_buildMarkdownResult(context, message.text)]
+                          : _buildToolResultDetails(context, message.text),
+                    );
                     final card = ToolCallCard(
                       icon: headerIcon,
                       accent: headerColor,
                       summary: header,
-                      detail: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: webSearchMatch
-                            ? [_buildMarkdownResult(context, message.text)]
-                            : _buildToolResultDetails(context, message.text),
-                      ),
+                      detail: detail,
                     );
                     if (quiet) {
-                      return ThoughtBlock(thought: '', extras: [card]);
+                      return ThoughtBlock(entries: [
+                        ThoughtEntry(
+                          icon: headerIcon,
+                          accent: headerColor,
+                          summary: header,
+                          detail: detail,
+                        ),
+                      ]);
                     }
                     return card;
                 },
@@ -468,21 +476,36 @@ class MessageBubble extends StatelessWidget {
             else ...[
               Builder(
                 builder: (context) {
-                  final quietTools = <Widget>[];
+                  final thoughtEntries = <ThoughtEntry>[];
+                  if (message.reasoning.isNotEmpty && reasoningEnabled) {
+                    thoughtEntries.add(
+                      ThoughtEntry(
+                        icon: Icons.psychology_outlined,
+                        accent: const Color(0xFF7B4E2E),
+                        summary: 'Thinking',
+                        detail: Text(
+                          message.reasoning,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontStyle: FontStyle.italic,
+                            color: Color(0xFF5C4E40),
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
                   final visible = _parseRichMessageContent(
                     context,
                     message.text,
-                    quietSink: quietTools,
+                    thoughtSink: thoughtEntries,
                   );
-                  final hasThought =
-                      message.reasoning.isNotEmpty && reasoningEnabled;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (hasThought || quietTools.isNotEmpty)
+                      if (thoughtEntries.isNotEmpty)
                         ThoughtBlock(
-                          thought: hasThought ? message.reasoning : '',
-                          extras: quietTools,
+                          entries: thoughtEntries,
                           // Stays open for the entire live turn — across tool
                           // calls, their results, and the re-think after them.
                           active: isLiveTurn,
@@ -595,12 +618,88 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+IconData _quietToolIcon(String t) {
+  if (t == 'web_search' || t == 'search_web') return Icons.public_rounded;
+  if (t == 'read_url') return Icons.link_rounded;
+  if (t.startsWith('workspace_')) return Icons.folder_open_rounded;
+  if (t == 'quiz' || t == 'quiz_request') return Icons.quiz_outlined;
+  if (t == 'todo_create' || t == 'todo_done') return Icons.checklist_rounded;
+  return Icons.build_outlined;
+}
+
+Color _quietToolAccent(String t) {
+  if (t == 'web_search' || t == 'search_web' || t == 'read_url') {
+    return const Color(0xFF0369A1);
+  }
+  if (t.startsWith('workspace_')) return const Color(0xFFB45309);
+  if (t == 'todo_create' || t == 'todo_done') {
+    return const Color(0xFF059669);
+  }
+  return const Color(0xFF7B4E2E);
+}
+
+String _quietToolSummary(String t, Map<String, dynamic> call) {
+  final a = call['a'];
+  String? target;
+  if (a is Map) {
+    for (final k in const ['q', 'query', 'url', 'u', 'path', 'p']) {
+      final v = a[k];
+      if (v is String && v.trim().isNotEmpty) {
+        target = v.trim();
+        break;
+      }
+    }
+  }
+  if (target != null && target.length > 60) {
+    target = '${target.substring(0, 60)}…';
+  }
+  if (t == 'web_search' || t == 'search_web') {
+    return target == null ? 'Searching the web' : 'Searching for "$target"';
+  }
+  if (t == 'read_url') {
+    return target == null ? 'Reading a URL' : 'Reading $target';
+  }
+  if (t.startsWith('workspace_')) return 'Browsing workspace';
+  if (t == 'todo_create' || t == 'todo_done') return 'Updating todo list';
+  if (t == 'quiz' || t == 'quiz_request') return 'Quiz';
+  return t;
+}
+
   List<Widget> _parseRichMessageContent(
     BuildContext context,
     String text, {
-    List<Widget>? quietSink,
+    List<ThoughtEntry>? thoughtSink,
   }) {
     final widgets = <Widget>[];
+    // Prose that arrives before a quiet tool call is thinking, not answer:
+    // it folds into the Thought Process timeline instead of the body.
+    String pendingThink = '';
+    void flushThinkToBody() {
+      final t = pendingThink.trim();
+      if (t.isEmpty) return;
+      widgets.addAll(_buildBlocks(context, t));
+      pendingThink = '';
+    }
+
+    void addThinkEntry(String body) {
+      thoughtSink?.add(
+        ThoughtEntry(
+          icon: Icons.circle,
+          accent: const Color(0xFF8B7355),
+          summary: 'Thinking',
+          detail: Text(
+            body,
+            style: const TextStyle(
+              fontSize: 12.5,
+              fontStyle: FontStyle.italic,
+              color: Color(0xFF5C4E40),
+              height: 1.4,
+            ),
+          ),
+        ),
+      );
+    }
+
     int currentIndex = 0;
 
     while (currentIndex < text.length) {
@@ -622,8 +721,11 @@ class MessageBubble extends StatelessWidget {
         final start = researchFence!['start'] as int;
         final textBefore = substring.substring(0, start).trim();
         if (textBefore.isNotEmpty) {
-          widgets.addAll(_buildBlocks(context, textBefore));
+          pendingThink = pendingThink.isEmpty
+              ? textBefore
+              : '$pendingThink\n\n$textBefore';
         }
+        flushThinkToBody();
         final rj = researchFence['json'] as Map<String, dynamic>;
         if (rj['research_state'] is Map<String, dynamic>) {
           widgets.add(
@@ -643,7 +745,9 @@ class MessageBubble extends StatelessWidget {
       if (toolFence != null) {
         final textBefore = substring.substring(0, toolFence.start).trim();
         if (textBefore.isNotEmpty) {
-          widgets.addAll(_buildBlocks(context, textBefore));
+          pendingThink = pendingThink.isEmpty
+              ? textBefore
+              : '$pendingThink\n\n$textBefore';
         }
         final fenceCalls = toolFence.json['calls'] is List
             ? (toolFence.json['calls'] as List)
@@ -674,17 +778,40 @@ class MessageBubble extends StatelessWidget {
             }
           }
           final toolName = fenceCall['t']?.toString() ?? 'tool';
-          final toolBlock = McpToolBlock(
-            mcpJson: jsonEncode({
-              'method': toolName,
-              'params': fenceCall['a'] ?? <String, dynamic>{},
-            }),
-            resultText: resultForCall,
-          );
-          if (quietSink != null && isQuietToolName(toolName)) {
-            quietSink.add(toolBlock);
+          if (thoughtSink != null && isQuietToolName(toolName)) {
+            // Thinking prose before this call becomes its own bullet.
+            if (pendingThink.trim().isNotEmpty) {
+              addThinkEntry(pendingThink.trim());
+              pendingThink = '';
+            }
+            thoughtSink.add(
+              ThoughtEntry(
+                icon: _quietToolIcon(toolName),
+                accent: _quietToolAccent(toolName),
+                summary: _quietToolSummary(toolName, fenceCall),
+                detail: SelectableText(
+                  '${const JsonEncoder.withIndent('  ').convert(fenceCall)}'
+                  '${resultForCall == null ? '' : '\n\n$resultForCall'}',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontFamily: 'monospace',
+                    color: Color(0xFF4A3424),
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            );
           } else {
-            widgets.add(toolBlock);
+            flushThinkToBody();
+            widgets.add(
+              McpToolBlock(
+                mcpJson: jsonEncode({
+                  'method': toolName,
+                  'params': fenceCall['a'] ?? <String, dynamic>{},
+                }),
+                resultText: resultForCall,
+              ),
+            );
           }
         }
         currentIndex += toolFence.end;
@@ -693,10 +820,15 @@ class MessageBubble extends StatelessWidget {
 
       final remaining = substring.trim();
       if (remaining.isNotEmpty) {
-        widgets.addAll(_buildBlocks(context, remaining));
+        pendingThink = pendingThink.isEmpty
+            ? remaining
+            : '$pendingThink\n\n$remaining';
       }
       break;
     }
+    // Prose left after the last tool call is the user-facing answer; when
+    // no quiet tool ran at all everything stays in the body unchanged.
+    flushThinkToBody();
 
     return widgets;
   }
