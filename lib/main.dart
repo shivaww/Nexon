@@ -2015,7 +2015,24 @@ jobs:
         }
 
         final List<ChatMessage> historyForApi = [];
-        final currentDateStr = DateTime.now().toString().substring(0, 10);
+        final nowDate = DateTime.now();
+        const monthNames = [
+          'January',
+          'February',
+          'March',
+          'April',
+          'May',
+          'June',
+          'July',
+          'August',
+          'September',
+          'October',
+          'November',
+          'December',
+        ];
+        final currentDateStr =
+            '${monthNames[nowDate.month - 1]} ${nowDate.day}, ${nowDate.year}'
+            ' (${nowDate.toString().substring(0, 10)})';
         String systemPromptText = "";
 
         if (_deepResearchEnabled &&

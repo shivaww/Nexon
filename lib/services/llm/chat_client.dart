@@ -805,8 +805,31 @@ class ChatClient {
               'User-Agent',
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             );
+            // Recency: DDG lite honors the same df date filter as the
+            // HTML endpoint (d/w/m/y). Map an explicit timeRange onto it,
+            // and default fresh-keyword queries to a month window so
+            // results skew to the current month instead of last month's
+            // relevance-ranked pages.
+            String? dfVal;
+            final dfRaw = (timeRange ?? '').trim().toLowerCase();
+            if (dfRaw.isNotEmpty) {
+              if (dfRaw == 'day' || dfRaw == 'd')
+                dfVal = 'd';
+              else if (dfRaw == 'week' || dfRaw == 'w')
+                dfVal = 'w';
+              else if (dfRaw == 'month' || dfRaw == 'm')
+                dfVal = 'm';
+              else if (dfRaw == 'year' || dfRaw == 'y')
+                dfVal = 'y';
+            } else if (RegExp(
+              r'\b(latest|recent|current|today|news|update|updated|release|price|pricing|202\d)\b',
+              caseSensitive: false,
+            ).hasMatch(query)) {
+              dfVal = 'm';
+            }
             final bodyBytes = utf8.encode(
-              'q=${Uri.encodeQueryComponent(query)}',
+              'q=${Uri.encodeQueryComponent(query)}'
+              '${dfVal == null ? '' : '&df=$dfVal'}',
             );
             request.headers.contentLength = bodyBytes.length;
             request.add(bodyBytes);

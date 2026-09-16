@@ -447,7 +447,14 @@ class WebSearchPrompts {
       'boundary, not a hard limit \u2014 use the web for anything '
       'time-sensitive, recent, or outside your training data. Never guess, '
       'hallucinate, or answer from stale memory when live data is available '
-      'and warranted. If you are not 100% certain, use the web.';
+      'and warranted. If you are not 100% certain, use the web.\n'
+      'Recency rules for time-sensitive topics (news, versions, prices, '
+      'rankings, releases, statistics): include the current month and year '
+      'in the search query itself, set time_range to "week" or "month", '
+      'and prefer sources published in the current month. If top results '
+      'are older than the current month, re-search with an explicit '
+      'month/year or a narrower time_range before answering \u2014 never '
+      'settle for older data when current-month sources exist.';
 
   static const String narration =
       'Never show the user raw tool call JSON or field names \u2014 describe '

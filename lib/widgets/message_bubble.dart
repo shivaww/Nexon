@@ -494,14 +494,15 @@ class MessageBubble extends StatelessWidget {
                   if (!foldThoughtIntoLater) {
                     for (var pi = 0; pi < mergedPrior.length; pi++) {
                       final prior = mergedPrior[pi];
-                      if (prior.reasoning.isNotEmpty && reasoningEnabled) {
+                      final priorThink = cleanReasoningText(prior.reasoning);
+                      if (priorThink.isNotEmpty && reasoningEnabled) {
                         thoughtEntries.add(
                           ThoughtEntry(
                             icon: Icons.psychology_outlined,
                             accent: const Color(0xFF7B4E2E),
                             summary: 'Thinking',
                             detail: Text(
-                              prior.reasoning,
+                              priorThink,
                               style: const TextStyle(
                                 fontSize: 12.5,
                                 fontStyle: FontStyle.italic,
@@ -520,14 +521,15 @@ class MessageBubble extends StatelessWidget {
                         mergeOnly: true,
                       );
                     }
-                    if (message.reasoning.isNotEmpty && reasoningEnabled) {
+                    final ownThink = cleanReasoningText(message.reasoning);
+                    if (ownThink.isNotEmpty && reasoningEnabled) {
                       thoughtEntries.add(
                         ThoughtEntry(
                           icon: Icons.psychology_outlined,
                           accent: const Color(0xFF7B4E2E),
                           summary: 'Thinking',
                           detail: Text(
-                            message.reasoning,
+                            ownThink,
                             style: const TextStyle(
                               fontSize: 12.5,
                               fontStyle: FontStyle.italic,
@@ -546,6 +548,12 @@ class MessageBubble extends StatelessWidget {
                     cardsOnly: foldThoughtIntoLater,
                   );
                   if (visible.isEmpty && thoughtEntries.isEmpty) {
+                    // Live turn with no tokens yet: keep the pulsing cursor
+                    // on screen from the moment the prompt was sent instead
+                    // of collapsing the bubble until the first chunk lands.
+                    if (animationState != AvatarAnimationState.idle) {
+                      return const StreamingCursor();
+                    }
                     return const SizedBox.shrink();
                   }
                   return Column(
@@ -714,6 +722,17 @@ String _quietToolSummary(String t, Map<String, dynamic> call) {
   return t;
 }
 
+/// Reasoning text with stray reasoning tags removed and trimmed. Models
+/// that leak a split `</think>` tag into the reasoning stream would
+/// otherwise render empty or tag-only "Thinking" bullets in the Thought
+/// Process timeline.
+String cleanReasoningText(String raw) => raw
+    .replaceAll(
+      RegExp(r'</?(?:think|reasoning|thought)>', caseSensitive: false),
+      '',
+    )
+    .trim();
+
 /// True when a folded prior turn round still owns visible (non-quiet)
 /// tool cards that must keep their own bubble.
 bool _foldedRoundHasCards(String text) {
@@ -739,6 +758,13 @@ bool _foldedRoundHasCards(String text) {
     bool mergeOnly = false,
     bool cardsOnly = false,
   }) {
+    // Stray reasoning tags (a `</think>` split across stream chunks
+    // survives the stream parser) must never surface as body prose or as
+    // tag-only "Thinking" bullets in the Thought Process timeline.
+    text = text.replaceAll(
+      RegExp(r'</?(?:think|reasoning|thought)>', caseSensitive: false),
+      '',
+    );
     final widgets = <Widget>[];
     // Prose that arrives before a quiet tool call is thinking, not answer:
     // it folds into the Thought Process timeline instead of the body.
@@ -751,6 +777,7 @@ bool _foldedRoundHasCards(String text) {
     }
 
     void addThinkEntry(String body) {
+      if (body.trim().isEmpty) return;
       thoughtSink?.add(
         ThoughtEntry(
           icon: Icons.circle,
