@@ -1,6 +1,6 @@
 # Nexon 🚀
 
-An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and 3-agent Deep Research loops directly on your phone.
+An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and 3-agent Deep Research loops directly on your phone. Bring your own API keys: Nexon supports Anthropic Claude (fable 5.1 Opus 5.5 , Sonnet 5.5 , Haiku 5.5) alongside other LLM providers, and is built and developed with Claude.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
@@ -79,6 +79,11 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 ### 6. 🔔 Automatic Release Notifications
 *   **Version Checker**: Integrated `UpdateService` notifies users when a new version or APK release is available.
 
+*   ### 7. 🤖 Multi-Provider LLM Support
+
+- **Anthropic Claude**: Connect your own Claude API key and use Opus, Sonnet, or Haiku models for agentic coding and Deep Research.
+- **Bring Your Own Keys**: Keys stay on your device. Switch between providers anytime.
+
 ---
 
 ## 🧰 Technical Specifications
@@ -90,12 +95,13 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 | **Python Bridge** | Python 3, `aiohttp`, `websockets`, `python-docx` |
 | **Research Storage** | Structured Fact/Finding JSON Store (Zero vector/embedding overhead) |
 | **Third-Party APIs**| Supabase Auth, Google Drive v3 REST API, Tavily Web Search API |
+| **LLM Providers**    | Anthropic Claude (Opus, Sonnet, Haiku) + other providers (BYOK)                  |
 
 ---
 
 ## 📌 Project Status
 
-Nexon is an open-source Mobile Agentic IDE project actively developed for Android & Termux. All core infrastructure (Google Drive OAuth token refresh, structured file manipulation, and responsive UI rendering) has been fully stabilized.
+Nexon is an open-source Mobile Agentic IDE project actively developed for Android & Termux. All core infrastructure (Google Drive OAuth token refresh, structured file manipulation, and responsive UI rendering) has been fully stabilized. Nexon is developed with heavy use of Claude.
 
 ---
 
