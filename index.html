@@ -3,13 +3,13 @@
 <head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-<title>Nexon — the agent stack that runs on your phone</title>
-<meta name='description' content='Nexon is an open-source agentic IDE and deep-research assistant for Android. Flutter in front, a Python bridge in Termux behind — shell, files, and live web research, all on-device.'>
+<title>Nexon — AI-Powered Mobile Agentic Workspace</title>
+<meta name='description' content='Nexon is an open-source AI-powered mobile agentic IDE and deep research assistant for Android — real shell, files, and web research via Termux, on your phone.'>
 <meta name='theme-color' content='#F2F4F1'>
 <link rel='icon' type='image/png' href='assets/icon.png'>
 <link rel='apple-touch-icon' href='assets/icon.png'>
-<meta property='og:title' content='Nexon — the agent stack that runs on your phone'>
-<meta property='og:description' content='An open-source agentic IDE and deep-research assistant that runs natively on Android via Termux.'>
+<meta property='og:title' content='Nexon — AI-Powered Mobile Agentic Workspace'>
+<meta property='og:description' content='Nexon is an open-source AI-powered mobile agentic IDE and deep research assistant for Android — real shell, files, and web research via Termux, on your phone.'>
 <meta property='og:type' content='website'>
 <meta property='og:url' content='https://nexonai.me'>
 <meta property='og:image' content='https://nexonai.me/assets/icon.png'>
@@ -173,6 +173,15 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 .arch-seam{position:relative;overflow:hidden}
 .packet{position:absolute;top:50%;left:-10px;width:7px;height:7px;margin-top:-3.5px;border-radius:50%;background:var(--phosphor);box-shadow:0 0 12px rgba(124,217,146,.8);animation:travel 3.6s linear infinite}
 @keyframes travel{0%{left:-10px;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:100%;opacity:0}}
+/* spec sheet + capability icons */
+.feat svg{width:22px;height:22px;color:var(--signal);margin-bottom:12px;display:block}
+.spec{margin-top:44px;background:var(--panel);border:1px solid var(--wire);border-radius:12px;padding:8px 26px 14px}
+.spec-h{font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);letter-spacing:.05em;padding:14px 0 8px}
+.spec-row{display:flex;justify-content:space-between;align-items:baseline;gap:18px;padding:11px 0;border-top:1px solid var(--wire);font-family:var(--mono);font-size:13px}
+.spec-row span{color:var(--ink-soft);transition:color .2s ease}
+.spec-row b{font-weight:500;text-align:right}
+.spec-row:hover span{color:var(--signal)}
+.facts .cap{grid-column:1/-1;color:#5E7262}
 /* responsive */
 @media (max-width:920px){
 .hero-grid{grid-template-columns:1fr;gap:44px}
@@ -191,6 +200,8 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 .term-body{font-size:12px;min-height:0}
 .step{grid-template-columns:1fr;gap:8px}
 .facts{grid-template-columns:1fr}
+.spec-row{flex-direction:column;align-items:flex-start;gap:2px}
+.spec-row b{text-align:left}
 }
 @media (prefers-reduced-motion:reduce){
 html{scroll-behavior:auto}
@@ -205,6 +216,7 @@ html{scroll-behavior:auto}
   <div class='wrap topbar-in'>
     <a class='brand' href='#top'><span class='brand-dot'></span>nexon</a>
     <nav class='nav-links' aria-label='Sections'>
+      <a href='#about'>about</a>
       <a href='#research'>research</a>
       <a href='#runtime'>runtime</a>
       <a href='#features'>features</a>
@@ -221,8 +233,8 @@ html{scroll-behavior:auto}
       <h1>The whole agent stack.<br>On your phone<span class='h1-dot'>.</span></h1>
       <p class='hero-sub'>Nexon is an open-source agentic IDE for Android. A Flutter app in front, a Python bridge running inside Termux behind it — real shell, real files, live web research, no cloud IDE in the middle.</p>
       <div class='hero-ctas'>
-        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Download APK</a>
-        <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>Read the source ↗</a>
+        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Get Nexon</a>
+        <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>View on GitHub ↗</a>
       </div>
       <p class='microfacts'>
         <span>v1.0.23</span>
@@ -238,6 +250,22 @@ html{scroll-behavior:auto}
       </div>
       <div class='term-body' id='term-body'></div>
     </div>
+  </div>
+</section>
+<section class='section wrap' id='about'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> man nexon</p>
+  <h2>An agentic development and<br>research environment for Android.</h2>
+  <p class='sec-sub'>Nexon brings agentic workflows to Android through Termux. A Flutter interface in front, a Python bridge behind it, and a real Linux userland underneath — an AI coding environment, agentic shell and file tools, live web search, and a multi-agent deep-research pipeline, in a workspace that lives on your phone instead of a rented cloud machine.</p>
+  <p class='sec-sub'>It's built for developers who want a real toolchain when a desktop isn't around, and for anyone who wants capable agents running on hardware they own, with their own API keys.</p>
+  <div class='spec' role='list' aria-label='Nexon at a glance'>
+    <p class='spec-h'>nexon at a glance</p>
+    <div class='spec-row' role='listitem'><span>platform</span><b>Android 7.0+ · Termux userland</b></div>
+    <div class='spec-row' role='listitem'><span>interface</span><b>Flutter · Material 3</b></div>
+    <div class='spec-row' role='listitem'><span>bridge</span><b>Python · WebSocket :8765 · HTTP :8390</b></div>
+    <div class='spec-row' role='listitem'><span>models</span><b>bring your own keys · multi-provider</b></div>
+    <div class='spec-row' role='listitem'><span>research</span><b>3-agent pipeline · structured facts, no vector db</b></div>
+    <div class='spec-row' role='listitem'><span>license</span><b>open source · non-commercial</b></div>
+    <div class='spec-row' role='listitem'><span>status</span><b>v1.0.23 · actively developed</b></div>
   </div>
 </section>
 <section class='section wrap' id='research'>
@@ -261,6 +289,7 @@ html{scroll-behavior:auto}
       <p>Compiles the evidence into a cited report inside a configurable token budget, rendered as a Markdown artifact you can export.</p>
     </div>
     <div class='facts' aria-label='Example evidence records'>
+      <div class='cap'>evidence store · sample records</div>
       <div><span class='k'>FACT <b>ec0391</b></span> on-device SLM latency — 1.9s median, ARM 2024</div>
       <div><span class='k'>FINDING <b>17c2</b></span> hybrid routing wins on cost at ≥12 turns</div>
       <div><span class='k'>FACT <b>a41f7c</b></span> Termux ships GCC 13.2 + Python 3.11</div>
@@ -321,26 +350,32 @@ html{scroll-behavior:auto}
   <h2>Everything a working agent needs,<br>nothing it doesn't.</h2>
   <div class='feat-grid'>
     <div class='feat'>
+      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M4 17l6-5-6-5'/><path d='M12 19h8'/></svg>
       <h3>real shell, real toolchain</h3>
       <p>Agents run commands inside the actual Termux shell — compile with GCC, run tests, push to git. No sandboxed toy terminal.</p>
     </div>
     <div class='feat'>
+      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>
       <h3>surgical file edits</h3>
       <p>Read, patch, and diff files by line range. Every edit snapshots first, so any change can be rolled back.</p>
     </div>
     <div class='feat'>
+      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z'/><path d='M9.5 12l2 2 3.5-4'/></svg>
       <h3>permission guard</h3>
       <p>Every tool call passes a permission gate you control — ask, session, always, or never — before anything executes.</p>
     </div>
     <div class='feat'>
+      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='12' cy='12' r='9'/><path d='M3 12h18'/><path d='M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z'/></svg>
       <h3>live web search</h3>
       <p>Chat sessions route search natively to Tavily for real-time context, with sources kept alongside answers.</p>
     </div>
     <div class='feat'>
+      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M8 6l-5 6 5 6'/><path d='M16 6l5 6-5 6'/></svg>
       <h3>artifacts, rendered properly</h3>
       <p>Markdown, syntax-highlighted code, and interactive SVG diagrams render in the feed, and export to .md or .docx.</p>
     </div>
     <div class='feat'>
+      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='8' cy='15' r='4'/><path d='M11 12L20 3'/><path d='M17 6l3 3'/></svg>
       <h3>bring your own keys</h3>
       <p>No accounts on our side. Your LLM provider keys stay on your device, and your chats back up to your own Drive.</p>
     </div>
@@ -377,12 +412,32 @@ html{scroll-behavior:auto}
     </div>
   </div>
 </section>
+<section class='section wrap' id='opensource'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> git log --oneline | head -3</p>
+  <h2>Open source, honestly licensed.</h2>
+  <p class='sec-sub'>The full stack — Flutter app, Python bridge, native tool binary — is public on GitHub under the Nexon Non-Commercial License: free for personal, academic, and non-commercial use. It is not unrestricted free software, and it doesn't pretend to be.</p>
+  <div class='hero-ctas'>
+    <a class='btn btn-solid' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>Explore the code ↗</a>
+    <a class='btn btn-line' href='https://github.com/shivaww/Nexon/blob/main/LICENSE' target='_blank' rel='noopener noreferrer'>Read the license</a>
+  </div>
+</section>
+<section class='section wrap' id='next'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> grep -i soon README.md</p>
+  <h2>What's next.</h2>
+  <p class='sec-sub'>Only direction actually documented in the repository — no invented milestones, dates, or numbers.</p>
+  <div class='spec' role='list' aria-label='Documented direction'>
+    <p class='spec-h'>documented direction</p>
+    <div class='spec-row' role='listitem'><span>subscriptions</span><b>coming soon — per the README</b></div>
+    <div class='spec-row' role='listitem'><span>commercial licensing</span><b>opens when subscriptions launch</b></div>
+    <div class='spec-row' role='listitem'><span>everything else</span><b>tracked publicly in GitHub issues</b></div>
+  </div>
+</section>
 <section class='close'>
   <div class='wrap'>
     <h2>Cloud IDEs rent you a desk.<br>This one fits in your pocket.</h2>
     <p>Nexon is built, shipped, and iterated in the open. If you're building on-device agents too, we'd like to hear from you.</p>
     <div class='hero-ctas' style='justify-content:center'>
-      <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Download APK</a>
+      <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Explore Nexon</a>
       <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub ↗</a>
     </div>
     <p class='microfacts' style='justify-content:center;margin-top:26px'>
@@ -397,6 +452,7 @@ html{scroll-behavior:auto}
       <div>
         <a class='brand' href='#top' style='margin-bottom:14px'><span class='brand-dot'></span>nexon</a>
         <p class='foot-note'>Open-source mobile agentic IDE. Flutter in front, Python in Termux behind, your keys on your device.</p>
+        <p style='font-family:var(--mono);font-size:13px;margin-top:12px'><a href='https://nexonai.me'>nexonai.me</a></p>
       </div>
       <div>
         <h4>project</h4>
@@ -424,7 +480,7 @@ html{scroll-behavior:auto}
       </div>
     </div>
     <div class='foot-base'>
-      <span>© 2025 nexon · non-commercial license</span>
+      <span>© 2026 Nexon · non-commercial license</span>
       <span>android 7+ · termux · made to run offline</span>
     </div>
   </div>
@@ -544,7 +600,7 @@ progress.className='progress';
 document.body.appendChild(progress);
 var navLinks={};
 document.querySelectorAll('.nav-links a').forEach(function(a){navLinks[a.getAttribute('href').slice(1)]=a;});
-var navSecs=['research','runtime','features','install'].map(function(id){return document.getElementById(id);}).filter(Boolean);
+var navSecs=['about','research','runtime','features','install'].map(function(id){return document.getElementById(id);}).filter(Boolean);
 var ticking=false;
 function onScroll(){
   if(ticking){return;}
@@ -604,7 +660,7 @@ if(!motion){
     });
   },{threshold:0.5});
   typeJobs.forEach(function(job){typeIO.observe(job.el);});
-  ['.stages > *','.arch > *','.feat-grid > *','.steps > *'].forEach(function(sel){
+  ['.stages > *','.arch > *','.feat-grid > *','.steps > *','.spec > *'].forEach(function(sel){
     document.querySelectorAll(sel).forEach(function(el,i){
       el.classList.add('rv');
       el.style.setProperty('--d',Math.min(i*0.09,0.45)+'s');
