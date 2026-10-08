@@ -1,1067 +1,514 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang='en'>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Nexon — AI-Powered Mobile Agentic Workspace</title>
-<meta name="description" content="Nexon is an AI-powered mobile agentic IDE and deep research assistant running natively on Android via Termux. Build, research, and automate from your phone.">
-<meta name="theme-color" content="#0B0D10">
-<link rel="icon" type="image/png" href="assets/icon.png">
-<link rel="apple-touch-icon" href="assets/icon.png">
-<meta property="og:title" content="Nexon — AI-Powered Mobile Agentic Workspace">
-<meta property="og:description" content="Build, research, and automate — directly from your Android device. AI-powered agentic IDE and deep research assistant running natively on Termux.">
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://nexonai.me">
-<meta property="og:image" content="https://nexonai.me/assets/icon.png">
-<meta name="twitter:card" content="summary_large_image">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>Nexon — the agent stack that runs on your phone</title>
+<meta name='description' content='Nexon is an open-source agentic IDE and deep-research assistant for Android. Flutter in front, a Python bridge in Termux behind — shell, files, and live web research, all on-device.'>
+<meta name='theme-color' content='#F2F4F1'>
+<link rel='icon' type='image/png' href='assets/icon.png'>
+<link rel='apple-touch-icon' href='assets/icon.png'>
+<meta property='og:title' content='Nexon — the agent stack that runs on your phone'>
+<meta property='og:description' content='An open-source agentic IDE and deep-research assistant that runs natively on Android via Termux.'>
+<meta property='og:type' content='website'>
+<meta property='og:url' content='https://nexonai.me'>
+<meta property='og:image' content='https://nexonai.me/assets/icon.png'>
+<meta name='twitter:card' content='summary_large_image'>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
 <style>
-:root {
-  --void: #0B0D10;
-  --surface: #111318;
-  --graphite: #1A1714;
-  --bronze: #B88A44;
-  --gold: #E2C48D;
-  --chalk: #F5F5F5;
-  --muted: #8A8A8A;
-  --border: rgba(184,138,68,0.10);
-  --border-hover: rgba(184,138,68,0.25);
-  --glass: rgba(17,19,24,0.72);
-  --glass-border: rgba(184,138,68,0.07);
-  --radius: 14px;
-  --font-display: 'Space Grotesk', sans-serif;
-  --font-body: 'Inter', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-}
-*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
-body{
-  font-family:var(--font-body);
-  background:var(--void);
-  color:var(--chalk);
-  line-height:1.6;
-  overflow-x:hidden;
-  -webkit-font-smoothing:antialiased;
-}
-::selection{background:rgba(184,138,68,0.3);color:var(--chalk)}
-a:focus-visible,button:focus-visible{
-  outline:2px solid var(--bronze);
-  outline-offset:3px;
-  border-radius:4px;
-}
-.container{max-width:1120px;margin:0 auto;padding:0 24px;position:relative;z-index:1}
-
-/* Ambient background */
-.bg-ambient{
-  position:fixed;inset:0;z-index:0;pointer-events:none;
-  background:
-    radial-gradient(ellipse 70% 45% at 50% -10%, rgba(184,138,68,0.05), transparent 70%),
-    radial-gradient(ellipse 50% 35% at 85% 55%, rgba(184,138,68,0.025), transparent 60%);
-}
-.bg-grid{
-  position:fixed;inset:0;z-index:0;pointer-events:none;
-  background-image:
-    linear-gradient(rgba(184,138,68,0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(184,138,68,0.02) 1px, transparent 1px);
-  background-size:72px 72px;
-  mask-image:radial-gradient(ellipse 70% 50% at 50% 25%, black, transparent);
-  -webkit-mask-image:radial-gradient(ellipse 70% 50% at 50% 25%, black, transparent);
-}
-
-/* Nav */
-nav{
-  position:fixed;top:0;left:0;right:0;z-index:200;
-  padding:14px 0;
-  background:rgba(11,13,16,0.88);
-  backdrop-filter:blur(24px);
-  -webkit-backdrop-filter:blur(24px);
-  border-bottom:1px solid var(--border);
-}
-nav .container{display:flex;align-items:center;justify-content:space-between}
-.nav-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--chalk)}
-.nav-brand img{width:32px;height:32px;border-radius:7px}
-.nav-brand span{
-  font-family:var(--font-display);
-  font-size:1.15rem;font-weight:700;letter-spacing:-0.02em;
-}
-.nav-links{display:flex;align-items:center;gap:28px;list-style:none}
-.nav-links a{
-  color:var(--muted);text-decoration:none;
-  font-size:0.875rem;font-weight:500;
-  transition:color 0.2s;
-}
-.nav-links a:hover{color:var(--gold)}
-.nav-cta{
-  padding:7px 18px !important;
-  background:var(--bronze) !important;
-  color:var(--void) !important;
-  border-radius:8px;
-  font-weight:600 !important;
-  font-size:0.85rem !important;
-  transition:background 0.2s, transform 0.2s !important;
-}
-.nav-cta:hover{background:var(--gold) !important;transform:translateY(-1px)}
-
-/* Mobile nav toggle */
-.nav-toggle{
-  display:none;
-  background:none;border:none;cursor:pointer;
-  width:36px;height:36px;
-  flex-direction:column;align-items:center;justify-content:center;gap:5px;
-}
-.nav-toggle span{
-  display:block;width:20px;height:2px;
-  background:var(--chalk);border-radius:2px;
-  transition:transform 0.3s,opacity 0.3s;
-}
-.nav-toggle.active span:nth-child(1){transform:rotate(45deg) translate(5px,5px)}
-.nav-toggle.active span:nth-child(2){opacity:0}
-.nav-toggle.active span:nth-child(3){transform:rotate(-45deg) translate(5px,-5px)}
-@media(max-width:768px){
-  .nav-toggle{display:flex}
-  .nav-links{
-    position:fixed;top:60px;left:0;right:0;
-    background:rgba(11,13,16,0.96);
-    backdrop-filter:blur(24px);
-    -webkit-backdrop-filter:blur(24px);
-    flex-direction:column;padding:24px;gap:20px;
-    border-bottom:1px solid var(--border);
-    transform:translateY(-10px);opacity:0;
-    pointer-events:none;transition:all 0.3s;
-  }
-  .nav-links.open{transform:translateY(0);opacity:1;pointer-events:all}
-}
-
-/* Hero */
-.hero{
-  min-height:100vh;
-  display:flex;align-items:center;justify-content:center;
-  text-align:center;padding:140px 24px 100px;
-  position:relative;
-}
-.hero-content{max-width:780px}
-.hero-badge{
-  display:inline-flex;align-items:center;gap:8px;
-  padding:6px 16px;
-  background:var(--glass);
-  border:1px solid var(--glass-border);
-  border-radius:100px;
-  font-family:var(--font-mono);
-  font-size:0.72rem;color:var(--gold);
-  margin-bottom:28px;letter-spacing:0.04em;
-}
-.hero-badge::before{
-  content:'';width:6px;height:6px;
-  background:var(--bronze);border-radius:50%;
-  animation:pulse 2.5s ease-in-out infinite;
-}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-h1{
-  font-family:var(--font-display);
-  font-size:clamp(2.6rem,7.5vw,4.2rem);
-  font-weight:700;letter-spacing:-0.03em;line-height:1.08;
-  margin-bottom:20px;
-  color:var(--chalk);
-}
-h1 .accent{
-  background:linear-gradient(135deg,var(--gold),var(--bronze));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-  background-clip:text;
-}
-.hero-sub{
-  font-size:clamp(1.05rem,2.5vw,1.2rem);
-  color:var(--muted);margin-bottom:36px;
-  line-height:1.7;max-width:600px;margin-left:auto;margin-right:auto;
-}
-.hero-cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
-.btn{
-  padding:13px 28px;border-radius:10px;
-  font-size:0.95rem;font-weight:600;
-  text-decoration:none;display:inline-flex;align-items:center;gap:8px;
-  border:none;cursor:pointer;
-  transition:all 0.2s;font-family:var(--font-body);
-}
-.btn-primary{background:var(--bronze);color:var(--void)}
-.btn-primary:hover{background:var(--gold);transform:translateY(-2px);box-shadow:0 8px 28px rgba(184,138,68,0.25)}
-.btn-ghost{
-  background:transparent;color:var(--chalk);
-  border:1px solid var(--border-hover);
-}
-.btn-ghost:hover{border-color:var(--bronze);background:rgba(184,138,68,0.06)}
-
-/* Terminal — signature element */
-.terminal{
-  margin-top:56px;
-  background:#0D0F12;
-  border:1px solid rgba(184,138,68,0.12);
-  border-radius:var(--radius);
-  overflow:hidden;text-align:left;
-  max-width:640px;margin-left:auto;margin-right:auto;
-  box-shadow:0 24px 64px rgba(0,0,0,0.4);
-}
-.terminal-bar{
-  display:flex;align-items:center;gap:8px;
-  padding:12px 16px;
-  background:rgba(184,138,68,0.04);
-  border-bottom:1px solid rgba(184,138,68,0.08);
-}
-.terminal-dot{width:10px;height:10px;border-radius:50%}
-.terminal-dot:nth-child(1){background:#FF5F57}
-.terminal-dot:nth-child(2){background:#FEBC2E}
-.terminal-dot:nth-child(3){background:#28C840}
-.terminal-title{
-  font-family:var(--font-mono);font-size:0.7rem;
-  color:var(--muted);margin-left:8px;
-}
-.terminal-body{
-  padding:20px;
-  font-family:var(--font-mono);
-  font-size:0.82rem;line-height:1.8;
-  color:var(--muted);
-  min-height:140px;
-}
-.terminal-body .cmd{color:var(--gold)}
-.terminal-body .output{color:#6B7280}
-.terminal-body .success{color:#34D399}
-.terminal-body .cursor{
-  display:inline-block;width:8px;height:15px;
-  background:var(--gold);vertical-align:middle;
-  animation:blink 1s step-end infinite;
-}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-
-
-/* Sections */
-section{padding:96px 0;position:relative}
-.section-header{text-align:center;max-width:640px;margin:0 auto 56px}
-.section-label{
-  font-family:var(--font-mono);
-  font-size:0.7rem;color:var(--bronze);
-  text-transform:uppercase;letter-spacing:0.12em;
-  margin-bottom:14px;display:block;
-}
-h2{
-  font-family:var(--font-display);
-  font-size:clamp(1.9rem,5vw,2.8rem);
-  font-weight:700;letter-spacing:-0.02em;
-  margin-bottom:14px;line-height:1.15;
-}
-.section-desc{font-size:1.05rem;color:var(--muted);line-height:1.7}
-
-/* Capabilities */
-.cap-grid{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
-  gap:20px;
-}
-.cap-card{
-  background:var(--surface);
-  border:1px solid var(--glass-border);
-  border-radius:var(--radius);
-  padding:28px;
-  transition:border-color 0.25s,transform 0.25s;
-  position:relative;
-}
-.cap-card::after{
-  content:'';position:absolute;top:0;left:24px;right:24px;
-  height:1px;
-  background:linear-gradient(90deg,transparent,var(--bronze),transparent);
-  opacity:0;transition:opacity 0.3s;
-}
-.cap-card:hover{border-color:var(--border-hover);transform:translateY(-3px)}
-.cap-card:hover::after{opacity:1}
-.cap-icon{
-  width:42px;height:42px;
-  background:rgba(184,138,68,0.08);
-  border:1px solid var(--border);
-  border-radius:10px;
-  display:flex;align-items:center;justify-content:center;
-  margin-bottom:16px;
-}
-.cap-icon svg{width:20px;height:20px;stroke:var(--gold);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.cap-card h3{
-  font-family:var(--font-display);
-  font-size:1.1rem;font-weight:600;
-  margin-bottom:8px;letter-spacing:-0.01em;
-}
-.cap-card p{color:var(--muted);font-size:0.9rem;line-height:1.65}
-
-/* Architecture */
-.arch-panel{
-  background:var(--surface);
-  border:1px solid var(--glass-border);
-  border-radius:18px;
-  padding:48px 28px;
-}
-.arch-flow{
-  display:flex;flex-direction:column;
-  align-items:center;gap:0;
-}
-.arch-node{
-  background:var(--void);
-  border:1px solid var(--border);
-  border-radius:10px;
-  padding:16px 28px;
-  text-align:center;
-  width:100%;max-width:320px;
-  transition:border-color 0.25s;
-}
-.arch-node:hover{border-color:var(--bronze)}
-.arch-node-label{
-  font-family:var(--font-mono);
-  font-size:0.65rem;color:var(--bronze);
-  text-transform:uppercase;letter-spacing:0.1em;
-  margin-bottom:4px;
-}
-.arch-node-title{font-size:0.92rem;font-weight:600;color:var(--chalk)}
-.arch-connector{
-  width:1.5px;height:28px;
-  background:linear-gradient(to bottom,var(--bronze),rgba(184,138,68,0.2));
-  position:relative;
-}
-.arch-connector::after{
-  content:'';position:absolute;bottom:-3px;left:50%;
-  transform:translateX(-50%);
-  width:0;height:0;
-  border-left:4px solid transparent;
-  border-right:4px solid transparent;
-  border-top:5px solid var(--bronze);
-}
-@media(min-width:768px){
-  .arch-flow{flex-direction:row;justify-content:center;gap:0;flex-wrap:nowrap}
-  .arch-node{width:auto;min-width:160px;max-width:none}
-  .arch-connector{
-    width:28px;height:1.5px;
-    background:linear-gradient(to right,var(--bronze),rgba(184,138,68,0.2));
-  }
-  .arch-connector::after{
-    bottom:auto;left:auto;right:-3px;top:50%;
-    transform:translateY(-50%);
-    border-left:5px solid var(--bronze);
-    border-right:none;
-    border-top:4px solid transparent;
-    border-bottom:4px solid transparent;
-  }
-}
-
-/* Mobile advantage */
-.mobile-split{
-  display:grid;grid-template-columns:1fr;gap:48px;align-items:center;
-}
-@media(min-width:768px){.mobile-split{grid-template-columns:1fr 1fr}}
-.mobile-text h3{
-  font-family:var(--font-display);
-  font-size:1.4rem;font-weight:700;
-  margin-bottom:14px;letter-spacing:-0.02em;
-}
-.mobile-text p{color:var(--muted);font-size:0.95rem;line-height:1.7;margin-bottom:14px}
-.mobile-list{list-style:none;display:flex;flex-direction:column;gap:10px}
-.mobile-list li{
-  display:flex;align-items:flex-start;gap:10px;
-  color:var(--muted);font-size:0.9rem;line-height:1.5;
-}
-.mobile-list li::before{
-  content:'';width:5px;height:5px;
-  background:var(--bronze);border-radius:50%;
-  margin-top:7px;flex-shrink:0;
-}
-.phone-mock{
-  background:var(--surface);
-  border:1px solid var(--glass-border);
-  border-radius:24px;
-  padding:12px;
-  display:flex;justify-content:center;
-}
-.phone-inner{
-  width:220px;height:400px;
-  background:var(--void);
-  border-radius:16px;
-  border:1px solid var(--border);
-  overflow:hidden;
-  display:flex;flex-direction:column;
-}
-.phone-status{
-  height:28px;
-  background:rgba(184,138,68,0.04);
-  display:flex;align-items:center;justify-content:center;
-}
-.phone-status span{font-family:var(--font-mono);font-size:0.6rem;color:var(--muted)}
-.phone-content{flex:1;padding:12px;display:flex;flex-direction:column;gap:8px}
-.phone-line{
-  height:8px;border-radius:4px;
-  background:rgba(184,138,68,0.08);
-}
-.phone-line:nth-child(1){width:70%}
-.phone-line:nth-child(2){width:90%}
-.phone-line:nth-child(3){width:55%}
-.phone-line:nth-child(4){width:80%;background:rgba(184,138,68,0.15)}
-.phone-line:nth-child(5){width:65%}
-.phone-block{
-  margin-top:auto;
-  height:48px;border-radius:8px;
-  background:rgba(184,138,68,0.06);
-  border:1px solid var(--border);
-}
-
-
-/* Tech grid */
-.tech-grid{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-  gap:16px;
-}
-.tech-item{
-  background:var(--surface);
-  border:1px solid var(--glass-border);
-  border-radius:12px;
-  padding:22px 16px;
-  text-align:center;
-  transition:border-color 0.25s,transform 0.25s;
-}
-.tech-item:hover{border-color:var(--border-hover);transform:translateY(-2px)}
-.tech-item svg{width:24px;height:24px;stroke:var(--gold);fill:none;stroke-width:1.5;margin-bottom:10px}
-.tech-name{font-size:0.85rem;font-weight:600;color:var(--chalk);margin-bottom:3px}
-.tech-desc{font-size:0.72rem;color:var(--muted)}
-
-/* Open source */
-.oss-panel{
-  background:linear-gradient(160deg,rgba(184,138,68,0.04),var(--surface));
-  border:1px solid var(--border);
-  border-radius:20px;
-  padding:56px 32px;
-  text-align:center;
-}
-.oss-panel h3{
-  font-family:var(--font-display);
-  font-size:1.8rem;font-weight:700;
-  margin-bottom:12px;letter-spacing:-0.02em;
-}
-.oss-panel p{
-  color:var(--muted);font-size:1rem;
-  max-width:520px;margin:0 auto 28px;line-height:1.7;
-}
-.license-tag{
-  display:inline-flex;align-items:center;gap:6px;
-  padding:6px 14px;margin-top:20px;
-  background:rgba(184,138,68,0.08);
-  border:1px solid var(--border);
-  border-radius:6px;
-  font-family:var(--font-mono);
-  font-size:0.72rem;color:var(--gold);
-}
-
-/* Roadmap */
-.roadmap-list{display:flex;flex-direction:column;gap:20px}
-.roadmap-item{
-  background:var(--surface);
-  border:1px solid var(--glass-border);
-  border-radius:var(--radius);
-  padding:28px;
-  display:flex;gap:20px;align-items:flex-start;
-}
-.roadmap-num{
-  font-family:var(--font-mono);
-  font-size:0.7rem;color:var(--bronze);
-  width:28px;height:28px;
-  border:1px solid var(--border);
-  border-radius:50%;
-  display:flex;align-items:center;justify-content:center;
-  flex-shrink:0;
-}
-.roadmap-item h4{font-size:1.05rem;font-weight:600;margin-bottom:6px}
-.roadmap-item p{color:var(--muted);font-size:0.9rem;line-height:1.6}
-
-/* Final CTA */
-.final-cta{text-align:center;padding:120px 24px}
-.final-cta h2{
-  font-family:var(--font-display);
-  font-size:clamp(2rem,5.5vw,3.2rem);
-  margin-bottom:16px;letter-spacing:-0.02em;
-}
-.final-cta p{
-  font-size:1.1rem;color:var(--muted);
-  max-width:520px;margin:0 auto 36px;line-height:1.7;
-}
-
-/* Footer */
-footer{
-  border-top:1px solid var(--border);
-  padding:48px 0 28px;
-  background:rgba(11,13,16,0.6);
-}
-.footer-grid{
-  display:grid;grid-template-columns:1fr;
-  gap:28px;margin-bottom:28px;
-}
-@media(min-width:768px){
-  .footer-grid{grid-template-columns:2fr 1fr 1fr 1fr}
-}
-.footer-brand{display:flex;flex-direction:column;gap:10px}
-.footer-brand img{width:40px;height:40px;border-radius:9px}
-.footer-brand p{color:var(--muted);font-size:0.85rem;line-height:1.6;max-width:240px}
-.footer-col h4{
-  font-size:0.75rem;font-weight:600;
-  text-transform:uppercase;letter-spacing:0.06em;
-  margin-bottom:12px;color:var(--chalk);
-}
-.footer-col ul{list-style:none;display:flex;flex-direction:column;gap:8px}
-.footer-col a{
-  color:var(--muted);text-decoration:none;
-  font-size:0.85rem;transition:color 0.2s;
-}
-.footer-col a:hover{color:var(--gold)}
-.footer-bottom{
-  padding-top:20px;border-top:1px solid var(--border);
-  display:flex;flex-direction:column;gap:8px;
-  align-items:center;text-align:center;
-}
-@media(min-width:768px){
-  .footer-bottom{flex-direction:row;justify-content:space-between}
-}
-.footer-bottom p{color:var(--muted);font-size:0.8rem}
-
-/* Scroll reveal */
-.reveal{
-  opacity:0;transform:translateY(20px);
-  transition:opacity 0.6s ease,transform 0.6s ease;
-}
-.reveal.visible{opacity:1;transform:translateY(0)}
-
-/* Reduced motion */
-@media(prefers-reduced-motion:reduce){
-  html{scroll-behavior:auto}
-  .hero-badge::before{animation:none}
-  .terminal-body .cursor{animation:none}
-  .reveal{opacity:1;transform:none;transition:none}
-  .cap-card,.tech-item,.arch-node{transition:none}
+:root{
+  --paper:#F2F4F1;
+  --panel:#FAFBF8;
+  --ink:#171E19;
+  --ink-soft:#46524A;
+  --terminal:#0C120E;
+  --terminal-2:#111A14;
+  --terminal-line:#1E2A21;
+  --phosphor:#7CD992;
+  --signal:#1E7A46;
+  --wire:#D7DCD4;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased}
+::selection{background:var(--signal);color:#fff}
+a{color:inherit}
+a:focus-visible,button:focus-visible{outline:2px solid var(--signal);outline-offset:3px;border-radius:2px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+section[id]{scroll-margin-top:78px}
+/* topbar */
+.topbar{position:sticky;top:0;z-index:100;background:rgba(242,244,241,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--wire)}
+.topbar-in{display:flex;align-items:center;justify-content:space-between;height:60px;gap:16px}
+.brand{font-family:var(--mono);font-weight:600;font-size:15px;text-decoration:none;display:flex;align-items:center;gap:10px}
+.brand-dot{width:9px;height:9px;background:var(--signal);border-radius:50%;flex:none}
+.nav-links{display:flex;gap:26px;font-family:var(--mono);font-size:13px}
+.nav-links a{text-decoration:none;color:var(--ink-soft)}
+.nav-links a:hover{color:var(--signal)}
+.top-cta{font-family:var(--mono);font-size:13px;font-weight:500;text-decoration:none;color:var(--ink);border:1px solid var(--ink);border-radius:8px;padding:8px 16px;white-space:nowrap}
+.top-cta:hover{border-color:var(--signal);color:var(--signal)}
+@media (max-width:760px){.nav-links{display:none}}
+/* hero */
+.hero{padding:86px 0 80px}
+.hero-grid{display:grid;grid-template-columns:1.04fr 1fr;gap:56px;align-items:center}
+.eyebrow{font-family:var(--mono);font-size:13px;color:var(--ink-soft)}
+.eyebrow em{font-style:normal;color:var(--signal)}
+h1{font-family:var(--mono);font-weight:600;font-size:clamp(32px,4.6vw,54px);line-height:1.14;letter-spacing:-0.02em;margin:20px 0 18px}
+.h1-dot{color:var(--signal)}
+.hero-sub{font-size:17px;color:var(--ink-soft);max-width:48ch}
+.hero-ctas{display:flex;gap:14px;margin-top:32px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;font-family:var(--mono);font-weight:500;font-size:14px;text-decoration:none;padding:12px 22px;border-radius:8px;border:1px solid var(--ink);cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease}
+.btn-solid{background:var(--ink);color:var(--paper)}
+.btn-solid:hover{background:var(--signal);border-color:var(--signal)}
+.btn-line{background:transparent;color:var(--ink)}
+.btn-line:hover{border-color:var(--signal);color:var(--signal)}
+.microfacts{display:flex;flex-wrap:wrap;margin-top:30px;font-family:var(--mono);font-size:12.5px;color:var(--ink-soft)}
+.microfacts span{padding:0 18px;border-left:1px solid var(--wire)}
+.microfacts span:first-child{padding-left:0;border-left:0}
+/* terminal */
+.term{background:var(--terminal);border-radius:12px;border:1px solid var(--terminal-line);box-shadow:0 28px 56px -28px rgba(23,30,25,.5);overflow:hidden}
+.term-bar{display:flex;align-items:center;gap:7px;padding:12px 16px;background:var(--terminal-2);border-bottom:1px solid var(--terminal-line)}
+.term-dot{width:10px;height:10px;border-radius:50%;background:#28362C}
+.term-title{margin-left:10px;font-family:var(--mono);font-size:12px;color:#5E7262}
+.term-live{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--phosphor);display:flex;align-items:center;gap:7px}
+.term-live-dot{width:7px;height:7px;border-radius:50%;background:var(--phosphor);animation:pulse 2.4s ease infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.term-body{padding:18px 20px 22px;font-family:var(--mono);font-size:13px;line-height:1.8;min-height:340px;color:#C6D5C9}
+.t-line{white-space:pre-wrap;word-break:break-word}
+.t-cmd{color:#EDF3EE}
+.t-p{color:var(--phosphor)}
+.t-dim{color:#64786A}
+.t-you{color:#EDF3EE}
+.t-agent{color:var(--phosphor)}
+.t-tool{color:#EDF3EE}
+.t-ok{color:var(--phosphor)}
+.cursor{display:inline-block;width:8px;height:15px;background:var(--phosphor);vertical-align:-2px;margin-left:2px;animation:blink 1.05s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+/* sections */
+.section{padding:84px 0;border-top:1px solid var(--wire)}
+.sec-eyebrow{font-family:var(--mono);font-size:13px;color:var(--signal);margin-bottom:16px;overflow-wrap:anywhere}
+.sec-eyebrow .dollar{color:var(--ink-soft)}
+h2{font-family:var(--mono);font-weight:600;font-size:clamp(25px,3.3vw,34px);line-height:1.22;letter-spacing:-0.01em;margin-bottom:14px}
+.sec-sub{color:var(--ink-soft);max-width:62ch;font-size:16px}
+/* research */
+.stages{display:grid;grid-template-columns:repeat(3,1fr);margin-top:46px;background:var(--panel);border:1px solid var(--wire);border-radius:12px;overflow:hidden}
+.stage{padding:26px 24px;border-left:1px solid var(--wire)}
+.stage:first-child{border-left:0}
+.stage-tag{font-family:var(--mono);font-size:12px;color:var(--signal);display:block;margin-bottom:12px}
+/* evidence packet */
+.facts{grid-column:1/-1;background:var(--terminal);border-top:1px solid var(--terminal-line);padding:18px 24px;display:grid;grid-template-columns:repeat(2,1fr);gap:8px 40px;font-family:var(--mono);font-size:12.5px;line-height:1.7}
+.facts div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.facts .k{color:#5E7262}
+.facts .k b{color:var(--phosphor);font-weight:500}
+/* architecture */
+.arch{margin-top:46px;border:1px solid var(--wire);border-radius:12px;overflow:hidden;background:var(--panel)}
+.arch-layer{padding:22px 26px}
+.arch-layer h3{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink);margin-bottom:10px}
+.arch-layer h3 span{color:var(--ink-soft);font-weight:400}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font-family:var(--mono);font-size:12px;color:var(--ink-soft);border:1px solid var(--wire);border-radius:6px;padding:4px 10px;background:var(--paper)}
+.arch-seam{background:var(--terminal);border-top:1px solid var(--terminal-line);border-bottom:1px solid var(--terminal-line);padding:13px 26px;font-family:var(--mono);font-size:12.5px;color:#5E7262;display:flex;flex-wrap:wrap;gap:6px 26px;align-items:center}
+.arch-seam b{color:var(--phosphor);font-weight:500}
+.arch-deep{background:var(--terminal-2)}
+.arch-deep h3{color:#EDF3EE}
+.arch-deep h3 span{color:#5E7262}
+.arch-deep .chip{background:var(--terminal);border-color:var(--terminal-line);color:#A8BCA9}
+/* features */
+.feat-grid{display:grid;grid-template-columns:repeat(2,1fr);margin-top:46px;border:1px solid var(--wire);border-radius:12px;overflow:hidden;background:var(--panel)}
+.feat{padding:22px 24px;border-left:1px solid var(--wire);border-top:1px solid var(--wire)}
+.feat:nth-child(-n+2){border-top:0}
+.feat:nth-child(odd){border-left:0}
+.feat h3{font-family:var(--mono);font-size:14px;font-weight:600;margin-bottom:6px}
+.feat p{font-size:14.5px;color:var(--ink-soft)}
+/* install */
+.steps{margin-top:46px;display:grid;gap:18px}
+.step{display:grid;grid-template-columns:84px 1fr;gap:24px;align-items:start;background:var(--panel);border:1px solid var(--wire);border-radius:12px;padding:24px 26px}
+.step-tag{font-family:var(--mono);font-size:12px;color:var(--signal)}
+.step h3{font-family:var(--sans);font-size:16.5px;font-weight:600;margin:6px 0 8px}
+.step p{font-size:14.5px;color:var(--ink-soft)}
+.cmdrow{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--terminal);border-radius:8px;padding:11px 16px;margin-top:14px;font-family:var(--mono);font-size:13px;color:var(--phosphor)}
+.cmdrow .path{color:#5E7262}
+.copybtn{font-family:var(--mono);font-size:11.5px;color:#5E7262;background:none;border:1px solid var(--terminal-line);border-radius:6px;padding:5px 11px;cursor:pointer;flex:none}
+.copybtn:hover{color:var(--phosphor);border-color:var(--phosphor)}
+.copybtn.ok{color:var(--phosphor);border-color:var(--phosphor)}
+/* closing + footer */
+.close{padding:110px 0;text-align:center;border-top:1px solid var(--wire)}
+.close h2{font-size:clamp(28px,4vw,44px);margin:0 0 14px}
+.close p{color:var(--ink-soft);max-width:52ch;margin:0 auto 30px}
+footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
+.foot-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:32px}
+.foot-grid h4{font-family:var(--mono);font-size:12px;color:var(--ink-soft);font-weight:500;margin-bottom:12px}
+.foot-grid ul{list-style:none}
+.foot-grid li{margin-bottom:9px}
+.foot-grid a{color:var(--ink);text-decoration:none}
+.foot-grid a:hover{color:var(--signal)}
+.foot-note{color:var(--ink-soft);max-width:34ch;font-size:13.5px}
+.foot-base{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:44px;padding-top:22px;border-top:1px solid var(--wire);font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+/* responsive */
+@media (max-width:920px){
+.hero-grid{grid-template-columns:1fr;gap:44px}
+.stages{grid-template-columns:1fr}
+.stage{border-left:0;border-top:1px solid var(--wire)}
+.stage:first-child{border-top:0}
+.feat-grid{grid-template-columns:1fr}
+.feat{border-left:0}
+.feat:nth-child(-n+2){border-top:1px solid var(--wire)}
+.feat:first-child{border-top:0}
+.foot-grid{grid-template-columns:1fr 1fr}
+}
+@media (max-width:620px){
+.hero{padding:56px 0 60px}
+.section{padding:62px 0}
+.term-body{font-size:12px;min-height:0}
+.step{grid-template-columns:1fr;gap:8px}
+.facts{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+html{scroll-behavior:auto}
+.term-live-dot,.cursor{animation:none}
 }
 </style>
 </head>
-
 <body>
-<div class="bg-ambient"></div>
-<div class="bg-grid"></div>
-
-<nav aria-label="Main navigation">
-  <div class="container">
-    <a href="#" class="nav-brand" aria-label="Nexon home">
-      <img src="assets/icon.png" alt="" width="32" height="32">
-      <span>Nexon</span>
-    </a>
-    <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
-      <span></span><span></span><span></span>
-    </button>
-    <ul class="nav-links">
-      <li><a href="#what">About</a></li>
-      <li><a href="#capabilities">Capabilities</a></li>
-      <li><a href="#architecture">Architecture</a></li>
-      <li><a href="#tech">Tech</a></li>
-      <li><a href="https://github.com/shivaww/Nexon" class="nav-cta" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-    </ul>
+<header class='topbar'>
+  <div class='wrap topbar-in'>
+    <a class='brand' href='#top'><span class='brand-dot'></span>nexon</a>
+    <nav class='nav-links' aria-label='Sections'>
+      <a href='#research'>research</a>
+      <a href='#runtime'>runtime</a>
+      <a href='#features'>features</a>
+      <a href='#install'>install</a>
+    </nav>
+    <a class='top-cta' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub ↗</a>
   </div>
-</nav>
-
-<section class="hero">
-  <div class="hero-content">
-    <div class="hero-badge">Open Source · Android · Termux</div>
-    <h1>AI-Powered Mobile<br><span class="accent">Agentic Workspace</span></h1>
-    <p class="hero-sub">Build, research, and automate — directly from your Android device. Nexon combines an AI coding environment, agentic tools, Termux integration, and multi-agent deep research into one mobile developer workspace.</p>
-    <div class="hero-cta">
-      <a href="https://github.com/shivaww/Nexon/releases" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Get Nexon</a>
-      <a href="https://github.com/shivaww/Nexon" class="btn btn-ghost" target="_blank" rel="noopener noreferrer">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-        View on GitHub
-      </a>
-    </div>
-    <div class="terminal" aria-hidden="true">
-      <div class="terminal-bar">
-        <span class="terminal-dot"></span>
-        <span class="terminal-dot"></span>
-        <span class="terminal-dot"></span>
-        <span class="terminal-title">nexon — agent session</span>
+</header>
+<main id='top'>
+<section class='hero wrap'>
+  <div class='hero-grid'>
+    <div>
+      <p class='eyebrow'>$ nexon --version → <em>v1.0.23</em> · open source · android + termux</p>
+      <h1>The whole agent stack.<br>On your phone<span class='h1-dot'>.</span></h1>
+      <p class='hero-sub'>Nexon is an open-source agentic IDE for Android. A Flutter app in front, a Python bridge running inside Termux behind it — real shell, real files, live web research, no cloud IDE in the middle.</p>
+      <div class='hero-ctas'>
+        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Download APK</a>
+        <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>Read the source ↗</a>
       </div>
-      <div class="terminal-body" id="terminal-output">
-        <div><span class="cmd">$ nexon agent "build the auth module"</span></div>
-        <div class="output">→ Spawning agent with shell access...</div>
-        <div class="output">→ Writing lib/auth.dart (142 lines)</div>
-        <div class="output">→ Running: flutter analyze</div>
-        <div class="success">✓ Build complete — 0 errors, 2 warnings</div>
-        <div><span class="cmd">$ </span><span class="cursor"></span></div>
+      <p class='microfacts'>
+        <span>v1.0.23</span>
+        <span>Android 7.0+</span>
+        <span>BYOK — your keys, your device</span>
+      </p>
+    </div>
+    <div class='term' aria-label='Example Nexon session'>
+      <div class='term-bar'>
+        <span class='term-dot'></span><span class='term-dot'></span><span class='term-dot'></span>
+        <span class='term-title'>nexon — termux session</span>
+        <span class='term-live'><span class='term-live-dot'></span>live</span>
+      </div>
+      <div class='term-body' id='term-body'></div>
+    </div>
+  </div>
+</section>
+<section class='section wrap' id='research'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> nexon research "state of on-device agents"</p>
+  <h2>Three agents, one pipeline,<br>zero vector databases.</h2>
+  <p class='sec-sub'>Deep research in Nexon runs as an autonomous three-phase loop. Evidence is extracted into structured FACT and FINDING records — plain, auditable JSON — instead of an embedding index, so the whole engine fits on a phone.</p>
+  <div class='stages'>
+    <div class='stage'>
+      <span class='stage-tag'>phase 1 — planner</span>
+      <h3>Decompose</h3>
+      <p>Turns the question into a research plan: sub-questions, search angles, and a context budget the later phases have to respect.</p>
+    </div>
+    <div class='stage'>
+      <span class='stage-tag'>phase 2 — researcher</span>
+      <h3>Collect</h3>
+      <p>Runs live web searches, reads results, and writes precise evidence records — numbers, dates, claims with sources — into the store.</p>
+    </div>
+    <div class='stage'>
+      <span class='stage-tag'>phase 3 — synthesizer</span>
+      <h3>Report</h3>
+      <p>Compiles the evidence into a cited report inside a configurable token budget, rendered as a Markdown artifact you can export.</p>
+    </div>
+    <div class='facts' aria-label='Example evidence records'>
+      <div><span class='k'>FACT <b>ec0391</b></span> on-device SLM latency — 1.9s median, ARM 2024</div>
+      <div><span class='k'>FINDING <b>17c2</b></span> hybrid routing wins on cost at ≥12 turns</div>
+      <div><span class='k'>FACT <b>a41f7c</b></span> Termux ships GCC 13.2 + Python 3.11</div>
+      <div><span class='k'>SOURCE</span> tavily — 3 results, 2 kept after dedupe</div>
+    </div>
+  </div>
+</section>
+<section class='section wrap' id='runtime'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> ps aux</p>
+  <h2>One device, two processes,<br>a socket between them.</h2>
+  <p class='sec-sub'>Nexon split-processes by design: Flutter owns the UI and state, a Python bridge owns the Termux userland. They speak JSON-RPC over a local WebSocket — everything stays on the phone.</p>
+  <div class='arch'>
+    <div class='arch-layer'>
+      <h3>flutter app <span>— foreground · UI · state</span></h3>
+      <div class='chips'>
+        <span class='chip'>chat + IDE panels</span>
+        <span class='chip'>artifact renderer · md/svg/docx</span>
+        <span class='chip'>cost tracker</span>
+        <span class='chip'>riverpod</span>
+        <span class='chip'>material 3</span>
+      </div>
+    </div>
+    <div class='arch-seam'>
+      <span>json-rpc 2.0</span>
+      <span><b>ws://localhost:8765</b></span>
+      <span>http :8390</span>
+      <span>checkpoint · rollback</span>
+    </div>
+    <div class='arch-layer arch-deep'>
+      <h3>python bridge <span>— termux userland · aiohttp</span></h3>
+      <div class='chips'>
+        <span class='chip'>shell_exec</span>
+        <span class='chip'>patch_file · diff_files</span>
+        <span class='chip'>deep research engine</span>
+        <span class='chip'>tavily search</span>
+        <span class='chip'>permission guard</span>
+      </div>
+    </div>
+    <div class='arch-seam'>
+      <span>exec</span>
+      <span>fork</span>
+      <span><b>termux — real linux userland</b></span>
+      <span>gcc · git · python</span>
+    </div>
+    <div class='arch-layer arch-deep'>
+      <h3>device storage <span>— local-first, then cloud</span></h3>
+      <div class='chips'>
+        <span class='chip'>isar db</span>
+        <span class='chip'>secure storage</span>
+        <span class='chip'>google drive backup</span>
+        <span class='chip'>supabase auth</span>
       </div>
     </div>
   </div>
 </section>
-
-
-<section id="what">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">What is Nexon</span>
-      <h2>Mobile-First Agentic Development</h2>
-      <p class="section-desc">Nexon is an AI-powered mobile development and research environment designed to bring agentic workflows to Android through Termux. It combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and multi-agent deep research loops — directly on your phone.</p>
+<section class='section wrap' id='features'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> ls features/</p>
+  <h2>Everything a working agent needs,<br>nothing it doesn't.</h2>
+  <div class='feat-grid'>
+    <div class='feat'>
+      <h3>real shell, real toolchain</h3>
+      <p>Agents run commands inside the actual Termux shell — compile with GCC, run tests, push to git. No sandboxed toy terminal.</p>
+    </div>
+    <div class='feat'>
+      <h3>surgical file edits</h3>
+      <p>Read, patch, and diff files by line range. Every edit snapshots first, so any change can be rolled back.</p>
+    </div>
+    <div class='feat'>
+      <h3>permission guard</h3>
+      <p>Every tool call passes a permission gate you control — ask, session, always, or never — before anything executes.</p>
+    </div>
+    <div class='feat'>
+      <h3>live web search</h3>
+      <p>Chat sessions route search natively to Tavily for real-time context, with sources kept alongside answers.</p>
+    </div>
+    <div class='feat'>
+      <h3>artifacts, rendered properly</h3>
+      <p>Markdown, syntax-highlighted code, and interactive SVG diagrams render in the feed, and export to .md or .docx.</p>
+    </div>
+    <div class='feat'>
+      <h3>bring your own keys</h3>
+      <p>No accounts on our side. Your LLM provider keys stay on your device, and your chats back up to your own Drive.</p>
     </div>
   </div>
 </section>
-
-<section id="capabilities">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">Capabilities</span>
-      <h2>Built for Real Development Workflows</h2>
-      <p class="section-desc">Everything you need to build, research, and automate from your Android device.</p>
+<section class='section wrap' id='install'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> ./install_bridge.sh</p>
+  <h2>Running in about<br>three minutes.</h2>
+  <p class='sec-sub'>Everything installs from your phone. You need an Android 7.0+ device, Termux from F-Droid, and Python 3.10+ inside it.</p>
+  <div class='steps'>
+    <div class='step'>
+      <span class='step-tag'>step 01</span>
+      <div>
+        <h3>Install the app</h3>
+        <p>Grab the latest APK from GitHub Releases and install it. Termux comes from F-Droid — the Play Store build won't work.</p>
+        <div class='cmdrow'><span>github.com/shivaww/Nexon/releases</span><button class='copybtn' type='button' data-copy='https://github.com/shivaww/Nexon/releases'>copy</button></div>
+      </div>
     </div>
-    <div class="cap-grid">
-      <div class="cap-card reveal">
-        <div class="cap-icon">
-          <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-        </div>
-        <h3>Agentic IDE</h3>
-        <p>LLM agents execute commands directly inside the Termux shell, supporting compilers, tests, and script runners with rich file manipulation and granular security permission controls.</p>
+    <div class='step'>
+      <span class='step-tag'>step 02</span>
+      <div>
+        <h3>Set up the bridge</h3>
+        <p>Clone the repo inside Termux and run the setup script. It installs the bridge's Python dependencies and prepares the workspace.</p>
+        <div class='cmdrow'><span class='path'>$ </span><span>chmod +x install_bridge.sh &amp;&amp; ./install_bridge.sh</span><button class='copybtn' type='button' data-copy='chmod +x install_bridge.sh &amp;&amp; ./install_bridge.sh'>copy</button></div>
       </div>
-      <div class="cap-card reveal">
-        <div class="cap-icon">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-        </div>
-        <h3>Deep Research Engine</h3>
-        <p>3-agent autonomous pipeline moving through Planner, Researcher, and Synthesizer phases with structured fact and finding storage for maximum response quality.</p>
-      </div>
-      <div class="cap-card reveal">
-        <div class="cap-icon">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-        </div>
-        <h3>Live Web Search</h3>
-        <p>Real-time web context via Tavily API integration. Search requests during chat sessions are routed natively for up-to-date information retrieval.</p>
-      </div>
-      <div class="cap-card reveal">
-        <div class="cap-icon">
-          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        </div>
-        <h3>Artifact Rendering</h3>
-        <p>Renders rich markdown documents, syntax-highlighted code, and interactive SVG diagrams in the chat feed. Export artifacts as .md or .docx files.</p>
-      </div>
-      <div class="cap-card reveal">
-        <div class="cap-icon">
-          <svg viewBox="0 0 24 24"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
-        </div>
-        <h3>Cloud Backup & Sync</h3>
-        <p>Unified Google Drive sync bundles conversation sessions, settings, and credentials into a single backup with smart non-destructive merging.</p>
-      </div>
-      <div class="cap-card reveal">
-        <div class="cap-icon">
-          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        </div>
-        <h3>Termux Integration</h3>
-        <p>Full access to the Termux runtime — bash shell, GCC, git, Python, and all standard Unix tools running natively on your Android device.</p>
+    </div>
+    <div class='step'>
+      <span class='step-tag'>step 03</span>
+      <div>
+        <h3>Start the server</h3>
+        <p>Launch the bridge — WebSocket on 8765, HTTP on 8390 — then open Nexon and point it at your keys. That's the whole stack.</p>
+        <div class='cmdrow'><span class='path'>$ </span><span>cd ~/nexon_bridge &amp;&amp; python3 mcp_server.py</span><button class='copybtn' type='button' data-copy='cd ~/nexon_bridge &amp;&amp; python3 mcp_server.py'>copy</button></div>
       </div>
     </div>
   </div>
 </section>
-
-
-<section id="architecture">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">Architecture</span>
-      <h2>How Nexon Works</h2>
-      <p class="section-desc">A split-process architecture connecting the Flutter application to a local Python bridge server running inside Termux.</p>
+<section class='close'>
+  <div class='wrap'>
+    <h2>Cloud IDEs rent you a desk.<br>This one fits in your pocket.</h2>
+    <p>Nexon is built, shipped, and iterated in the open. If you're building on-device agents too, we'd like to hear from you.</p>
+    <div class='hero-ctas' style='justify-content:center'>
+      <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Download APK</a>
+      <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub ↗</a>
     </div>
-    <div class="arch-panel reveal">
-      <div class="arch-flow">
-        <div class="arch-node">
-          <div class="arch-node-label">Interface</div>
-          <div class="arch-node-title">Flutter UI</div>
-        </div>
-        <div class="arch-connector"></div>
-        <div class="arch-node">
-          <div class="arch-node-label">Transport</div>
-          <div class="arch-node-title">WebSocket :8765 / HTTP :8390</div>
-        </div>
-        <div class="arch-connector"></div>
-        <div class="arch-node">
-          <div class="arch-node-label">Orchestration</div>
-          <div class="arch-node-title">Python Bridge Server</div>
-        </div>
-        <div class="arch-connector"></div>
-        <div class="arch-node">
-          <div class="arch-node-label">Execution</div>
-          <div class="arch-node-title">Termux Runtime</div>
-        </div>
-      </div>
-    </div>
+    <p class='microfacts' style='justify-content:center;margin-top:26px'>
+      <span>questions · partnerships · feedback — <a href='mailto:founder@nexonai.me' style='color:var(--signal)'>founder@nexonai.me</a></span>
+    </p>
   </div>
 </section>
-
-<section id="mobile">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">Mobile-First</span>
-      <h2>Development Without the Desktop</h2>
-      <p class="section-desc">Nexon brings a full agentic development and research environment to Android — no laptop required.</p>
-    </div>
-    <div class="mobile-split">
-      <div class="mobile-text reveal">
-        <h3>Your phone is the workstation</h3>
-        <p>Instead of requiring a desktop for every AI development workflow, Nexon runs the entire agentic pipeline natively on Android through Termux. The Flutter UI handles visualization and state, while the Python bridge manages execution — all on your device.</p>
-        <ul class="mobile-list">
-          <li>Full Termux shell access with compilers, git, and Python</li>
-          <li>Local execution — no cloud dependency for core workflows</li>
-          <li>Deep research loops that run autonomously on-device</li>
-          <li>Google Drive sync keeps your work backed up and portable</li>
-        </ul>
-      </div>
-      <div class="phone-mock reveal" aria-hidden="true">
-        <div class="phone-inner">
-          <div class="phone-status"><span>nexon · agent active</span></div>
-          <div class="phone-content">
-            <div class="phone-line"></div>
-            <div class="phone-line"></div>
-            <div class="phone-line"></div>
-            <div class="phone-line"></div>
-            <div class="phone-line"></div>
-            <div class="phone-block"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<section id="tech">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">Technology</span>
-      <h2>Built With Proven Tools</h2>
-      <p class="section-desc">A pragmatic stack chosen for performance on mobile and developer familiarity.</p>
-    </div>
-    <div class="tech-grid reveal">
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-        <div class="tech-name">Flutter</div>
-        <div class="tech-desc">Material 3 UI</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M8 12h8M12 8v8"/></svg>
-        <div class="tech-name">Python 3</div>
-        <div class="tech-desc">Bridge & execution</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        <div class="tech-name">Termux</div>
-        <div class="tech-desc">Linux on Android</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
-        <div class="tech-name">WebSocket</div>
-        <div class="tech-desc">Real-time bridge</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.5V12h3a3 3 0 0 1 3 3v1"/><path d="M8 9.5A4 4 0 0 1 12 2"/><circle cx="12" cy="16" r="3"/><path d="M6 22a6 6 0 0 1 12 0"/></svg>
-        <div class="tech-name">LLM APIs</div>
-        <div class="tech-desc">BYOK model access</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-        <div class="tech-name">Tavily</div>
-        <div class="tech-desc">Web search API</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
-        <div class="tech-name">Google Drive</div>
-        <div class="tech-desc">Backup & sync</div>
-      </div>
-      <div class="tech-item">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        <div class="tech-name">Supabase</div>
-        <div class="tech-desc">Authentication</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="opensource">
-  <div class="container">
-    <div class="oss-panel reveal">
-      <span class="section-label">Open Source</span>
-      <h3>Explore the Code</h3>
-      <p>Nexon is open source and actively developed. Inspect the architecture, contribute, or fork it for your own research and learning.</p>
-      <a href="https://github.com/shivaww/Nexon" class="btn btn-primary" target="_blank" rel="noopener noreferrer">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-        View on GitHub
-      </a>
-      <div class="license-tag">Non-Commercial License · Personal & Academic Use</div>
-    </div>
-  </div>
-</section>
-
-
-<section id="roadmap">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">What's Next</span>
-      <h2>Building Toward</h2>
-      <p class="section-desc">Nexon is actively developed. Here's where the project is heading.</p>
-    </div>
-    <div class="roadmap-list">
-      <div class="roadmap-item reveal">
-        <div class="roadmap-num">1</div>
-        <div>
-          <h4>Commercial Licensing</h4>
-          <p>Subscription-based commercial licensing will open once the core platform stabilizes. Personal, academic, and non-commercial use remains free.</p>
-        </div>
-      </div>
-      <div class="roadmap-item reveal">
-        <div class="roadmap-num">2</div>
-        <div>
-          <h4>Expanded Agent Capabilities</h4>
-          <p>Deeper multi-agent orchestration, improved context management, and more sophisticated research pipelines for complex development workflows.</p>
-        </div>
-      </div>
-      <div class="roadmap-item reveal">
-        <div class="roadmap-num">3</div>
-        <div>
-          <h4>Native Tool Ecosystem</h4>
-          <p>Extended native tool integration through the C++ bridge for faster agentic execution paths and richer file/system operations.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="final-cta">
-  <div class="container reveal">
-    <h2>Build your next idea<br>from anywhere.</h2>
-    <p>Explore Nexon and see what an agentic development environment on Android can become.</p>
-    <div class="hero-cta">
-      <a href="https://github.com/shivaww/Nexon/releases" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Explore Nexon</a>
-      <a href="https://github.com/shivaww/Nexon" class="btn btn-ghost" target="_blank" rel="noopener noreferrer">GitHub</a>
-    </div>
-  </div>
-</section>
-
+</main>
 <footer>
-  <div class="container">
-    <div class="footer-grid">
-      <div class="footer-brand">
-        <img src="assets/icon.png" alt="" width="40" height="40">
-        <p>AI-powered mobile agentic workspace. Build, research, and automate directly from your Android device.</p>
+  <div class='wrap'>
+    <div class='foot-grid'>
+      <div>
+        <a class='brand' href='#top' style='margin-bottom:14px'><span class='brand-dot'></span>nexon</a>
+        <p class='foot-note'>Open-source mobile agentic IDE. Flutter in front, Python in Termux behind, your keys on your device.</p>
       </div>
-      <div class="footer-col">
-        <h4>Project</h4>
+      <div>
+        <h4>project</h4>
         <ul>
-          <li><a href="https://github.com/shivaww/Nexon" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-          <li><a href="https://github.com/shivaww/Nexon/releases" target="_blank" rel="noopener noreferrer">Releases</a></li>
-          <li><a href="https://github.com/shivaww/Nexon/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
+          <li><a href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub</a></li>
+          <li><a href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Releases</a></li>
+          <li><a href='https://github.com/shivaww/Nexon/issues' target='_blank' rel='noopener noreferrer'>Issues</a></li>
         </ul>
       </div>
-      <div class="footer-col">
-        <h4>Resources</h4>
+      <div>
+        <h4>resources</h4>
         <ul>
-          <li><a href="https://github.com/shivaww/Nexon#readme" target="_blank" rel="noopener noreferrer">Documentation</a></li>
-          <li><a href="https://github.com/shivaww/Nexon/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">License</a></li>
+          <li><a href='https://github.com/shivaww/Nexon#readme' target='_blank' rel='noopener noreferrer'>Documentation</a></li>
+          <li><a href='https://github.com/shivaww/Nexon/blob/main/LICENSE' target='_blank' rel='noopener noreferrer'>License</a></li>
+          <li><a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux (F-Droid)</a></li>
         </ul>
       </div>
-      <div class="footer-col">
-        <h4>Contact</h4>
+      <div>
+        <h4>contact &amp; support</h4>
         <ul>
-          <li><a href="mailto:founder@nexonai.me">founder@nexonai.me</a></li>
-          <li><a href="https://nexonai.me">nexonai.me</a></li>
+          <li><a href='mailto:founder@nexonai.me'>founder@nexonai.me</a></li>
+          <li><a href='https://github.com/shivaww/Nexon/issues' target='_blank' rel='noopener noreferrer'>Report a bug</a></li>
+          <li><a href='https://github.com/shivaww/Nexon#readme' target='_blank' rel='noopener noreferrer'>Troubleshooting</a></li>
         </ul>
       </div>
     </div>
-    <div class="footer-bottom">
-      <p>&copy; 2026 Nexon. All rights reserved.</p>
-      <p>Non-Commercial License &middot; Open Source</p>
+    <div class='foot-base'>
+      <span>© 2025 nexon · non-commercial license</span>
+      <span>android 7+ · termux · made to run offline</span>
     </div>
   </div>
 </footer>
-
-
-<section id="roadmap">
-  <div class="container">
-    <div class="section-header reveal">
-      <span class="section-label">What's Next</span>
-      <h2>Building Toward</h2>
-      <p class="section-desc">Nexon is actively developed. Here's where the project is heading.</p>
-    </div>
-    <div class="roadmap-list">
-      <div class="roadmap-item reveal">
-        <div class="roadmap-num">1</div>
-        <div>
-          <h4>Commercial Licensing</h4>
-          <p>Subscription-based commercial licensing will open once the core platform stabilizes. Personal, academic, and non-commercial use remains free.</p>
-        </div>
-      </div>
-      <div class="roadmap-item reveal">
-        <div class="roadmap-num">2</div>
-        <div>
-          <h4>Expanded Agent Capabilities</h4>
-          <p>Deeper multi-agent orchestration, improved context management, and more sophisticated research pipelines for complex development workflows.</p>
-        </div>
-      </div>
-      <div class="roadmap-item reveal">
-        <div class="roadmap-num">3</div>
-        <div>
-          <h4>Native Tool Ecosystem</h4>
-          <p>Extended native tool integration through the C++ bridge for faster agentic execution paths and richer file/system operations.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="final-cta">
-  <div class="container reveal">
-    <h2>Build your next idea<br>from anywhere.</h2>
-    <p>Explore Nexon and see what an agentic development environment on Android can become.</p>
-    <div class="hero-cta">
-      <a href="https://github.com/shivaww/Nexon/releases" class="btn btn-primary" target="_blank" rel="noopener noreferrer">Explore Nexon</a>
-      <a href="https://github.com/shivaww/Nexon" class="btn btn-ghost" target="_blank" rel="noopener noreferrer">GitHub</a>
-    </div>
-  </div>
-</section>
-
-<footer>
-  <div class="container">
-    <div class="footer-grid">
-      <div class="footer-brand">
-        <img src="assets/icon.png" alt="" width="40" height="40">
-        <p>AI-powered mobile agentic workspace. Build, research, and automate directly from your Android device.</p>
-      </div>
-      <div class="footer-col">
-        <h4>Project</h4>
-        <ul>
-          <li><a href="https://github.com/shivaww/Nexon" target="_blank" rel="noopener noreferrer">GitHub</a></li>
-          <li><a href="https://github.com/shivaww/Nexon/releases" target="_blank" rel="noopener noreferrer">Releases</a></li>
-          <li><a href="https://github.com/shivaww/Nexon/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
-        </ul>
-      </div>
-      <div class="footer-col">
-        <h4>Resources</h4>
-        <ul>
-          <li><a href="https://github.com/shivaww/Nexon#readme" target="_blank" rel="noopener noreferrer">Documentation</a></li>
-          <li><a href="https://github.com/shivaww/Nexon/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">License</a></li>
-        </ul>
-      </div>
-      <div class="footer-col">
-        <h4>Contact & Support</h4>
-        <ul>
-          <li><a href="mailto:founder@nexonai.me">founder@nexonai.me</a></li>
-          <li><a href="https://nexonai.me">nexonai.me</a></li>
-        </ul>
-      </div>
-    </div>
-    <div class="footer-bottom">
-      <p>&copy; 2026 Nexon. All rights reserved.</p>
-      <p>Non-Commercial License &middot; Open Source</p>
-    </div>
-  </div>
-</footer>
-
-
 <script>
-(function(){
-  'use strict';
-
-  // Mobile nav toggle
-  var toggle = document.querySelector('.nav-toggle');
-  var links = document.querySelector('.nav-links');
-  if(toggle && links){
-    toggle.addEventListener('click', function(){
-      var open = links.classList.toggle('open');
-      toggle.classList.toggle('active');
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-    links.querySelectorAll('a').forEach(function(a){
-      a.addEventListener('click', function(){
-        links.classList.remove('open');
-        toggle.classList.remove('active');
-        toggle.setAttribute('aria-expanded', 'false');
-      });
-    });
-  }
-
-  // Scroll reveal
-  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if(!reducedMotion && 'IntersectionObserver' in window){
-    var observer = new IntersectionObserver(function(entries){
-      entries.forEach(function(entry){
-        if(entry.isIntersecting){
-          entry.target.classList.add('visible');
-          observer.unobserve(entry.target);
-        }
-      });
-    }, {threshold: 0.1, rootMargin: '0px 0px -40px 0px'});
-    document.querySelectorAll('.reveal').forEach(function(el){
-      observer.observe(el);
-    });
-  } else {
-    document.querySelectorAll('.reveal').forEach(function(el){
-      el.classList.add('visible');
-    });
-  }
-
-  // Terminal typing animation
-  var termOutput = document.getElementById('terminal-output');
-  if(termOutput && !reducedMotion){
-    var lines = [
-      {text: '$ nexon agent \"build the auth module\"', cls: 'cmd', delay: 800},
-      {text: '\u2192 Spawning agent with shell access...', cls: 'output', delay: 1200},
-      {text: '\u2192 Writing lib/auth.dart (142 lines)', cls: 'output', delay: 1000},
-      {text: '\u2192 Running: flutter analyze', cls: 'output', delay: 900},
-      {text: '\u2713 Build complete \u2014 0 errors, 2 warnings', cls: 'success', delay: 1400},
-      {text: '$ ', cls: 'cmd', delay: 600}
-    ];
-    termOutput.innerHTML = '';
-    var lineIdx = 0;
-    function typeLine(){
-      if(lineIdx >= lines.length) return;
-      var line = lines[lineIdx];
-      var div = document.createElement('div');
-      if(line.cls === 'cmd'){
-        var span = document.createElement('span');
-        span.className = 'cmd';
-        span.textContent = line.text;
-        div.appendChild(span);
-        if(lineIdx === lines.length - 1){
-          var cursor = document.createElement('span');
-          cursor.className = 'cursor';
-          div.appendChild(cursor);
-        }
-      } else {
-        div.className = line.cls;
-        div.textContent = line.text;
-      }
-      div.style.opacity = '0';
-      div.style.transform = 'translateY(4px)';
-      div.style.transition = 'opacity 0.3s, transform 0.3s';
-      termOutput.appendChild(div);
-      requestAnimationFrame(function(){
-        requestAnimationFrame(function(){
-          div.style.opacity = '1';
-          div.style.transform = 'translateY(0)';
-        });
-      });
-      lineIdx++;
-      setTimeout(typeLine, line.delay);
+'use strict';
+/* copy buttons */
+document.querySelectorAll('.copybtn').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    var t=btn.getAttribute('data-copy');
+    function done(){
+      var old=btn.textContent;
+      btn.textContent='copied';
+      btn.classList.add('ok');
+      setTimeout(function(){btn.textContent=old;btn.classList.remove('ok');},1600);
     }
-    // Start terminal animation when it scrolls into view
-    if('IntersectionObserver' in window){
-      var termObserver = new IntersectionObserver(function(entries){
-        if(entries[0].isIntersecting){
-          setTimeout(typeLine, 600);
-          termObserver.disconnect();
-        }
-      }, {threshold: 0.3});
-      termObserver.observe(termOutput);
-    } else {
-      setTimeout(typeLine, 1000);
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(done).catch(function(){fallbackCopy(t,done);});
+    }else{
+      fallbackCopy(t,done);
     }
+  });
+});
+function fallbackCopy(text,cb){
+  var ta=document.createElement('textarea');
+  ta.value=text;
+  ta.setAttribute('readonly','');
+  ta.style.position='fixed';
+  ta.style.opacity='0';
+  document.body.appendChild(ta);
+  ta.select();
+  try{document.execCommand('copy');cb();}catch(e){}
+  document.body.removeChild(ta);
+}
+/* hero transcript */
+var TRANSCRIPT=[
+  {c:'t-dim',t:'$ nexon'},
+  {c:'t-you',t:'› research how rust benchmarks on arm64 and write a summary'},
+  {c:'t-dim',t:'  planner   · decomposing query → 3 sub-questions'},
+  {c:'t-dim',t:'  budget    · 4k evidence tokens'},
+  {c:'t-dim',t:'  researcher· tavily search → 5 results'},
+  {c:'t-dim',t:'            · kept 3 · FACT ec0391 · FACT a41f7c'},
+  {c:'t-dim',t:'  synthesizr· report drafted · 2 citations'},
+  {c:'t-agent',t:'✓ summary.md artifact ready — open in feed?'}
+];
+var SH_LINES=[
+  {c:'t-dim',t:'$ nexon shell'},
+  {c:'t-you',t:'› build and test the parser patch'},
+  {c:'t-tool',t:'  shell_exec  gcc -Wall -o parse parse.c'},
+  {c:'t-ok',t:'  ✓ exit 0 · 2 warnings · 1.9s'},
+  {c:'t-tool',t:'  patch_file  lib/parser.dart  L41-L48'},
+  {c:'t-ok',t:'  ✓ applied · snapshot 7c2f saved'},
+  {c:'t-agent',t:'✓ tests green. patch is on disk — push it?'}
+];
+var termBody=document.getElementById('term-body');
+var reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var cursor=document.createElement('span');
+cursor.className='cursor';
+function makeLine(cls,text){
+  var el=document.createElement('div');
+  el.className='t-line'+(cls?' '+cls:'');
+  if(text){el.textContent=text;}
+  termBody.appendChild(el);
+  return el;
+}
+function typeLine(el,text,done){
+  var i=0;
+  (function step(){
+    if(i<=text.length){
+      el.textContent=text.slice(0,i);
+      el.appendChild(cursor);
+      i++;
+      var ch=text.charAt(i-1);
+      var d=(ch===' ')?9:15+Math.random()*24;
+      setTimeout(step,d);
+    }else{done();}
+  })();
+}
+function playScript(lines,done){
+  var idx=0;
+  function next(){
+    if(idx>=lines.length){done();return;}
+    var L=lines[idx++];
+    var el=makeLine(L.c,'');
+    typeLine(el,L.t,function(){
+      setTimeout(next,80+Math.random()*180);
+    });
   }
-})();
+  next();
+}
+function finishInstant(lines){
+  lines.forEach(function(L){makeLine(L.c,L.t);});
+  var rest=makeLine('t-cmd','$ ');
+  rest.appendChild(cursor);
+}
+if(termBody){
+  if(reduced){
+    finishInstant(TRANSCRIPT);
+  }else{
+    setTimeout(function(){
+      playScript(TRANSCRIPT,function(){
+        setTimeout(function(){
+          termBody.textContent='';
+          playScript(SH_LINES,function(){
+            var rest=makeLine('t-cmd','$ ');
+            rest.appendChild(cursor);
+          });
+        },3400);
+      });
+    },650);
+  }
+}
 </script>
-
 </body>
 </html>
