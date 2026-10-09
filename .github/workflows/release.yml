@@ -78,6 +78,8 @@ jobs:
         run: |
           mv build/app/outputs/flutter-apk/app-release.apk \
              build/app/outputs/flutter-apk/nexon-${{ steps.version.outputs.version }}.apk
+          cp build/app/outputs/flutter-apk/nexon-${{ steps.version.outputs.version }}.apk \
+             build/app/outputs/flutter-apk/nexon-latest.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -96,6 +98,7 @@ jobs:
             - Termux installed
           files: |
             build/app/outputs/flutter-apk/nexon-${{ steps.version.outputs.version }}.apk
+            build/app/outputs/flutter-apk/nexon-latest.apk
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           generate_release_notes: true
