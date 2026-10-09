@@ -2,6 +2,10 @@
 
 An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and 3-agent Deep Research loops directly on your phone. Bring your own API keys: Nexon supports Anthropic Claude (fable 5.1 Opus 5.5 , Sonnet 5.5 , Haiku 5.5) alongside other LLM providers, and is built and developed with Claude.
 
+**Website:** https://nexonai.me · **Contact:** [founder@nexonai.me](mailto:founder@nexonai.me)
+
+**Claude support:** Use Claude models through the Anthropic API or OpenRouter with your own key — prompt caching and extended thinking are implemented natively, and model lists are fetched live. Nexon is developed with heavy use of Claude. OpenAI, Google, Mistral, xAI, DeepSeek, Groq, and more are also supported (BYOK).
+
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
 [![License](https://img.shields.io/badge/license-Non--Commercial-orange.svg)](LICENSE)
@@ -68,7 +72,7 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 *   **Document Export**: Supports parsing and saving conversational artifacts locally as `.md` or `.docx` files.
 
 ### 4. ☁️ Google Drive Backup & Sync
-*   **Unified Sync**: Bundles conversation sessions, settings, and credentials into `nexon_backup.json` on Google Drive.
+*   **Unified Sync**: Bundles conversation sessions, settings, API keys, and artifacts into an encrypted file (`nexon_backup.enc`) on Google Drive. The encryption key is generated on-device and kept in the app's secure storage.
 *   **Non-Destructive Merge**: Smart syncing preserves local un-synced chats while restoring remote backups smoothly.
 
 ### 5. 🔬 Deep Research Engine
