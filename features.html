@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>Features — Nexon</title>
+<meta name='description' content='Every Nexon feature with real screenshots: agentic chat, permission guard, deep research, artifacts, BYOK providers, and the Termux runtime.'>
+<meta name='author' content='K. Shiva Reddy'>
+<meta property='og:title' content='Features — Nexon'>
+<meta property='og:description' content='Every Nexon feature with real screenshots from the app.'>
+<meta property='og:type' content='article'>
+<meta property='og:url' content='https://nexonai.me/features.html'>
+<meta property='og:image' content='https://nexonai.me/assets/icon.png'>
+<meta name='twitter:card' content='summary'>
+<meta name='theme-color' content='#F2F4F1'>
+<link rel='icon' type='image/png' href='assets/icon.png'>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+<style>
+:root{--paper:#F2F4F1;--panel:#FAFBF8;--ink:#171E19;--ink-soft:#46524A;--signal:#1E7A46;--wire:#D7DCD4;--mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,monospace;--sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.65;-webkit-font-smoothing:antialiased}
+a{color:var(--signal)}
+.wrap{max-width:880px;margin:0 auto;padding:0 24px}
+.topbar{border-bottom:1px solid var(--wire);background:rgba(242,244,241,.92)}
+.topbar .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+.brand{font-family:var(--mono);font-weight:600;font-size:15px;text-decoration:none;color:var(--ink);display:flex;align-items:center;gap:10px}
+.brand-dot{width:9px;height:9px;background:var(--signal);border-radius:50%}
+.back{font-family:var(--mono);font-size:13px;text-decoration:none;color:var(--ink-soft)}
+main{padding:56px 0 80px}
+h1{font-family:var(--mono);font-weight:600;font-size:clamp(26px,4vw,36px);line-height:1.2;letter-spacing:-.01em;margin-bottom:10px}
+.meta{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);margin-bottom:36px}
+h2{font-family:var(--mono);font-weight:600;font-size:17px;margin:44px 0 10px}
+p,li{font-size:16px;color:var(--ink-soft)}
+p+p{margin-top:12px}
+ul{margin:10px 0 0 20px}
+li{margin-bottom:6px}
+footer{border-top:1px solid var(--wire);padding:28px 0;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+.shot{display:block;width:100%;height:auto;border:1px solid var(--wire);border-radius:12px;box-shadow:0 10px 30px rgba(23,30,25,.10);background:var(--panel)}
+.shot-cap{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);margin-top:10px}
+.show-row{display:grid;grid-template-columns:1fr 1.15fr;gap:48px;align-items:center;margin-top:54px}
+.show-row h3{font-family:var(--mono);font-weight:600;font-size:18px;letter-spacing:-.01em}
+.show-row p{margin-top:8px}
+.show-row figure{margin:0}
+.show-row .shot{margin:0}
+.show-row .shot-cap{text-align:left;margin-top:8px}
+.show-row.flip .show-shot{order:-1}
+@media (max-width:700px){.show-row{grid-template-columns:1fr;gap:18px;margin-top:36px}.show-row.flip .show-shot{order:0}.show-row .shot-cap{text-align:center}}
+.shot-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:14px}
+.shot-grid figure{margin:0}
+.shot-grid .shot{box-shadow:0 6px 18px rgba(23,30,25,.08)}
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px;margin-top:14px}
+.feat{border:1px solid var(--wire);border-radius:12px;background:var(--panel);padding:20px}
+.feat h3{font-family:var(--mono);font-weight:600;font-size:15px;margin-bottom:8px}
+.feat p{font-size:15px}
+.btn{display:inline-block;font-family:var(--mono);font-size:14px;font-weight:600;text-decoration:none;color:#fff;background:var(--signal);padding:11px 20px;border-radius:8px;margin-top:14px}
+.btn-line{display:inline-block;font-family:var(--mono);font-size:14px;font-weight:600;text-decoration:none;color:var(--ink);border:1px solid var(--ink);padding:11px 20px;border-radius:8px;margin-top:14px;margin-left:10px}
+</style>
+</head>
+<body>
+<header class='topbar'>
+<div class='wrap'>
+<a class='brand' href='index.html'><span class='brand-dot'></span>nexon</a>
+<a class='back' href='index.html'>back to nexonai.me</a>
+</div>
+</header>
+<main class='wrap'>
+<h1>Features</h1>
+<p class='meta'>Nexon v1.0.24 · every screenshot below is the real app — no mockups</p>
+
+<div class='show-row'>
+  <div class='show-text'>
+    <h3>chat that does things</h3>
+    <p>Conversations with agents that run tools, show their work, and answer in one feed — with sources attached when they search.</p>
+  </div>
+  <figure class='show-shot'>
+    <img class='shot' src='assets/screens/01-mainchat.jpg' alt='Nexon main chat on Android: a conversation with an agent' loading='lazy'>
+    <figcaption class='shot-cap'>the main chat — conversation, tool calls, answers</figcaption>
+  </figure>
+</div>
+
+<div class='show-row flip'>
+  <figure class='show-shot'>
+    <img class='shot' src='assets/screens/02-research.jpg' alt='Deep Research planner: a question decomposed into numbered steps' loading='lazy'>
+    <figcaption class='shot-cap'>deep research (beta) — the planner breaks a question into steps</figcaption>
+  </figure>
+  <div class='show-text'>
+    <h3>deep research, on-device</h3>
+    <p>A three-phase pipeline — planner, researcher, synthesizer — that searches live, extracts structured facts, and writes a cited report. In beta, and labeled as such.</p>
+  </div>
+</div>
+
+<div class='show-row'>
+  <div class='show-text'>
+    <h3>you approve every change</h3>
+    <p>Every tool call passes a permission gate you control. File edits show a red/green diff before anything is written.</p>
+  </div>
+  <figure class='show-shot'>
+    <img class='shot' src='assets/screens/03-permission.jpg' alt='Permission dialog: Allow patch? with a red and green diff' loading='lazy'>
+    <figcaption class='shot-cap'>the permission guard — diff preview before write</figcaption>
+  </figure>
+</div>
+
+<div class='show-row flip'>
+  <figure class='show-shot'>
+    <img class='shot' src='assets/screens/07-artifacts.jpg' alt='A generated web page artifact rendered in the chat feed' loading='lazy'>
+    <figcaption class='shot-cap'>artifacts render in the feed — export as .md or .docx</figcaption>
+  </figure>
+  <div class='show-text'>
+    <h3>artifacts that render</h3>
+    <p>Markdown, syntax-highlighted code, and SVG diagrams render inline — not as walls of text — and export cleanly.</p>
+  </div>
+</div>
+
+<div class='show-row'>
+  <div class='show-text'>
+    <h3>any provider, your keys</h3>
+    <p>36 built-in providers plus Claude through the Anthropic API or OpenRouter. Model lists fetch live, thinking depth is yours to set — keys never leave the device.</p>
+  </div>
+  <figure class='show-shot'>
+    <img class='shot' src='assets/screens/09-settings.jpg' alt='Model settings: provider, model, temperature, output length, thinking depth' loading='lazy'>
+    <figcaption class='shot-cap'>model settings — provider, temperature, thinking depth</figcaption>
+  </figure>
+</div>
+
+<div class='show-row flip'>
+  <figure class='show-shot'>
+    <img class='shot' src='assets/screens/10-termux.jpg' alt='The Python bridge running in Termux: local HTTP request logs' loading='lazy'>
+    <figcaption class='shot-cap'>the bridge, live in Termux</figcaption>
+  </figure>
+  <div class='show-text'>
+    <h3>a real runtime underneath</h3>
+    <p>A Python bridge inside a real Termux userland — GCC, git, python — connected over a local socket. What you see in the logs is what is actually running.</p>
+  </div>
+</div>
+
+<h2>The rest of the toolkit</h2>
+<div class='feat-grid'>
+  <div class='feat'>
+    <h3>real shell, real toolchain</h3>
+    <p>Agents run commands inside the actual Termux shell — compile with GCC, run tests, push to git. No sandboxed toy terminal.</p>
+  </div>
+  <div class='feat'>
+    <h3>surgical file edits</h3>
+    <p>Read, patch, and diff files by line range. Every edit snapshots first, so any change can be rolled back.</p>
+  </div>
+  <div class='feat'>
+    <h3>permission guard</h3>
+    <p>Every tool call passes a permission gate you control — ask, session, always, or never — before anything executes.</p>
+  </div>
+  <div class='feat'>
+    <h3>live web search</h3>
+    <p>Chat sessions route search natively to Tavily for real-time context, with sources kept alongside answers.</p>
+  </div>
+  <div class='feat'>
+    <h3>artifacts &amp; export</h3>
+    <p>Markdown, code, and SVG render in the feed and export to .md or .docx.</p>
+  </div>
+  <div class='feat'>
+    <h3>claude support, byok</h3>
+    <p>Claude via the Anthropic API or OpenRouter with your own key — prompt caching and extended thinking implemented natively, model lists fetched live.</p>
+  </div>
+</div>
+
+<h2>More of the app</h2>
+<p>Tool calls, study mode, and explanations — all running on a phone.</p>
+<div class='shot-grid'>
+  <figure><img class='shot' src='assets/screens/04-patch.jpg' alt='A patch tool call with the edited file and its result' loading='lazy'><figcaption class='shot-cap'>patch call — edit with output</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/05-websearch.jpg' alt='A live web search tool call in a chat session' loading='lazy'><figcaption class='shot-cap'>web search running in chat</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/06-websearch-result.jpg' alt='Web search results with sources in the feed' loading='lazy'><figcaption class='shot-cap'>search results, sources attached</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/08-svg.jpg' alt='An SVG diagram explaining a concept visually' loading='lazy'><figcaption class='shot-cap'>SVG explanation, rendered</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/11-read.jpg' alt='The read tool opening a file' loading='lazy'><figcaption class='shot-cap'>the read tool</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/12-list.jpg' alt='The list tool browsing a directory' loading='lazy'><figcaption class='shot-cap'>directory browsing</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/13-tasks.jpg' alt='Agent task list with progress' loading='lazy'><figcaption class='shot-cap'>agent task list</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/14-quiz.jpg' alt='Study mode quiz question' loading='lazy'><figcaption class='shot-cap'>study mode — quiz</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/15-quiz-results.jpg' alt='Quiz results screen' loading='lazy'><figcaption class='shot-cap'>quiz results</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/16-quiz-explain.jpg' alt='Explanation of a wrong quiz answer' loading='lazy'><figcaption class='shot-cap'>wrong answers, explained</figcaption></figure>
+  <figure><img class='shot' src='assets/screens/17-maths.jpg' alt='Step-by-step math solution in chat' loading='lazy'><figcaption class='shot-cap'>step-by-step math</figcaption></figure>
+</div>
+
+<h2>Get the app</h2>
+<p>Latest release: v1.0.24 — free, open source, no account needed to start.</p>
+<a class='btn' href='https://github.com/shivaww/Nexon/releases/download/v1.0.24/nexon-1.0.24.apk'>Download APK · v1.0.24</a>
+<a class='btn-line' href='guide.html'>Setup guide</a>
+<a class='btn-line' href='plans.html'>Plans</a>
+</main>
+<footer>
+<div class='wrap'>© 2026 NexonAI · <a href='plans.html'>Plans</a> · <a href='guide.html'>Guide</a> · <a href='privacy.html'>Privacy</a> · <a href='terms.html'>Terms</a> · <a href='index.html'>Home</a></div>
+</footer>
+</body>
+</html>

@@ -222,6 +222,9 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 .seam-flow circle{fill:currentColor}
 .seam-flow line{stroke:currentColor;stroke-width:1.5;stroke-dasharray:4 4;animation:dashmove 1.1s linear infinite}
 @keyframes dashmove{to{stroke-dashoffset:-16}}
+/* download */
+.dl-box{display:flex;gap:14px;flex-wrap:wrap;margin-top:26px}
+.btn-big{padding:16px 30px;font-size:16px}
 /* screenshots */
 .shot{display:block;width:100%;height:auto;border:1px solid var(--wire);border-radius:12px;box-shadow:0 10px 30px rgba(23,30,25,.10);background:var(--panel)}
 .shot-cap{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);text-align:center;margin-top:10px}
@@ -264,11 +267,10 @@ html{scroll-behavior:auto}
   <div class='wrap topbar-in'>
     <a class='brand' href='#top'><span class='brand-dot'></span>nexon</a>
     <nav class='nav-links' aria-label='Sections'>
-      <a href='#about'>about</a>
-      <a href='#research'>research</a>
-      <a href='#runtime'>runtime</a>
-      <a href='#features'>features</a>
-      <a href='#install'>install</a>
+      <a href='features.html'>features</a>
+      <a href='plans.html'>plans</a>
+      <a href='guide.html'>guide</a>
+      <a href='contact.html'>contact</a>
       <a href='#company'>company</a>
     </nav>
     <a class='top-cta' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub ↗</a>
@@ -278,15 +280,15 @@ html{scroll-behavior:auto}
 <section class='hero wrap'>
   <div class='hero-grid'>
     <div>
-      <p class='eyebrow'>$ nexon --version → <em>v1.0.23</em> · open source · android + termux</p>
+      <p class='eyebrow'>$ nexon --version → <em>v1.0.24</em> · open source · android + termux</p>
       <h1>The whole agent stack.<br>On your phone<span class='h1-dot'>.</span></h1>
       <p class='hero-sub'>Nexon is an open-source agentic IDE for Android. A Flutter app in front, a Python bridge running inside Termux behind it — real shell, real files, live web research, no cloud IDE in the middle.</p>
       <div class='hero-ctas'>
-        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Download APK</a>
+        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases/download/v1.0.24/nexon-1.0.24.apk'>Download APK</a>
         <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>View on GitHub ↗</a>
       </div>
       <p class='microfacts'>
-        <span>v1.0.23</span>
+        <span>v1.0.24</span>
         <span>Android 7.0+</span>
         <span>Claude · GPT · Gemini · Llama · BYOK</span>
         <span>BYOK — your keys, your device</span>
@@ -304,6 +306,8 @@ html{scroll-behavior:auto}
   </div>
 </section>
 <section class='section wrap' aria-label='Nexon running on a phone'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> nexon --demo</p>
+  <h2>The app, running.</h2>
   <img class='shot' src='assets/screens/01-mainchat.jpg' alt='Nexon main chat on Android: a conversation with an agent, tool calls and answers in one feed' loading='lazy'>
   <p class='shot-cap'>the main chat — agents, tool calls, and answers in one feed, on a phone</p>
 </section>
@@ -325,7 +329,7 @@ html{scroll-behavior:auto}
     <div class='spec-row' role='listitem'><span>models</span><b>Claude, GPT, Gemini, Llama + more · BYOK</b></div>
     <div class='spec-row' role='listitem'><span>research</span><b>3-agent pipeline · in beta · no vector db</b></div>
     <div class='spec-row' role='listitem'><span>license</span><b>free for personal &amp; academic use</b></div>
-    <div class='spec-row' role='listitem'><span>status</span><b>v1.0.23 · actively developed</b></div>
+    <div class='spec-row' role='listitem'><span>status</span><b>v1.0.24 · actively developed</b></div>
   </div>
 </section>
 <section class='section wrap' id='research'>
@@ -359,8 +363,6 @@ html{scroll-behavior:auto}
       <div><span class='k'>SOURCE</span> tavily — 3 results, 2 kept after dedupe</div>
     </div>
   </div>
-  <img class='shot' src='assets/screens/02-research.jpg' alt='Deep Research planner: a question decomposed into numbered research steps with a Start button' loading='lazy'>
-  <p class='shot-cap'>deep research (beta) — the planner decomposes a question into concrete steps</p>
 </section>
 <section class='section wrap' id='runtime'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> ps aux</p>
@@ -411,8 +413,6 @@ html{scroll-behavior:auto}
       </div>
     </div>
   </div>
-  <img class='shot' src='assets/screens/10-termux.jpg' alt='The Nexon Python bridge running in Termux: local HTTP request logs' loading='lazy'>
-  <p class='shot-cap'>the bridge, live in Termux — local HTTP calls between the app and Python</p>
 </section>
 <section class='section wrap' id='features'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> ls features/</p>
@@ -427,33 +427,47 @@ html{scroll-behavior:auto}
       <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>
       <h3>surgical file edits</h3>
       <p>Read, patch, and diff files by line range. Every edit snapshots first, so any change can be rolled back.</p>
-      <img class='shot' src='assets/screens/04-patch.jpg' alt='A patch tool call with the edited file and its result' loading='lazy'>
     </div>
     <div class='feat'>
       <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z'/><path d='M9.5 12l2 2 3.5-4'/></svg>
       <h3>permission guard</h3>
       <p>Every tool call passes a permission gate you control — ask, session, always, or never — before anything executes.</p>
-      <img class='shot' src='assets/screens/03-permission.jpg' alt='The permission dialog: Allow patch? showing a red and green diff before changes apply' loading='lazy'>
     </div>
     <div class='feat'>
       <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='12' cy='12' r='9'/><path d='M3 12h18'/><path d='M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z'/></svg>
       <h3>live web search</h3>
       <p>Chat sessions route search natively to Tavily for real-time context, with sources kept alongside answers.</p>
-      <img class='shot' src='assets/screens/05-websearch.jpg' alt='A live web search tool call running inside a chat session' loading='lazy'>
     </div>
     <div class='feat'>
       <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M8 6l-5 6 5 6'/><path d='M16 6l5 6-5 6'/></svg>
       <h3>artifacts, rendered properly</h3>
       <p>Markdown, syntax-highlighted code, and interactive SVG diagrams render in the feed, and export to .md or .docx.</p>
-      <img class='shot' src='assets/screens/07-artifacts.jpg' alt='A generated web page artifact rendered in the chat feed' loading='lazy'>
     </div>
     <div class='feat'>
       <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='8' cy='15' r='4'/><path d='M11 12L20 3'/><path d='M17 6l3 3'/></svg>
       <h3>claude support, byok</h3>
       <p>Use Claude models through the Anthropic API or OpenRouter with your own key — prompt caching and extended thinking are implemented natively. Model lists are fetched live from each provider, so new releases work the day they ship. Every major provider is built in — OpenAI, Google, Mistral, xAI, DeepSeek, Groq and more — or add any OpenAI-compatible endpoint. Your keys stay on your device.</p>
-      <img class='shot' src='assets/screens/09-settings.jpg' alt='Model settings: provider, model, temperature, output length, and thinking depth' loading='lazy'>
     </div>
   </div>
+</section>
+<section class='section wrap' id='plans'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> cat plans.md</p>
+  <h2>Free today. Managed plans coming.</h2>
+  <p class='sec-sub'>The app is free with your own API keys — full features, no limits. Coming soon: Go, Plus, Pro, and Max subscriptions with managed credits for Claude and a wide range of models, daily usage limits, and zero key juggling. Chats stay on your device on every plan.</p>
+  <div class='hero-ctas'>
+    <a class='btn btn-solid' href='plans.html'>See the plans</a>
+    <a class='btn btn-line' href='mailto:founder@nexonai.me'>Ask about plans</a>
+  </div>
+</section>
+<section class='section wrap' id='download'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> wget nexon</p>
+  <h2>Get Nexon on your phone.</h2>
+  <p class='sec-sub'>Latest release: v1.0.24 — free and open source. No account needed to start, no analytics, no ads; your keys and chats stay on your device.</p>
+  <div class='dl-box'>
+    <a class='btn btn-solid btn-big' href='https://github.com/shivaww/Nexon/releases/download/v1.0.24/nexon-1.0.24.apk'>Download APK · v1.0.24</a>
+    <a class='btn btn-line' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>All releases ↗</a>
+  </div>
+  <p class='sec-sub' style='margin-top:20px'>You need Android 7.0+, <a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux from F-Droid</a>, and Python 3.10+ inside it. New here? <a href='guide.html'>Read the 5-step guide →</a></p>
 </section>
 <section class='section wrap' id='install'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> ./install_bridge.sh</p>
@@ -526,18 +540,14 @@ html{scroll-behavior:auto}
 <section class='section wrap' id='gallery' aria-label='More of the app'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> ls screenshots/</p>
   <h2>More of the app.</h2>
-  <p class='sec-sub'>Study mode with quizzes and explanations, SVG visual explanations, live search with sources, tool calls, and task tracking — all on a phone.</p>
+  <p class='sec-sub'>Study mode with quizzes, SVG explanations, live search with sources, and task tracking — real screenshots, on a phone.</p>
   <div class='shot-grid'>
-    <img class='shot' src='assets/screens/14-quiz.jpg' alt='Study mode quiz question' loading='lazy'>
-    <img class='shot' src='assets/screens/15-quiz-results.jpg' alt='Quiz results screen' loading='lazy'>
-    <img class='shot' src='assets/screens/16-quiz-explain.jpg' alt='Explanation of a wrong quiz answer' loading='lazy'>
-    <img class='shot' src='assets/screens/08-svg.jpg' alt='An SVG diagram explaining a concept visually' loading='lazy'>
-    <img class='shot' src='assets/screens/17-maths.jpg' alt='Step-by-step math solution in chat' loading='lazy'>
-    <img class='shot' src='assets/screens/06-websearch-result.jpg' alt='Web search results with sources in the feed' loading='lazy'>
-    <img class='shot' src='assets/screens/11-read.jpg' alt='The read tool opening a file' loading='lazy'>
-    <img class='shot' src='assets/screens/12-list.jpg' alt='The list tool browsing a directory' loading='lazy'>
-    <img class='shot' src='assets/screens/13-tasks.jpg' alt='Agent task list with progress' loading='lazy'>
+    <img class='shot' src='assets/screens/02-research.jpg' alt='Deep research planner' loading='lazy'>
+    <img class='shot' src='assets/screens/03-permission.jpg' alt='Permission dialog with diff' loading='lazy'>
+    <img class='shot' src='assets/screens/07-artifacts.jpg' alt='Artifact rendered in the feed' loading='lazy'>
+    <img class='shot' src='assets/screens/14-quiz.jpg' alt='Study mode quiz' loading='lazy'>
   </div>
+  <p class='sec-sub' style='margin-top:22px'><a href='features.html'>All features and every screenshot →</a></p>
 </section>
 <section class='close'>
   <div class='wrap'>
@@ -574,6 +584,8 @@ html{scroll-behavior:auto}
         <ul>
           <li><a href='https://github.com/shivaww/Nexon#readme' target='_blank' rel='noopener noreferrer'>Documentation</a></li>
           <li><a href='guide.html'>How to use</a></li>
+          <li><a href='features.html'>Features</a></li>
+          <li><a href='plans.html'>Plans</a></li>
           <li><a href='https://github.com/shivaww/Nexon/blob/main/LICENSE' target='_blank' rel='noopener noreferrer'>License</a></li>
           <li><a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux (F-Droid)</a></li>
         </ul>

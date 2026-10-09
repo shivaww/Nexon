@@ -6,7 +6,7 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 
 **Claude support:** Use Claude models through the Anthropic API or OpenRouter with your own key — prompt caching and extended thinking are implemented natively, and model lists are fetched live. Nexon is developed with heavy use of Claude. OpenAI, Google, Mistral, xAI, DeepSeek, Groq, and more are also supported (BYOK).
 
-**By NexonAI:** Nexon is the first product. Nexon Studio — an AI creative tool for motion graphics and voice that keeps everything on-device — is in development ([repo](https://github.com/shivaww/Recorder)). The tools are free to use: planned subscriptions sell managed model access as credits with daily usage limits, while chats stay on your device.
+**By NexonAI:** Nexon is the first product. Nexon Studio — an AI creative tool for motion graphics and voice that keeps everything on-device — is in development ([repo](https://github.com/shivaww/Recorder)). The tools are free to use: planned subscriptions sell managed model access as credits with daily usage limits, while chats stay on your device. Planned tiers: **Go, Plus, Pro, Max**.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
