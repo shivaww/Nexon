@@ -232,6 +232,9 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 /* download */
 .dl-box{display:flex;gap:14px;flex-wrap:wrap;margin-top:26px}
 .btn-big{padding:16px 30px;font-size:16px}
+/* inline links + hero shot */
+.sec-sub a{color:var(--signal);font-weight:600}
+.hero-shot{margin:0}
 /* screenshots */
 .shot{display:block;width:100%;height:auto;border:1px solid var(--wire);border-radius:12px;box-shadow:0 10px 30px rgba(23,30,25,.10);background:var(--panel)}
 .shot-cap{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);text-align:center;margin-top:10px}
@@ -324,21 +327,18 @@ html{scroll-behavior:auto}
         <span>contact — <a href='mailto:founder@nexonai.me' style='color:var(--signal)'>founder@nexonai.me</a></span>
       </p>
     </div>
-    <div class='term' aria-label='Example Nexon session'>
-      <div class='term-bar'>
-        <span class='term-dot'></span><span class='term-dot'></span><span class='term-dot'></span>
-        <span class='term-title'>nexon — termux session</span>
-        <span class='term-live'><span class='term-live-dot'></span>live</span>
-      </div>
-      <div class='term-body' id='term-body'></div>
-    </div>
+    <figure class='hero-shot'>
+      <img class='shot' src='assets/screens/01-mainchat.jpg' alt='Nexon main chat on Android: a conversation with an agent, tool calls and answers in one feed'>
+      <figcaption class='shot-cap'>the real app — agents, tool calls, and answers, on a phone</figcaption>
+    </figure>
   </div>
 </section>
-<section class='section wrap' aria-label='Nexon running on a phone'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> nexon --demo</p>
-  <h2>The app, running.</h2>
-  <img class='shot' src='assets/screens/01-mainchat.jpg' alt='Nexon main chat on Android: a conversation with an agent, tool calls and answers in one feed' loading='lazy'>
-  <p class='shot-cap'>the main chat — agents, tool calls, and answers in one feed, on a phone</p>
+<section class='section wrap' id='more'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> ls ~/nexon</p>
+  <h2>There's more.</h2>
+  <p class='sec-sub'>Nexon is full of <a href='features.html'>features</a> — live web search with sources, deep research, agentic file access with permission prompts, study mode, and artifacts that render properly. Every one is documented with real screenshots.</p>
+  <p class='sec-sub'>It's free today with your own API keys. Managed <a href='plans.html'>plans</a> — Go, Plus, Pro, and Max, with credits and daily usage limits — are coming, and your chats stay on your device either way.</p>
+  <p class='sec-sub'>All of it is built by a four-person <a href='team.html'>team</a> in Hyderabad, India, shipping from phones in Termux.</p>
 </section>
 <section class='section wrap' id='why'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> cat problem.txt</p>
