@@ -1,6 +1,6 @@
 # Nexon 🚀
 
-An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and 3-agent Deep Research loops directly on your phone. Bring your own API keys: Nexon supports Anthropic Claude (fable 5.1 Opus 5.5 , Sonnet 5.5 , Haiku 5.5) alongside other LLM providers, and is built and developed with Claude.
+An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively on Android via Termux. Nexon combines an interactive Flutter UI with a local Python bridge to orchestrate shell execution, file manipulation, live web search, and 3-agent Deep Research loops directly on your phone. Bring your own API keys: Nexon supports Anthropic Claude (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5) alongside 36 other LLM providers.
 
 **Website:** https://nexonai.me · **Contact:** [founder@nexonai.me](mailto:founder@nexonai.me)
 
