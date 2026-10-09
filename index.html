@@ -245,6 +245,10 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 .faq summary::before{content:'+ ';color:var(--signal)}
 .faq[open] summary::before{content:'- '}
 .faq p{padding-bottom:14px}
+.checks{margin-top:16px;list-style:none}
+.checks li{font-family:var(--mono);font-size:14px;color:var(--ink-soft);padding-block:10px;border-bottom:1px solid var(--wire)}
+.checks li::before{content:'✓ ';color:var(--signal);font-weight:600}
+.checks b{color:var(--ink)}
 /* screenshots */
 .shot{display:block;width:100%;height:auto;border:1px solid var(--wire);border-radius:12px;box-shadow:0 10px 30px rgba(23,30,25,.10);background:var(--panel)}
 .shot-cap{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);text-align:center;margin-top:10px}
@@ -351,11 +355,19 @@ html{scroll-behavior:auto}
   <div class='stat'><b>100%</b><span>on-device</span></div>
 </section>
 <section class='section wrap' id='more'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> ls ~/nexon</p>
-  <h2>There's more.</h2>
-  <p class='sec-sub'>Nexon is full of <a href='features.html'>features</a> — live web search with sources, deep research, agentic file access with permission prompts, study mode, and artifacts that render properly. Every one is documented with real screenshots.</p>
-  <p class='sec-sub'>It's free today with your own API keys. Managed <a href='plans.html'>plans</a> — Go, Plus, Pro, and Max, with credits and daily usage limits — are coming, and your chats stay on your device either way.</p>
-  <p class='sec-sub'>All of it is built by a four-person <a href='team.html'>team</a> in Hyderabad, India, shipping from phones in Termux.</p>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> man nexon</p>
+  <h2>What is Nexon?</h2>
+  <p class='sec-sub'>An open-source AI coding agent that runs entirely on your Android phone — real shell, real files, live research, your keys. See <a href='features.html'>every feature</a>, the <a href='plans.html'>plans</a>, and the <a href='team.html'>team</a> behind it.</p>
+  <ul class='checks'>
+    <li><b>real shell</b> — agents compile, test, and push inside Termux</li>
+    <li><b>surgical file edits</b> — line-range patches, snapshots, rollback</li>
+    <li><b>permission guard</b> — you approve every change, with diff preview</li>
+    <li><b>live web search</b> — Tavily, sources attached to answers</li>
+    <li><b>deep research</b> — three-phase pipeline (beta)</li>
+    <li><b>study mode</b> — quizzes with explained wrong answers</li>
+    <li><b>artifacts &amp; SVG</b> — render in the feed, export .md/.docx</li>
+    <li><b>37 providers, BYOK</b> — Anthropic built in, keys stay on device</li>
+  </ul>
 </section>
 <section class='section wrap' id='why'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> cat problem.txt</p>
@@ -390,6 +402,8 @@ html{scroll-behavior:auto}
   <details class='faq'><summary>Is it really free?</summary><p>Yes — Apache-2.0, including commercial use. Managed subscriptions (Go, Plus, Pro, Max) are coming for people who would rather not manage API keys; the app you download today is free.</p></details>
   <details class='faq'><summary>Why Android only?</summary><p>The whole point is local: Termux provides a real Linux userland on Android, and the agent runs there, on hardware you own. Cloud IDEs already cover desktop and web — this one lives on the phone in your pocket.</p></details>
   <details class='faq'><summary>What works today, and what is coming?</summary><p>Shipped: chat, agentic file tools, the permission guard, live web search, study mode, artifacts, 37 providers. In beta: deep research. In development: Nexon Studio and managed plans. Nothing on this page is a mockup.</p></details>
+  <details class='faq'><summary>How much does Nexon cost?</summary><p>Nothing, today: Apache-2.0, every feature, no limits. Managed plans (Go, Plus, Pro, Max) arrive with subscriptions — credits with daily usage limits, chats still on your device.</p></details>
+  <details class='faq'><summary>Is it open source?</summary><p>Yes — Apache-2.0, the full stack: Flutter app, Python bridge, and the native tool binary, all public on GitHub. Fork it, inspect it, run it commercially.</p></details>
 </section>
 <section class='section wrap' id='download'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> wget nexon</p>
@@ -402,6 +416,7 @@ html{scroll-behavior:auto}
     <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>View Source ↗</a>
   </div>
   <p class='sec-sub' style='margin-top:20px'>You need Android 7.0+, <a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux from F-Droid</a>, and Python 3.10+ inside it. New here? <a href='guide.html'>Read the 5-step guide →</a></p>
+  <div class='cmdrow'><span class='path'>$ </span><span>git clone https://github.com/shivaww/Nexon.git</span><button class='copybtn' type='button' data-copy='git clone https://github.com/shivaww/Nexon.git'>copy</button></div>
 </section>
 </main>
 <footer>
