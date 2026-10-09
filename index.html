@@ -237,6 +237,21 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 .shot-cap{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);text-align:center;margin-top:10px}
 .shot-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:8px}
 .shot-grid .shot{box-shadow:0 6px 18px rgba(23,30,25,.08)}
+/* menu */
+.menu-btn{background:none;border:1px solid var(--ink);border-radius:8px;padding:10px 9px;cursor:pointer;display:flex;flex-direction:column;gap:5px;align-items:center}
+.menu-btn span{display:block;width:20px;height:2px;background:var(--ink);border-radius:1px;transition:transform .22s ease,opacity .22s ease}
+.menu-btn:focus-visible{outline:2px solid var(--signal);outline-offset:3px}
+.menu{position:fixed;inset:0;top:60px;background:var(--paper);z-index:200;padding:26px 0 40px;overflow:auto;border-bottom:1px solid var(--wire);visibility:hidden;opacity:0;transform:translateY(-10px);transition:opacity .22s ease,transform .22s ease,visibility .22s}
+.menu-open .menu{visibility:visible;opacity:1;transform:none}
+.menu-open{overflow:hidden}
+.menu-open .menu-btn span:nth-child(1){transform:translateY(7px) rotate(45deg)}
+.menu-open .menu-btn span:nth-child(2){opacity:0}
+.menu-open .menu-btn span:nth-child(3){transform:translateY(-7px) rotate(-45deg)}
+.menu-prompt{font-family:var(--mono);font-size:13px;color:var(--ink-soft);margin-bottom:12px}
+.menu-item{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;padding:17px 4px;border-bottom:1px solid var(--wire);text-decoration:none}
+.menu-item span{font-family:var(--mono);font-weight:600;font-size:17px;color:var(--ink)}
+.menu-item em{font-style:normal;font-family:var(--mono);font-size:12.5px;color:var(--ink-soft)}
+.menu-item:hover span,.menu-item:focus-visible span{color:var(--signal)}
 /* responsive */
 @media (max-width:920px){
 .hero-grid{grid-template-columns:1fr;gap:44px}
@@ -260,6 +275,7 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 }
 @media (prefers-reduced-motion:reduce){
 html{scroll-behavior:auto}
+.menu{transition:none}
 .term-live-dot,.cursor{animation:none}
 .rv,.rv.in{opacity:1;transform:none;animation:none}
 .packet{display:none}
@@ -273,16 +289,22 @@ html{scroll-behavior:auto}
 <header class='topbar'>
   <div class='wrap topbar-in'>
     <a class='brand' href='#top'><span class='brand-dot'></span>nexon</a>
-    <nav class='nav-links' aria-label='Sections'>
-      <a href='features.html'>features</a>
-      <a href='plans.html'>plans</a>
-      <a href='guide.html'>guide</a>
-      <a href='contact.html'>contact</a>
-      <a href='#company'>company</a>
-    </nav>
-    <a class='top-cta' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub ↗</a>
+    <button class='menu-btn' type='button' aria-expanded='false' aria-controls='site-menu' aria-label='Open menu'>
+      <span></span><span></span><span></span>
+    </button>
   </div>
 </header>
+<nav class='menu' id='site-menu' aria-label='Site'>
+  <div class='wrap'>
+    <p class='menu-prompt'>$ cd ~/</p>
+    <a class='menu-item' href='features.html'><span>features/</span><em>what the app does</em></a>
+    <a class='menu-item' href='plans.html'><span>plans/</span><em>free today, tiers coming</em></a>
+    <a class='menu-item' href='team.html'><span>team/</span><em>who builds it</em></a>
+    <a class='menu-item' href='contact.html'><span>contact/</span><em>email and issues</em></a>
+    <a class='menu-item' href='terms.html'><span>terms/</span><em>the rules</em></a>
+    <a class='menu-item' href='privacy.html'><span>privacy/</span><em>your data, on your device</em></a>
+  </div>
+</nav>
 <main id='top'>
 <section class='hero wrap'>
   <div class='hero-grid'>
@@ -323,147 +345,13 @@ html{scroll-behavior:auto}
   <h2>Why Nexon exists.</h2>
   <p class='sec-sub'>Most AI coding tools need a laptop and a cloud connection. Nexon gives you full agentic coding, file editing, and deep research directly on your Android phone using Termux — with your own API keys, on hardware you own.</p>
 </section>
-<section class='section wrap' id='about'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> man nexon</p>
-  <h2>An agentic development and<br>research environment for Android.</h2>
-  <p class='sec-sub'>Nexon brings agentic workflows to Android through Termux. A Flutter interface in front, a Python bridge behind it, and a real Linux userland underneath — an AI coding environment, agentic shell and file tools, live web search, and a multi-agent deep-research pipeline, in a workspace that lives on your phone instead of a rented cloud machine.</p>
-  <p class='sec-sub'>It's built for developers who want a real toolchain when a desktop isn't around, and for anyone who wants capable agents running on hardware they own, with their own API keys.</p>
-  <div class='spec' role='list' aria-label='Nexon at a glance'>
-    <p class='spec-h'>nexon at a glance</p>
-    <div class='spec-row' role='listitem'><span>platform</span><b>Android 7.0+ · Termux userland</b></div>
-    <div class='spec-row' role='listitem'><span>interface</span><b>Flutter · Material 3</b></div>
-    <div class='spec-row' role='listitem'><span>bridge</span><b>Python · WebSocket :8765 · HTTP :8390</b></div>
-    <div class='spec-row' role='listitem'><span>models</span><b>Claude, GPT, Gemini, Llama + more · BYOK</b></div>
-    <div class='spec-row' role='listitem'><span>research</span><b>3-agent pipeline · in beta · no vector db</b></div>
-    <div class='spec-row' role='listitem'><span>license</span><b>free for personal &amp; academic use</b></div>
-    <div class='spec-row' role='listitem'><span>status</span><b>v1.0.24 · actively developed</b></div>
-  </div>
-</section>
-<section class='section wrap' id='research'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> nexon research "state of on-device agents"</p>
-  <h2>Three agents, one pipeline,<br>zero vector databases.</h2>
-  <p class='sec-sub'>Deep research in Nexon runs as an autonomous three-phase loop. Evidence is extracted into structured FACT and FINDING records — plain, auditable JSON — instead of an embedding index, so the whole engine fits on a phone. Deep Research is in beta: the pipeline runs end to end, but results can occasionally be uneven — it's being improved continuously.</p>
-  <div class='stages'>
-    <div class='stage'>
-      <span class='stage-tag'>phase 1 — planner</span>
-      <h3>Decompose</h3>
-      <p>Turns the question into a research plan: sub-questions, search angles, and a context budget the later phases have to respect.</p>
-      <span class='meter' aria-hidden='true'><i></i></span>
-    </div>
-    <div class='stage'>
-      <span class='stage-tag'>phase 2 — researcher</span>
-      <h3>Collect</h3>
-      <p>Runs live web searches, reads results, and writes precise evidence records — numbers, dates, claims with sources — into the store.</p>
-      <span class='meter' aria-hidden='true'><i></i></span>
-    </div>
-    <div class='stage'>
-      <span class='stage-tag'>phase 3 — synthesizer</span>
-      <h3>Report</h3>
-      <p>Compiles the evidence into a cited report inside a configurable token budget, rendered as a Markdown artifact you can export.</p>
-      <span class='meter' aria-hidden='true'><i></i></span>
-    </div>
-    <div class='facts' aria-label='Example evidence records'>
-      <div class='cap'>evidence store · sample records</div>
-      <div><span class='k'>FACT <b>ec0391</b></span> on-device SLM latency — 1.9s median, ARM 2024</div>
-      <div><span class='k'>FINDING <b>17c2</b></span> hybrid routing wins on cost at ≥12 turns</div>
-      <div><span class='k'>FACT <b>a41f7c</b></span> Termux ships GCC 13.2 + Python 3.11</div>
-      <div><span class='k'>SOURCE</span> tavily — 3 results, 2 kept after dedupe</div>
-    </div>
-  </div>
-</section>
-<section class='section wrap' id='runtime'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> ps aux</p>
-  <h2>One device, two processes,<br>a socket between them.</h2>
-  <p class='sec-sub'>Nexon split-processes by design: Flutter owns the UI and state, a Python bridge owns the Termux userland. They speak JSON-RPC over a local WebSocket — everything stays on the phone.</p>
-  <div class='arch'>
-    <div class='arch-layer'>
-      <h3><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='7' y='2' width='10' height='20' rx='2'/><path d='M11 18h2'/></svg>flutter app <span>— foreground · UI · state</span></h3>
-      <div class='chips'>
-        <span class='chip'>chat + IDE panels</span>
-        <span class='chip'>artifact renderer · md/svg/docx</span>
-        <span class='chip'>cost tracker</span>
-        <span class='chip'>riverpod</span>
-        <span class='chip'>material 3</span>
-      </div>
-    </div>
-    <div class='arch-seam'>
-      <svg class='seam-flow' viewBox='0 0 64 14' aria-hidden='true'><circle cx='4' cy='7' r='2.5'/><line x1='9' y1='7' x2='55' y2='7'/><circle cx='60' cy='7' r='2.5'/></svg>
-      <span>json-rpc 2.0</span>
-      <span><b>ws://localhost:8765</b></span>
-      <span>http :8390</span>
-      <span>checkpoint · rollback</span>
-    </div>
-    <div class='arch-layer arch-deep'>
-      <h3><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='3' y='4' width='18' height='7' rx='1.5'/><rect x='3' y='13' width='18' height='7' rx='1.5'/><path d='M7 7.5h.01'/><path d='M7 16.5h.01'/></svg>python bridge <span>— termux userland · aiohttp</span></h3>
-      <div class='chips'>
-        <span class='chip'>shell_exec</span>
-        <span class='chip'>patch_file · diff_files</span>
-        <span class='chip'>deep research engine</span>
-        <span class='chip'>tavily search</span>
-        <span class='chip'>permission guard</span>
-      </div>
-    </div>
-    <div class='arch-seam'>
-      <svg class='seam-flow' viewBox='0 0 64 14' aria-hidden='true'><circle cx='4' cy='7' r='2.5'/><line x1='9' y1='7' x2='55' y2='7'/><circle cx='60' cy='7' r='2.5'/></svg>
-      <span>exec</span>
-      <span>fork</span>
-      <span><b>termux — real linux userland</b></span>
-      <span>gcc · git · python</span>
-    </div>
-    <div class='arch-layer arch-deep'>
-      <h3><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><ellipse cx='12' cy='5' rx='8' ry='3'/><path d='M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5'/><path d='M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'/></svg>device storage <span>— local-first, then cloud</span></h3>
-      <div class='chips'>
-        <span class='chip'>isar db</span>
-        <span class='chip'>secure storage</span>
-        <span class='chip'>google drive backup</span>
-        <span class='chip'>supabase auth</span>
-      </div>
-    </div>
-  </div>
-</section>
-<section class='section wrap' id='features'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> ls features/</p>
-  <h2>Everything a working agent needs,<br>nothing it doesn't.</h2>
-  <div class='feat-grid'>
-    <div class='feat'>
-      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M4 17l6-5-6-5'/><path d='M12 19h8'/></svg>
-      <h3>real shell, real toolchain</h3>
-      <p>Agents run commands inside the actual Termux shell — compile with GCC, run tests, push to git. No sandboxed toy terminal.</p>
-    </div>
-    <div class='feat'>
-      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>
-      <h3>surgical file edits</h3>
-      <p>Read, patch, and diff files by line range. Every edit snapshots first, so any change can be rolled back.</p>
-    </div>
-    <div class='feat'>
-      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z'/><path d='M9.5 12l2 2 3.5-4'/></svg>
-      <h3>permission guard</h3>
-      <p>Every tool call passes a permission gate you control — ask, session, always, or never — before anything executes.</p>
-    </div>
-    <div class='feat'>
-      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='12' cy='12' r='9'/><path d='M3 12h18'/><path d='M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z'/></svg>
-      <h3>live web search</h3>
-      <p>Chat sessions route search natively to Tavily for real-time context, with sources kept alongside answers.</p>
-    </div>
-    <div class='feat'>
-      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M8 6l-5 6 5 6'/><path d='M16 6l5 6-5 6'/></svg>
-      <h3>artifacts, rendered properly</h3>
-      <p>Markdown, syntax-highlighted code, and interactive SVG diagrams render in the feed, and export to .md or .docx.</p>
-    </div>
-    <div class='feat'>
-      <svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='8' cy='15' r='4'/><path d='M11 12L20 3'/><path d='M17 6l3 3'/></svg>
-      <h3>claude support, byok</h3>
-      <p>Use Claude models through the Anthropic API or OpenRouter with your own key — prompt caching and extended thinking are implemented natively. Model lists are fetched live from each provider, so new releases work the day they ship. Every major provider is built in — OpenAI, Google, Mistral, xAI, DeepSeek, Groq and more — or add any OpenAI-compatible endpoint. Your keys stay on your device.</p>
-    </div>
-  </div>
-</section>
-<section class='section wrap' id='plans'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> cat plans.md</p>
-  <h2>Free today. Managed plans coming.</h2>
-  <p class='sec-sub'>The app is free with your own API keys — full features, no limits. Coming soon: Go, Plus, Pro, and Max subscriptions with managed credits for Claude and a wide range of models, daily usage limits, and zero key juggling. Chats stay on your device on every plan.</p>
+<section class='section wrap' id='claude'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> claude --status</p>
+  <h2>Built on Claude.</h2>
+  <p class='sec-sub'>Nexon is developed with heavy use of Claude, and it supports Claude properly: prompt caching and extended thinking are implemented natively, and model lists are fetched live, so new Claude releases work the day they ship. When subscriptions launch, managed plans will offer Claude and other models as credits with daily usage limits — no API keys to juggle, and chats still on your device. Your own Claude key works today, free.</p>
   <div class='hero-ctas'>
-    <a class='btn btn-solid' href='plans.html'>See the plans</a>
-    <a class='btn btn-line' href='mailto:founder@nexonai.me'>Ask about plans</a>
+    <a class='btn btn-line' href='features.html'>See it in the app →</a>
+    <a class='btn btn-line' href='plans.html'>Plans</a>
   </div>
 </section>
 <section class='section wrap' id='download'>
@@ -475,105 +363,6 @@ html{scroll-behavior:auto}
     <a class='btn btn-line' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>All releases ↗</a>
   </div>
   <p class='sec-sub' style='margin-top:20px'>You need Android 7.0+, <a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux from F-Droid</a>, and Python 3.10+ inside it. New here? <a href='guide.html'>Read the 5-step guide →</a></p>
-</section>
-<section class='section wrap' id='install'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> ./install_bridge.sh</p>
-  <h2>Running in about<br>three minutes.</h2>
-  <p class='sec-sub'>Everything installs from your phone. You need an Android 7.0+ device, Termux from F-Droid, and Python 3.10+ inside it. Prefer it step by step? <a href='guide.html'>Read the full guide →</a></p>
-  <div class='steps'>
-    <div class='step'>
-      <span class='step-tag'>step 01</span>
-      <div>
-        <h3>Install the app</h3>
-        <p>Grab the latest APK from GitHub Releases and install it. Termux comes from F-Droid — the Play Store build won't work.</p>
-        <div class='cmdrow'><span>github.com/shivaww/Nexon/releases</span><button class='copybtn' type='button' data-copy='https://github.com/shivaww/Nexon/releases'>copy</button></div>
-      </div>
-    </div>
-    <div class='step'>
-      <span class='step-tag'>step 02</span>
-      <div>
-        <h3>Set up the bridge</h3>
-        <p>Clone the repo inside Termux and run the setup script. It installs the bridge's Python dependencies and prepares the workspace.</p>
-        <div class='cmdrow'><span class='path'>$ </span><span>chmod +x install_bridge.sh &amp;&amp; ./install_bridge.sh</span><button class='copybtn' type='button' data-copy='chmod +x install_bridge.sh &amp;&amp; ./install_bridge.sh'>copy</button></div>
-      </div>
-    </div>
-    <div class='step'>
-      <span class='step-tag'>step 03</span>
-      <div>
-        <h3>Start the server</h3>
-        <p>Launch the bridge — WebSocket on 8765, HTTP on 8390 — then open Nexon and point it at your keys. That's the whole stack.</p>
-        <div class='cmdrow'><span class='path'>$ </span><span>cd ~/nexon_bridge &amp;&amp; python3 mcp_server.py</span><button class='copybtn' type='button' data-copy='cd ~/nexon_bridge &amp;&amp; python3 mcp_server.py'>copy</button></div>
-      </div>
-    </div>
-  </div>
-</section>
-<section class='section wrap' id='opensource'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> git log --oneline | head -3</p>
-  <h2>Open source, honestly licensed.</h2>
-  <p class='sec-sub'>The full stack — Flutter app, Python bridge, native tool binary — is public on GitHub under the Nexon Non-Commercial License: free for personal, academic, and non-commercial use. It is not unrestricted free software, and it doesn't pretend to be. Subscriptions are coming soon, with commercial licensing to follow.</p>
-  <div class='hero-ctas'>
-    <a class='btn btn-solid' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>Explore the code ↗</a>
-    <a class='btn btn-line' href='https://github.com/shivaww/Nexon/blob/main/LICENSE' target='_blank' rel='noopener noreferrer'>Read the license</a>
-  </div>
-</section>
-<section class='section wrap' id='next'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> grep -i soon README.md</p>
-  <h2>What's next.</h2>
-  <p class='sec-sub'>Only direction actually documented in the repository — no invented milestones, dates, or numbers.</p>
-  <p class='sec-sub'>The tools are free to use. What subscriptions sell is convenience: managed access to Claude and other models as credits per plan, with daily usage limits — no API keys to manage, no provider billing walls, and no risk of an agent burning through your paid API quota overnight. Your chats stay on your device (and your own Drive backup) either way.</p>
-  <div class='spec' role='list' aria-label='Documented direction'>
-    <p class='spec-h'>documented direction</p>
-    <div class='spec-row' role='listitem'><span>subscriptions</span><b>coming soon — per the README</b></div>
-    <div class='spec-row' role='listitem'><span>commercial licensing</span><b>opens when subscriptions launch</b></div>
-    <div class='spec-row' role='listitem'><span>everything else</span><b>tracked publicly in GitHub issues</b></div>
-  </div>
-</section>
-<section class='section wrap' id='company'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> whois nexon</p>
-  <h2>One founder, one phone,<br>no cloud in the middle.</h2>
-  <p class='sec-sub'>NexonAI is a four-person team from Hyderabad, India, building two products: Nexon, the open-source mobile agentic IDE this site is about, and <a href='https://github.com/shivaww/Recorder' target='_blank' rel='noopener noreferrer'>Nexon Studio</a> — an AI creative tool for motion graphics and on-device voice cloning, in development. Everything is built and shipped by developers working from phones in Termux — the same environment the products run in.</p>
-  <div class='spec' role='list' aria-label='Company facts'>
-    <p class='spec-h'>company facts</p>
-    <div class='spec-row' role='listitem'><span>company</span><b>NexonAI</b></div>
-    <div class='spec-row' role='listitem'><span>products</span><b>Nexon — agentic IDE (shipped) · Nexon Studio — creative AI (in development)</b></div>
-    <div class='spec-row' role='listitem'><span>founded</span><b>June 2026</b></div>
-    <div class='spec-row' role='listitem'><span>founder</span><b>K. Shiva Reddy</b></div>
-    <div class='spec-row' role='listitem'><span>team</span><b>4 developers</b></div>
-    <div class='spec-row' role='listitem'><span>location</span><b>Hyderabad, India</b></div>
-    <div class='spec-row' role='listitem'><span>stage</span><b>early stage · pre-revenue</b></div>
-    <div class='spec-row' role='listitem'><span>contact</span><b><a href='mailto:founder@nexonai.me'>founder@nexonai.me</a></b></div>
-  </div>
-  <div class='team-grid'>
-    <div class='member'><strong>K. Shiva Reddy</strong><span>Founder · Developer</span><a href='https://www.linkedin.com/in/k-shiva-reddy-undefined-92501135b/' target='_blank' rel='noopener noreferrer'>LinkedIn ↗</a></div>
-    <div class='member'><strong>K. Hahsha Vardhan Reddy</strong><span>Developer</span></div>
-    <div class='member'><strong>R. Rithvik Ram</strong><span>Developer</span></div>
-    <div class='member'><strong>C. Naga Charan</strong><span>Developer</span></div>
-  </div>
-</section>
-<section class='section wrap' id='gallery' aria-label='More of the app'>
-  <p class='sec-eyebrow'><span class='dollar'>$</span> ls screenshots/</p>
-  <h2>More of the app.</h2>
-  <p class='sec-sub'>Study mode with quizzes, SVG explanations, live search with sources, and task tracking — real screenshots, on a phone.</p>
-  <div class='shot-grid'>
-    <img class='shot' src='assets/screens/02-research.jpg' alt='Deep research planner' loading='lazy'>
-    <img class='shot' src='assets/screens/03-permission.jpg' alt='Permission dialog with diff' loading='lazy'>
-    <img class='shot' src='assets/screens/07-artifacts.jpg' alt='Artifact rendered in the feed' loading='lazy'>
-    <img class='shot' src='assets/screens/14-quiz.jpg' alt='Study mode quiz' loading='lazy'>
-  </div>
-  <p class='sec-sub' style='margin-top:22px'><a href='features.html'>All features and every screenshot →</a></p>
-</section>
-<section class='close'>
-  <div class='wrap'>
-    <h2>Cloud IDEs rent you a desk.<br>This one fits in your pocket.</h2>
-    <p>Nexon is built, shipped, and iterated in the open. If you're building on-device agents too, we'd like to hear from you.</p>
-    <div class='hero-ctas' style='justify-content:center'>
-      <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Explore Nexon</a>
-      <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>GitHub ↗</a>
-    </div>
-    <p class='microfacts' style='justify-content:center;margin-top:26px'>
-      <span>questions · partnerships · feedback — <a href='mailto:founder@nexonai.me' style='color:var(--signal)'>founder@nexonai.me</a></span>
-    </p>
-  </div>
 </section>
 </main>
 <footer>
@@ -599,6 +388,7 @@ html{scroll-behavior:auto}
           <li><a href='guide.html'>How to use</a></li>
           <li><a href='features.html'>Features</a></li>
           <li><a href='plans.html'>Plans</a></li>
+          <li><a href='team.html'>Team</a></li>
           <li><a href='https://github.com/shivaww/Nexon/blob/main/LICENSE' target='_blank' rel='noopener noreferrer'>License</a></li>
           <li><a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux (F-Droid)</a></li>
         </ul>
@@ -615,7 +405,7 @@ html{scroll-behavior:auto}
       </div>
     </div>
     <div class='foot-base'>
-      <span>© 2026 NexonAI · built by K. Shiva Reddy</span>
+      <span>© 2026 NexonAI · <a href='team.html'>four developers, Hyderabad</a></span>
       <span>android 7+ · termux · local-first, BYOK</span>
     </div>
   </div>
@@ -825,6 +615,25 @@ if(!motion){
     });
   },{threshold:0.12,rootMargin:'0px 0px -36px 0px'});
   document.querySelectorAll('.rv').forEach(function(el){io.observe(el);});
+}
+/* menu */
+var menuBtn=document.querySelector('.menu-btn');
+var siteMenu=document.getElementById('site-menu');
+if(menuBtn&&siteMenu){
+  function setMenu(open){
+    menuBtn.setAttribute('aria-expanded',open?'true':'false');
+    menuBtn.setAttribute('aria-label',open?'Close menu':'Open menu');
+    document.body.classList.toggle('menu-open',open);
+  }
+  menuBtn.addEventListener('click',function(){
+    setMenu(!document.body.classList.contains('menu-open'));
+  });
+  siteMenu.addEventListener('click',function(e){
+    if(e.target.closest('a')){setMenu(false);}
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'){setMenu(false);}
+  });
 }
 </script>
 </body>
