@@ -613,6 +613,20 @@ const providerCatalog = <ProviderDefinition>[
     defaultMaxTokens: 8192,
   ),
   ProviderDefinition(
+    id: 'anthropic',
+    name: 'Anthropic',
+    shortName: 'AN',
+    keyLabel: 'ANTHROPIC_API_KEY',
+    baseUrl: 'https://api.anthropic.com/v1',
+    models: [
+      'claude-haiku-5-5',
+      'claude-sonnet-5-5',
+      'claude-opus-5-5',
+      'claude-fable-5-1',
+    ],
+    defaultMaxTokens: 8192,
+  ),
+  ProviderDefinition(
     id: 'nvidia',
     name: 'NVIDIA NIM',
     shortName: 'NV',
