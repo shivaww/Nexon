@@ -235,6 +235,16 @@ footer{border-top:1px solid var(--wire);padding:52px 0 40px;font-size:14px}
 /* inline links + hero shot */
 .sec-sub a{color:var(--signal);font-weight:600}
 .hero-shot{margin:0}
+/* stats + faq */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px;padding-block:36px;border-block:1px solid var(--wire)}
+.stat b{display:block;font-family:var(--mono);font-size:22px;font-weight:600;color:var(--ink);line-height:1.2}
+.stat span{font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+.faq{border-bottom:1px solid var(--wire)}
+.faq summary{font-family:var(--mono);font-weight:600;font-size:15.5px;cursor:pointer;list-style:none;padding-block:14px}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::before{content:'+ ';color:var(--signal)}
+.faq[open] summary::before{content:'- '}
+.faq p{padding-bottom:14px}
 /* screenshots */
 .shot{display:block;width:100%;height:auto;border:1px solid var(--wire);border-radius:12px;box-shadow:0 10px 30px rgba(23,30,25,.10);background:var(--panel)}
 .shot-cap{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);text-align:center;margin-top:10px}
@@ -313,8 +323,8 @@ html{scroll-behavior:auto}
   <div class='hero-grid'>
     <div>
       <p class='eyebrow'>$ nexon --version → <em>v1.0.24</em> · open source · android + termux</p>
-      <h1>The whole agent stack.<br>On your phone<span class='h1-dot'>.</span></h1>
-      <p class='hero-sub'>A real AI coding agent on your Android phone: shell, files, and live research, running locally with your own API keys. No laptop, no cloud IDE in the middle.</p>
+      <h1>AI coding agents.<br>On your phone<span class='h1-dot'>.</span></h1>
+      <p class='hero-sub'>Nexon is a full agentic IDE for Android — real shell, file editing, and live research, running locally with your own API keys. No laptop, no cloud IDE in the middle.</p>
       <div class='hero-ctas'>
         <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases/download/v1.0.24/nexon-1.0.24.apk'>Get Nexon Free</a>
         <a class='btn btn-line' href='features.html'>View Features →</a>
@@ -332,6 +342,13 @@ html{scroll-behavior:auto}
       <figcaption class='shot-cap'>the real app — agents, tool calls, and answers, on a phone</figcaption>
     </figure>
   </div>
+</section>
+<section class='stats wrap' aria-label='NexonAI in numbers'>
+  <div class='stat'><b>v1.0.24</b><span>current release</span></div>
+  <div class='stat'><b>37</b><span>providers built in</span></div>
+  <div class='stat'><b>4</b><span>developers</span></div>
+  <div class='stat'><b>0</b><span>analytics · ads · trackers</span></div>
+  <div class='stat'><b>100%</b><span>on-device</span></div>
 </section>
 <section class='section wrap' id='more'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> ls ~/nexon</p>
@@ -363,6 +380,16 @@ html{scroll-behavior:auto}
     <a class='btn btn-line' href='features.html'>See it in the app →</a>
     <a class='btn btn-line' href='plans.html'>Plans</a>
   </div>
+</section>
+<section class='section wrap' id='faq'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> man nexon | grep -i why</p>
+  <h2>Questions people actually ask.</h2>
+  <details class='faq'><summary>Do I need an API key?</summary><p>Yes, for the free plan — bring a key from any of the 37 built-in providers (Anthropic, OpenAI, Google, and more). When managed plans launch, credits come with the subscription and no key is needed. Either way, your key stays on your device.</p></details>
+  <details class='faq'><summary>Is my data safe?</summary><p>Chats, files, and keys are stored on your phone. No analytics, no crash reporting, no ads. The optional Google Drive backup is encrypted with a key kept in your device's secure storage. The <a href='privacy.html'>privacy policy</a> is short and specific.</p></details>
+  <details class='faq'><summary>How is this different from Termux alone?</summary><p>Termux gives you the Linux userland. Nexon adds the agent layer on top: a Flutter app, a local Python bridge, permission-guarded tool calls, rendered artifacts, deep research, and 37 providers wired in. Termux stays yours — Nexon turns it into an AI workspace.</p></details>
+  <details class='faq'><summary>Is it really free?</summary><p>Yes — Apache-2.0, including commercial use. Managed subscriptions (Go, Plus, Pro, Max) are coming for people who would rather not manage API keys; the app you download today is free.</p></details>
+  <details class='faq'><summary>Why Android only?</summary><p>The whole point is local: Termux provides a real Linux userland on Android, and the agent runs there, on hardware you own. Cloud IDEs already cover desktop and web — this one lives on the phone in your pocket.</p></details>
+  <details class='faq'><summary>What works today, and what is coming?</summary><p>Shipped: chat, agentic file tools, the permission guard, live web search, study mode, artifacts, 37 providers. In beta: deep research. In development: Nexon Studio and managed plans. Nothing on this page is a mockup.</p></details>
 </section>
 <section class='section wrap' id='download'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> wget nexon</p>
