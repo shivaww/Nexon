@@ -6,6 +6,8 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 
 **Claude support:** Use Claude models through the Anthropic API or OpenRouter with your own key — prompt caching and extended thinking are implemented natively, and model lists are fetched live. Nexon is developed with heavy use of Claude. OpenAI, Google, Mistral, xAI, DeepSeek, Groq, and more are also supported (BYOK).
 
+**By NexonAI:** Nexon is the first product. Nexon Studio — an AI creative tool for motion graphics and voice that keeps everything on-device — is in development ([repo](https://github.com/shivaww/Recorder)). The tools are free to use: planned subscriptions sell managed model access as credits with daily usage limits, while chats stay on your device.
+
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
 [![License](https://img.shields.io/badge/license-Non--Commercial-orange.svg)](LICENSE)
@@ -79,6 +81,7 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 *   **3-Agent Autonomous Pipeline**: Guided pipeline moving through Planner, Researcher, and Synthesizer phases.
 *   **Structured Fact & Finding Storage**: Iteratively extracts precise `FACT` records (numeric metrics, dates, claims) and `FINDING` insights into state storage without heavy embedding models or vector databases.
 *   **Configurable Context Budget**: Dynamically budget and throttle evidence tokens passed into the synthesis phase for maximum response quality.
+*   **Status:** Deep Research is in beta — the pipeline runs end to end, but results can occasionally be uneven. Actively being improved.
 
 ### 6. 🔔 Automatic Release Notifications
 *   **Version Checker**: Integrated `UpdateService` notifies users when a new version or APK release is available.
