@@ -8,6 +8,8 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 
 **By NexonAI:** Nexon is the first product. Nexon Studio — an AI creative tool for motion graphics and voice that keeps everything on-device — is in development ([repo](https://github.com/shivaww/Recorder)). The tools are free to use: planned subscriptions sell managed model access as credits with daily usage limits, while chats stay on your device. Planned tiers: **Go, Plus, Pro, Max**.
 
+**Team:** K. Shiva Reddy (founder/developer), K. Hahsha Vardhan Reddy, R. Rithvik Ram, and C. Naga Charan (developers) — Hyderabad, India.
+
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
 [![License](https://img.shields.io/badge/license-Non--Commercial-orange.svg)](LICENSE)
