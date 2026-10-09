@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>Privacy Policy — Nexon</title>
+<meta name='description' content='How the Nexon app and its local bridge handle your data.'>
+<meta property='og:title' content='Privacy Policy — Nexon'>
+<meta property='og:description' content='How the Nexon app and its local bridge handle your data.'>
+<meta property='og:type' content='article'>
+<meta property='og:url' content='https://nexonai.me/privacy.html'>
+<meta property='og:image' content='https://nexonai.me/assets/icon.png'>
+<meta name='twitter:card' content='summary'>
+<meta name='theme-color' content='#F2F4F1'>
+<link rel='icon' type='image/png' href='assets/icon.png'>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+<style>
+:root{--paper:#F2F4F1;--panel:#FAFBF8;--ink:#171E19;--ink-soft:#46524A;--signal:#1E7A46;--wire:#D7DCD4;--mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,monospace;--sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.65;-webkit-font-smoothing:antialiased}
+a{color:var(--signal)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+.topbar{border-bottom:1px solid var(--wire);background:rgba(242,244,241,.92)}
+.topbar .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+.brand{font-family:var(--mono);font-weight:600;font-size:15px;text-decoration:none;color:var(--ink);display:flex;align-items:center;gap:10px}
+.brand-dot{width:9px;height:9px;background:var(--signal);border-radius:50%}
+.back{font-family:var(--mono);font-size:13px;text-decoration:none;color:var(--ink-soft)}
+main{padding:56px 0 80px}
+h1{font-family:var(--mono);font-weight:600;font-size:clamp(26px,4vw,36px);line-height:1.2;letter-spacing:-0.01em;margin-bottom:10px}
+.meta{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);margin-bottom:36px}
+h2{font-family:var(--mono);font-weight:600;font-size:17px;margin:34px 0 10px}
+p,li{font-size:16px;color:var(--ink-soft)}
+p+p{margin-top:12px}
+ul{margin:10px 0 0 20px}
+li{margin-bottom:6px}
+footer{border-top:1px solid var(--wire);padding:28px 0;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+</style>
+</head>
+<body>
+<header class='topbar'>
+<div class='wrap'>
+<a class='brand' href='index.html'><span class='brand-dot'></span>nexon</a>
+<a class='back' href='index.html'>back to nexonai.me</a>
+</div>
+</header>
+<main class='wrap'>
+<h1>Privacy Policy</h1>
+<p class='meta'>Last updated: October 9, 2026</p>
+
+<p>Nexon is an open-source Android app with a local Python bridge that runs inside Termux on your phone. This page explains what data the app handles and who can see it.</p>
+
+<h2>What stays on your device</h2>
+<p>Your chats, settings, research evidence, and the API keys you enter are stored on your phone. Nexon does not sell your data, show ads, or build advertising profiles.</p>
+<p>Nexon includes no analytics or crash-reporting SDK.</p>
+<p>In the default bring-your-own-key mode, your conversations and API keys are stored only on your phone. If you later use the optional Nexon Pro subscription, your requests pass through a small Nexon-run backend that meters credits and forwards them to the model provider. That backend stores credit balances and usage counts — not conversations, and not API keys.</p>
+
+<h2>Services you choose to connect</h2>
+<p>Nexon sends data to outside services only when you set them up. Each one has its own terms and privacy policy.</p>
+<ul>
+<li><strong>AI model providers.</strong> Your prompts, and any file contents or command output the agent includes, go to the provider you pick (for example Anthropic's Claude API) using your own API key. The provider's policy applies to that data.</li>
+<li><strong>Web search.</strong> Search queries are sent to Tavily to fetch live results.</li>
+<li><strong>Google Drive backup (optional).</strong> If you turn it on, Nexon bundles your chats, settings, provider API keys, and artifacts into one file, encrypts it with a key kept in your device's secure storage, and saves it to your own Google Drive as <code>nexon_backup.enc</code> (up to 5 recent versions). It is stored in your Google account and is not sent to Nexon.</li>
+<li><strong>Sign-in and token refresh.</strong> Nexon uses Supabase for authentication and to refresh Google Drive access tokens.</li>
+<li><strong>Update checks.</strong> The app periodically contacts a small Nexon-run server (falling back to GitHub) to check for new versions. No account data is sent.</li>
+</ul>
+
+<h2>Agent actions on your device</h2>
+<p>Nexon agents can run shell commands and edit files in Termux. Every tool call goes through a permission guard you control (ask, session, always, or never). Commands and file contents the agent reads may be sent to your chosen AI provider as part of the conversation.</p>
+
+<h2>Your choices</h2>
+<ul>
+<li>Delete chats and settings by clearing the app's data or uninstalling it.</li>
+<li>Remove your API keys at any time from the app's settings.</li>
+<li>Delete the Drive backup file from your Google Drive.</li>
+</ul>
+
+<h2>Children</h2>
+<p>Nexon is not directed at children under 13.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes, the updated version and date will be posted on this page.</p>
+
+<h2>Contact</h2>
+<p>Questions about privacy: <a href='mailto:founder@nexonai.me'>founder@nexonai.me</a></p>
+</main>
+<footer>
+<div class='wrap'>© 2026 Nexon · <a href='privacy.html'>Privacy</a> · <a href='terms.html'>Terms</a> · <a href='index.html'>Home</a></div>
+</footer>
+</body>
+</html>
