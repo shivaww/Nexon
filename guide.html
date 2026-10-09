@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>How to Use Nexon — Nexon</title>
+<meta name='description' content='Step-by-step guide to installing and using Nexon on Android: APK, Termux bridge, API keys, agents, and deep research.'>
+<meta name='author' content='K. Shiva Reddy'>
+<meta property='og:title' content='How to Use Nexon — Nexon'>
+<meta property='og:description' content='Step-by-step guide to installing and using Nexon on Android: APK, Termux bridge, API keys, agents, and deep research.'>
+<meta property='og:type' content='article'>
+<meta property='og:url' content='https://nexonai.me/guide.html'>
+<meta property='og:image' content='https://nexonai.me/assets/icon.png'>
+<meta name='twitter:card' content='summary'>
+<meta name='theme-color' content='#F2F4F1'>
+<link rel='icon' type='image/png' href='assets/icon.png'>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+<style>
+:root{--paper:#F2F4F1;--panel:#FAFBF8;--ink:#171E19;--ink-soft:#46524A;--signal:#1E7A46;--wire:#D7DCD4;--mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,monospace;--sans:'IBM Plex Sans',system-ui,-apple-system,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.65;-webkit-font-smoothing:antialiased}
+a{color:var(--signal)}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+.topbar{border-bottom:1px solid var(--wire);background:rgba(242,244,241,.92)}
+.topbar .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+.brand{font-family:var(--mono);font-weight:600;font-size:15px;text-decoration:none;color:var(--ink);display:flex;align-items:center;gap:10px}
+.brand-dot{width:9px;height:9px;background:var(--signal);border-radius:50%}
+.back{font-family:var(--mono);font-size:13px;text-decoration:none;color:var(--ink-soft)}
+main{padding:56px 0 80px}
+h1{font-family:var(--mono);font-weight:600;font-size:clamp(26px,4vw,36px);line-height:1.2;letter-spacing:-0.01em;margin-bottom:10px}
+.meta{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);margin-bottom:36px}
+h2{font-family:var(--mono);font-weight:600;font-size:17px;margin:34px 0 10px}
+p,li{font-size:16px;color:var(--ink-soft)}
+p+p{margin-top:12px}
+ul{margin:10px 0 0 20px}
+li{margin-bottom:6px}
+code{font-family:var(--mono);font-size:14px}
+footer{border-top:1px solid var(--wire);padding:28px 0;font-family:var(--mono);font-size:12px;color:var(--ink-soft)}
+</style>
+</head>
+<body>
+<header class='topbar'>
+<div class='wrap'>
+<a class='brand' href='index.html'><span class='brand-dot'></span>nexon</a>
+<a class='back' href='index.html'>back to nexonai.me</a>
+</div>
+</header>
+<main class='wrap'>
+<h1>How to use Nexon</h1>
+<p class='meta'>Nexon v1.0.23 · Android 7.0+ · Termux</p>
+
+<h2>What you need</h2>
+<ul>
+<li>An Android 7.0+ phone.</li>
+<li><a href='https://f-droid.org/en/packages/com.termux/' target='_blank' rel='noopener noreferrer'>Termux from F-Droid</a> — the Play Store build won't work.</li>
+<li>Python 3.10+ inside Termux.</li>
+<li>An API key from a supported provider — OpenAI, Google, Mistral, xAI, DeepSeek, Groq and more (36 built-in providers), plus Claude through the Anthropic API or OpenRouter.</li>
+</ul>
+
+<h2>Step 1 — Install the app</h2>
+<p>Download the latest APK from <a href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>GitHub Releases</a> and install it on your phone.</p>
+
+<h2>Step 2 — Set up the bridge</h2>
+<p>Nexon's agents run through a small Python bridge inside Termux. In Termux:</p>
+<p><code>git clone https://github.com/shivaww/Nexon.git</code><br>
+<code>cd Nexon &amp;&amp; chmod +x install_bridge.sh &amp;&amp; ./install_bridge.sh</code></p>
+<p>The setup script installs the bridge's Python dependencies and prepares the workspace.</p>
+
+<h2>Step 3 — Start the bridge</h2>
+<p><code>cd ~/nexon_bridge &amp;&amp; python3 mcp_server.py</code></p>
+<p>The bridge serves a local WebSocket on port 8765 and HTTP on 8390. Keep it running while you use the app.</p>
+
+<h2>Step 4 — Add your API key</h2>
+<p>Open Nexon, go to Settings → API Keys, and paste a key from a provider you have an account with. Keys are stored on your device — in the app's secure storage — and only ever sent to the provider you picked. Pick a model in the model center; model lists are fetched live from the provider, so new releases appear without an app update.</p>
+
+<h2>Step 5 — Use it</h2>
+<ul>
+<li><strong>Chat.</strong> Plain conversations with any connected provider.</li>
+<li><strong>Agentic work.</strong> Agents can run shell commands and edit files in Termux. Every tool call passes the permission guard first — ask, session, always, or never. You decide what runs.</li>
+<li><strong>Web search.</strong> Live search runs through Tavily; add a Tavily key to enable it. Sources stay attached to answers.</li>
+<li><strong>Deep research.</strong> A three-phase pipeline — planner, researcher, synthesizer — that searches the web, extracts structured facts, and writes a cited report.</li>
+<li><strong>Artifacts.</strong> Reports and code render in the feed and export as .md or .docx.</li>
+</ul>
+
+<h2>Optional</h2>
+<ul>
+<li><strong>Google Drive backup.</strong> Sign in to bundle chats, settings, keys, and artifacts into one encrypted file in your own Drive. See the <a href='privacy.html'>privacy policy</a> for exactly what it contains.</li>
+<li><strong>Updates.</strong> The app checks GitHub (or Nexon's update server) and offers the APK when a new version ships.</li>
+</ul>
+
+<h2>Troubleshooting</h2>
+<ul>
+<li>Termux must come from F-Droid — Play Store builds are incompatible.</li>
+<li>Bridge not connecting? Make sure <code>python3 mcp_server.py</code> is running and ports 8765/8390 aren't in use.</li>
+<li>Anything else: <a href='https://github.com/shivaww/Nexon/issues' target='_blank' rel='noopener noreferrer'>open an issue</a> or write to <a href='mailto:founder@nexonai.me'>founder@nexonai.me</a>.</li>
+</ul>
+</main>
+<footer>
+<div class='wrap'>© 2026 Nexon · <a href='privacy.html'>Privacy</a> · <a href='terms.html'>Terms</a> · <a href='index.html'>Home</a></div>
+</footer>
+</body>
+</html>
