@@ -8,11 +8,11 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 
 **By NexonAI:** Nexon is the first product. Nexon Studio — an AI creative tool for motion graphics and voice that keeps everything on-device — is in development ([repo](https://github.com/shivaww/Recorder)). The tools are free to use: planned subscriptions sell managed model access as credits with daily usage limits, while chats stay on your device. Planned tiers: **Go, Plus, Pro, Max**.
 
-**Team:** K. Shiva Reddy (founder/developer), K. Hahsha Vardhan Reddy, R. Rithvik Ram, and C. Naga Charan (developers) — Hyderabad, India.
+**Team:** K. Shiva Reddy (founder/developer), K. Harsha Vardhan Reddy, R. Rithvik Ram, and C. Naga Charan (developers) — Hyderabad, India.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
-[![License](https://img.shields.io/badge/license-Non--Commercial-orange.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/shivaww/Nexon/total.svg?color=blue)](https://github.com/shivaww/Nexon/releases)
 [![Flutter](https://img.shields.io/badge/Flutter-3.32%2B-blue.svg)](https://flutter.dev)
 
@@ -151,4 +151,4 @@ Contributions, bug reports, and feature requests are open and welcome! Feel free
 
 ## 📜 License & Usage
 
-Distributed under the **Nexon Non-Commercial License**. Free strictly for personal, academic, and non-commercial usage. **Commercial use in any form (as-is, modified, or re-branded) is strictly prohibited.** Subscriptions are coming soon; commercial licensing options will open once subscriptions launch. See [`LICENSE`](LICENSE) for details.
+Distributed under the **Apache License 2.0** — free to use, modify, and distribute, including commercially. Managed subscriptions (Go, Plus, Pro, Max) are coming soon for convenient access to Claude and other models as credits with usage limits. See [`LICENSE`](LICENSE) for details.
