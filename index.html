@@ -19,7 +19,7 @@
 {
   "@context": "https://schema.org",
   "@type": "Organization",
-  "name": "Nexon",
+  "name": "NexonAI",
   "url": "https://nexonai.me",
   "logo": "https://nexonai.me/assets/icon.png",
   "email": "founder@nexonai.me",
@@ -31,7 +31,7 @@
     "url": "https://www.linkedin.com/in/k-shiva-reddy-undefined-92501135b/"
   },
   "sameAs": ["https://www.linkedin.com/in/k-shiva-reddy-undefined-92501135b/"],
-  "description": "Open-source mobile agentic IDE and deep research assistant for Android."
+  "description": "NexonAI builds Nexon, an open-source mobile agentic IDE and deep research assistant for Android, and Nexon Studio, an AI creative tool for motion graphics and voice (in development)."
 }
 </script>
 <link rel='preconnect' href='https://fonts.googleapis.com'>
@@ -277,7 +277,7 @@ html{scroll-behavior:auto}
       <h1>The whole agent stack.<br>On your phone<span class='h1-dot'>.</span></h1>
       <p class='hero-sub'>Nexon is an open-source agentic IDE for Android. A Flutter app in front, a Python bridge running inside Termux behind it — real shell, real files, live web research, no cloud IDE in the middle.</p>
       <div class='hero-ctas'>
-        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Get Nexon</a>
+        <a class='btn btn-solid' href='https://github.com/shivaww/Nexon/releases' target='_blank' rel='noopener noreferrer'>Download APK</a>
         <a class='btn btn-line' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>View on GitHub ↗</a>
       </div>
       <p class='microfacts'>
@@ -298,6 +298,11 @@ html{scroll-behavior:auto}
     </div>
   </div>
 </section>
+<section class='section wrap' id='why'>
+  <p class='sec-eyebrow'><span class='dollar'>$</span> cat problem.txt</p>
+  <h2>Why Nexon exists.</h2>
+  <p class='sec-sub'>Most AI coding tools need a laptop and a cloud connection. Nexon gives you full agentic coding, file editing, and deep research directly on your Android phone using Termux — with your own API keys, on hardware you own.</p>
+</section>
 <section class='section wrap' id='about'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> man nexon</p>
   <h2>An agentic development and<br>research environment for Android.</h2>
@@ -309,15 +314,15 @@ html{scroll-behavior:auto}
     <div class='spec-row' role='listitem'><span>interface</span><b>Flutter · Material 3</b></div>
     <div class='spec-row' role='listitem'><span>bridge</span><b>Python · WebSocket :8765 · HTTP :8390</b></div>
     <div class='spec-row' role='listitem'><span>models</span><b>Claude, GPT, Gemini, Llama + more · BYOK</b></div>
-    <div class='spec-row' role='listitem'><span>research</span><b>3-agent pipeline · structured facts, no vector db</b></div>
-    <div class='spec-row' role='listitem'><span>license</span><b>open source · non-commercial</b></div>
+    <div class='spec-row' role='listitem'><span>research</span><b>3-agent pipeline · in beta · no vector db</b></div>
+    <div class='spec-row' role='listitem'><span>license</span><b>free for personal &amp; academic use</b></div>
     <div class='spec-row' role='listitem'><span>status</span><b>v1.0.23 · actively developed</b></div>
   </div>
 </section>
 <section class='section wrap' id='research'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> nexon research "state of on-device agents"</p>
   <h2>Three agents, one pipeline,<br>zero vector databases.</h2>
-  <p class='sec-sub'>Deep research in Nexon runs as an autonomous three-phase loop. Evidence is extracted into structured FACT and FINDING records — plain, auditable JSON — instead of an embedding index, so the whole engine fits on a phone.</p>
+  <p class='sec-sub'>Deep research in Nexon runs as an autonomous three-phase loop. Evidence is extracted into structured FACT and FINDING records — plain, auditable JSON — instead of an embedding index, so the whole engine fits on a phone. Deep Research is in beta: the pipeline runs end to end, but results can occasionally be uneven — it's being improved continuously.</p>
   <div class='stages'>
     <div class='stage'>
       <span class='stage-tag'>phase 1 — planner</span>
@@ -466,7 +471,7 @@ html{scroll-behavior:auto}
 <section class='section wrap' id='opensource'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> git log --oneline | head -3</p>
   <h2>Open source, honestly licensed.</h2>
-  <p class='sec-sub'>The full stack — Flutter app, Python bridge, native tool binary — is public on GitHub under the Nexon Non-Commercial License: free for personal, academic, and non-commercial use. It is not unrestricted free software, and it doesn't pretend to be.</p>
+  <p class='sec-sub'>The full stack — Flutter app, Python bridge, native tool binary — is public on GitHub under the Nexon Non-Commercial License: free for personal, academic, and non-commercial use. It is not unrestricted free software, and it doesn't pretend to be. Subscriptions are coming soon, with commercial licensing to follow.</p>
   <div class='hero-ctas'>
     <a class='btn btn-solid' href='https://github.com/shivaww/Nexon' target='_blank' rel='noopener noreferrer'>Explore the code ↗</a>
     <a class='btn btn-line' href='https://github.com/shivaww/Nexon/blob/main/LICENSE' target='_blank' rel='noopener noreferrer'>Read the license</a>
@@ -476,6 +481,7 @@ html{scroll-behavior:auto}
   <p class='sec-eyebrow'><span class='dollar'>$</span> grep -i soon README.md</p>
   <h2>What's next.</h2>
   <p class='sec-sub'>Only direction actually documented in the repository — no invented milestones, dates, or numbers.</p>
+  <p class='sec-sub'>The tools are free to use. What subscriptions sell is convenience: managed access to Claude and other models as credits per plan, with daily usage limits — no API keys to manage, no provider billing walls, and no risk of an agent burning through your paid API quota overnight. Your chats stay on your device (and your own Drive backup) either way.</p>
   <div class='spec' role='list' aria-label='Documented direction'>
     <p class='spec-h'>documented direction</p>
     <div class='spec-row' role='listitem'><span>subscriptions</span><b>coming soon — per the README</b></div>
@@ -486,11 +492,11 @@ html{scroll-behavior:auto}
 <section class='section wrap' id='company'>
   <p class='sec-eyebrow'><span class='dollar'>$</span> whois nexon</p>
   <h2>One founder, one phone,<br>no cloud in the middle.</h2>
-  <p class='sec-sub'>Nexon is a solo-founder project from Hyderabad, India — built and shipped by a developer who works from a phone in Termux, the same environment the app runs in.</p>
+  <p class='sec-sub'>NexonAI is a solo-founder company from Hyderabad, India, building two products: Nexon, the open-source mobile agentic IDE this site is about, and <a href='https://github.com/shivaww/Recorder' target='_blank' rel='noopener noreferrer'>Nexon Studio</a> — an AI creative tool for motion graphics and on-device voice cloning, in development. Everything is built and shipped by a developer working from a phone in Termux, the same environment the products run in.</p>
   <div class='spec' role='list' aria-label='Company facts'>
     <p class='spec-h'>company facts</p>
-    <div class='spec-row' role='listitem'><span>company</span><b>Nexon</b></div>
-    <div class='spec-row' role='listitem'><span>product</span><b>open-source mobile agentic IDE</b></div>
+    <div class='spec-row' role='listitem'><span>company</span><b>NexonAI</b></div>
+    <div class='spec-row' role='listitem'><span>products</span><b>Nexon — agentic IDE (shipped) · Nexon Studio — creative AI (in development)</b></div>
     <div class='spec-row' role='listitem'><span>founded</span><b>June 2026</b></div>
     <div class='spec-row' role='listitem'><span>founder</span><b>K. Shiva Reddy</b></div>
     <div class='spec-row' role='listitem'><span>location</span><b>Hyderabad, India</b></div>
@@ -550,7 +556,7 @@ html{scroll-behavior:auto}
       </div>
     </div>
     <div class='foot-base'>
-      <span>© 2026 Nexon · non-commercial license</span>
+      <span>© 2026 NexonAI · built by K. Shiva Reddy</span>
       <span>android 7+ · termux · local-first, BYOK</span>
     </div>
   </div>

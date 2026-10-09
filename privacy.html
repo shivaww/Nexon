@@ -55,7 +55,7 @@ footer{border-top:1px solid var(--wire);padding:28px 0;font-family:var(--mono);f
 <h2>What stays on your device</h2>
 <p>Your chats, settings, research evidence, and the API keys you enter are stored on your phone. Nexon does not sell your data, show ads, or build advertising profiles.</p>
 <p>Nexon includes no analytics or crash-reporting SDK.</p>
-<p>In the default bring-your-own-key mode, your conversations and API keys are stored only on your phone. If you later use the optional Nexon Pro subscription, your requests pass through a small Nexon-run backend that meters credits and forwards them to the model provider. That backend stores credit balances and usage counts — not conversations, and not API keys.</p>
+<p>In the default bring-your-own-key mode, your conversations and API keys are stored only on your phone. If you later use the optional Nexon Pro subscription, your requests pass through a small NexonAI-run backend that meters credits and forwards them to the model provider. That backend stores credit balances and usage counts — not conversations, and not API keys.</p>
 
 <h2>Services you choose to connect</h2>
 <p>Nexon sends data to outside services only when you set them up. Each one has its own terms and privacy policy.</p>
@@ -64,7 +64,7 @@ footer{border-top:1px solid var(--wire);padding:28px 0;font-family:var(--mono);f
 <li><strong>Web search.</strong> Search queries are sent to Tavily to fetch live results.</li>
 <li><strong>Google Drive backup (optional).</strong> If you turn it on, Nexon bundles your chats, settings, provider API keys, and artifacts into one file, encrypts it with a key kept in your device's secure storage, and saves it to your own Google Drive as <code>nexon_backup.enc</code> (up to 5 recent versions). It is stored in your Google account and is not sent to Nexon.</li>
 <li><strong>Sign-in and token refresh.</strong> Nexon uses Supabase for authentication and to refresh Google Drive access tokens.</li>
-<li><strong>Update checks.</strong> The app periodically contacts a small Nexon-run server (falling back to GitHub) to check for new versions. No account data is sent.</li>
+<li><strong>Update checks.</strong> The app periodically contacts a small NexonAI-run server (falling back to GitHub) to check for new versions. No account data is sent.</li>
 </ul>
 
 <h2>Agent actions on your device</h2>
@@ -87,7 +87,7 @@ footer{border-top:1px solid var(--wire);padding:28px 0;font-family:var(--mono);f
 <p>Questions about privacy: <a href='mailto:founder@nexonai.me'>founder@nexonai.me</a></p>
 </main>
 <footer>
-<div class='wrap'>© 2026 Nexon · <a href='privacy.html'>Privacy</a> · <a href='terms.html'>Terms</a> · <a href='index.html'>Home</a></div>
+<div class='wrap'>© 2026 NexonAI · <a href='privacy.html'>Privacy</a> · <a href='terms.html'>Terms</a> · <a href='index.html'>Home</a></div>
 </footer>
 </body>
 </html>
