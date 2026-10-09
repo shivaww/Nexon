@@ -64,8 +64,11 @@ class UpdateService {
       networkError = true;
     }
 
-    // 2. Fallback to GitHub Latest Release if backend is unavailable or not set
-    if (latestVersion == null || downloadUrl == null || downloadUrl.isEmpty) {
+    // 2. Fallback to GitHub Latest Release if backend is unavailable, unset, or stale
+    if (latestVersion == null ||
+        downloadUrl == null ||
+        downloadUrl.isEmpty ||
+        !_isNewerVersion(latestVersion, currentVersion)) {
       try {
         final response = await http
             .get(
