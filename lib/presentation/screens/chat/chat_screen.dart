@@ -15,6 +15,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:nexon/core/theme/app_colors.dart';

@@ -5438,7 +5438,9 @@ jobs:
               );
               if (idx != -1) {
                 final evts = List<Map<String, dynamic>>.from(
-                  stateMap['steps'][idx]['events'] ?? [],
+                  ((stateMap['steps'] as List)[idx] as Map)['events']
+                          as List? ??
+                      const <dynamic>[],
                 );
                 evts.add(newEvent);
                 if (evts.length > 50) {
@@ -5472,7 +5474,9 @@ jobs:
               );
               if (idx != -1) {
                 final evts = List<Map<String, dynamic>>.from(
-                  stateMap['steps'][idx]['events'] ?? [],
+                  ((stateMap['steps'] as List)[idx] as Map)['events']
+                          as List? ??
+                      const <dynamic>[],
                 );
                 final eIdx = evts.indexWhere((e) => e['id'] == eventId);
                 if (eIdx != -1) {
@@ -5505,7 +5509,9 @@ jobs:
               );
               if (idx != -1) {
                 final evts = List<Map<String, dynamic>>.from(
-                  stateMap['steps'][idx]['events'] ?? [],
+                  ((stateMap['steps'] as List)[idx] as Map)['events']
+                          as List? ??
+                      const <dynamic>[],
                 );
                 final eIdx = evts.indexWhere((e) => e['id'] == eventId);
                 if (eIdx != -1) {
@@ -6159,10 +6165,10 @@ jobs:
                       });
                     } else {
                       final cachedFacts = List<Map<String, dynamic>>.from(
-                        cached['facts'] ?? [],
+                        cached['facts'] as List? ?? const <dynamic>[],
                       );
                       final cachedFindings = List<Map<String, dynamic>>.from(
-                        cached['findings'] ?? [],
+                        cached['findings'] as List? ?? const <dynamic>[],
                       );
                       final existingKeys = phaseFacts.map(factDedupKey).toSet();
                       for (final fact in cachedFacts) {
@@ -6360,12 +6366,15 @@ jobs:
                     settings: settings,
                     model: model,
                   );
-                  final List<dynamic> facts = summaries['facts'] ?? [];
-                  final List<dynamic> findings = summaries['findings'] ?? [];
+                  final List<dynamic> facts =
+                      summaries['facts'] as List? ?? const <dynamic>[];
+                  final List<dynamic> findings =
+                      summaries['findings'] as List? ?? const <dynamic>[];
 
                   // Deduplicate facts (metric|subject|value)
                   final existingKeys = phaseFacts.map(factDedupKey).toSet();
-                  for (final fact in facts) {
+                  for (final fact
+                      in facts.whereType<Map<String, dynamic>>()) {
                     if (existingKeys.add(factDedupKey(fact))) {
                       phaseFacts.add(fact);
                     }
@@ -6374,7 +6383,8 @@ jobs:
                   final existingFindingKeys = phaseFindings
                       .map((f) => '${f['text']}|${f['source']}')
                       .toSet();
-                  for (final finding in findings) {
+                  for (final finding
+                      in findings.whereType<Map<String, dynamic>>()) {
                     final key = '${finding['text']}|${finding['source']}';
                     if (existingFindingKeys.add(key)) {
                       phaseFindings.add(finding);

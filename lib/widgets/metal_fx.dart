@@ -129,7 +129,7 @@ class _MetalRingPainter extends CustomPainter {
           palette.rim.withValues(alpha: 0.15 * strength),
         ],
       ).createShader(rect);
-    canvas.drawPath(outer.deflate(0.6), rim);
+    canvas.drawPath(outer, rim);
   }
 
   Path _shapePath(Rect rect) {

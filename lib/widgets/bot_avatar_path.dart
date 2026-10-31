@@ -61,7 +61,7 @@ class SvgPathParser {
 
   double? _num() {
     _skipSep();
-    final RegExpMatch? m = _numRe.matchAsPrefix(src, _i);
+    final Match? m = _numRe.matchAsPrefix(src, _i);
     if (m == null) return null;
     _i = m.end;
     return double.tryParse(m.group(0)!);
