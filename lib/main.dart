@@ -375,7 +375,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   int? _editingMessageIndex;
   int _historyLimit = 50;
   bool _isLoadingMoreHistory = false;
-  DateTime _lastDriveSync = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<void> _loadMoreHistory() async {
     if (_isLoadingMoreHistory) return;
@@ -622,8 +621,10 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     if (utf8.encode(allJson).length <= maxPrefsBytes) {
       await prefs.setString('chat_sessions_v1', allJson);
     } else {
-      final trimmed = _sessions.take(20).map((s) => s.toJson()).toList();
-      await prefs.setString('chat_sessions_v1', jsonEncode(trimmed));
+      // Write the full history to the local backup file FIRST. The prefs
+      // entry is truncated to the 20 newest sessions below; doing that
+      // before (or without) a successful backup silently dropped the rest.
+      bool backupOk = false;
       try {
         final backupFile = await _sessionBackupPrefsFile();
         if (!await backupFile.parent.exists()) {
@@ -632,21 +633,27 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         final tmp = File('${backupFile.path}.tmp');
         await tmp.writeAsString(allJson, flush: true);
         await tmp.rename(backupFile.path);
+        backupOk = true;
       } catch (e) {
         debugPrint('Session backup write failed: $e');
+      }
+      if (backupOk) {
+        final trimmed = _sessions.take(20).map((s) => s.toJson()).toList();
+        await prefs.setString('chat_sessions_v1', jsonEncode(trimmed));
+      } else {
+        // Backup failed — keep the full payload rather than truncating
+        // sessions we could not offload anywhere.
+        await prefs.setString('chat_sessions_v1', allJson);
       }
     }
     if (_activeSessionId != null) {
       await prefs.setString('active_session_id_v1', _activeSessionId!);
     }
 
-    // Fire-and-forget auto-sync to Google Drive, throttled so we don't
-    // serialize + upload the full history on every single chat turn.
-    final nowSync = DateTime.now();
-    if (nowSync.difference(_lastDriveSync).inSeconds >= 15) {
-      _lastDriveSync = nowSync;
-      DriveSyncService.syncToDrive(_sessions);
-    }
+    // Drive sync is intentionally NOT triggered from _saveSessions. This
+    // method runs dozens of times per turn, and uploading the full history
+    // on each call burned mobile data for no benefit. Background sync now
+    // happens only on app lifecycle pause/inactive in _autoBackup().
   }
 
   Future<String> _expandHomePath(String path) async {
@@ -6479,6 +6486,22 @@ jobs:
                 ),
               );
             } else {
+              // No tool call this turn. If the phase still has zero evidence,
+              // the model is trying to bail out with prose — push it back to
+              // work instead of striking the phase off as complete.
+              if (phaseFacts.isEmpty &&
+                  phaseFindings.isEmpty &&
+                  webSearchCount == 0 &&
+                  readUrlCount == 0) {
+                stepMessages.add(
+                  const ChatMessage(
+                    role: MessageRole.user,
+                    text:
+                        'You replied with prose but issued no tool call, and this phase has no evidence yet. The grounding rule is non-negotiable: emit a web_search or read_url call now.',
+                  ),
+                );
+                continue;
+              }
               stepContent = stepContent.isEmpty
                   ? responseText
                   : '$stepContent\n\n$responseText';

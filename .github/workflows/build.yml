@@ -34,7 +34,8 @@ jobs:
         run: flutter pub get
 
       - name: Run analyzer
-        run: flutter analyze || true
+        # Errors fail the build. Info-level lints do not.
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
   test:
     name: Unit & Widget Tests
@@ -93,23 +94,20 @@ jobs:
         run: dart run flutter_launcher_icons
 
       - name: Build release APK
-        run: |
-          flutter build apk --release --no-tree-shake-icons || true
-          mkdir -p build/app/outputs/flutter-apk
-          FOUND_APK=$(find . -name "*release*.apk" -o -name "app*.apk" | head -n 1)
-          if [ -n "$FOUND_APK" ]; then
-            echo "Found APK at: $FOUND_APK"
-            cp "$FOUND_APK" build/app/outputs/flutter-apk/app-release.apk
-          else
-            echo "Error: No APK file was generated!"
-            exit 1
-          fi
+        # No `|| true`: a compile error must fail this job, not be masked by
+        # copying some older APK that happens to be lying around.
+        run: flutter build apk --release --no-tree-shake-icons
 
-      - name: Find generated APKs
+      - name: Verify APK exists
         run: |
-          find . -name "*.apk"
+          ls -la build/app/outputs/flutter-apk/
+          test -f build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Collect APK
+        run: |
           mkdir -p apk_output
-          find . -name "*.apk" -exec cp {} apk_output/ \;
+          cp build/app/outputs/flutter-apk/app-release.apk apk_output/ || exit 1
+          ls -la apk_output/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

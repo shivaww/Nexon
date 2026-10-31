@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/widgets/liquid_glass_widgets.dart';
+import 'package:nexon/widgets/metal_fx.dart';
 import 'package:nexon/main.dart';
 import 'package:nexon/services/slash_command/slash_command_service.dart';
 
@@ -351,19 +352,27 @@ class Composer extends StatelessWidget {
                             child: child,
                           ),
                         ),
-                        child: LiquidGlassIconButton(
+                        child: MetalFx(
                           key: ValueKey<bool>(isSending),
-                          icon: isSending
-                              ? Icons.stop_rounded
-                              : Icons.arrow_upward_rounded,
-                          size: 40,
-                          backgroundColor: btnColor,
-                          iconColor: Colors.white,
-                          onPressed: isSending
-                              ? (onStop ?? () {})
-                              : (canTap ? onSend : () {}),
-                          tooltip:
-                              isSending ? 'Stop response' : 'Send message',
+                          preset: MetalPreset.bronze,
+                          variant: MetalVariant.circle,
+                          // Idle = barely-there sheen; typed text = full metal.
+                          strength: isSending || hasText ? 1.0 : 0.35,
+                          glowGain: isSending ? 1.25 : 1.0,
+                          paused: isSending,
+                          child: LiquidGlassIconButton(
+                            icon: isSending
+                                ? Icons.stop_rounded
+                                : Icons.arrow_upward_rounded,
+                            size: 40,
+                            backgroundColor: btnColor,
+                            iconColor: Colors.white,
+                            onPressed: isSending
+                                ? (onStop ?? () {})
+                                : (canTap ? onSend : () {}),
+                            tooltip:
+                                isSending ? 'Stop response' : 'Send message',
+                          ),
                         ),
                       );
                     },
