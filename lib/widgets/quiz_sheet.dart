@@ -46,6 +46,12 @@ class QuizSheetState extends State<QuizSheet> {
   final List<Map<String, dynamic>> _answers = [];
   final TextEditingController _own = TextEditingController();
 
+  @override
+  void dispose() {
+    _own.dispose();
+    super.dispose();
+  }
+
   void _submit(int picked, String pickedText) {
     final q = widget.questions[_idx];
     final opts = (q['options'] as List).map((e) => e.toString()).toList();
@@ -54,7 +60,8 @@ class QuizSheetState extends State<QuizSheet> {
       'q': q['q'],
       'picked': pickedText,
       'answer': opts[correct],
-      'correct': picked == correct,
+      // null = free-text answer the tutor model still has to grade
+      'correct': picked < 0 ? null : picked == correct,
     });
     _own.clear();
     setState(() {
@@ -74,10 +81,17 @@ class QuizSheetState extends State<QuizSheet> {
     final sub = dark ? const Color(0xFF9AA096) : const Color(0xFF7B7468);
     const accent = Color(0xFF7B4E2E);
     return Padding(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.fromLTRB(
+        12,
+        12,
+        12,
+        12 + MediaQuery.viewInsetsOf(context).bottom,
+      ),
       child: Container(
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.75,
+          maxHeight: (MediaQuery.sizeOf(context).height -
+                  MediaQuery.viewInsetsOf(context).bottom) *
+              0.75,
         ),
         decoration: BoxDecoration(
           color: card,
@@ -166,16 +180,15 @@ class QuizSheetState extends State<QuizSheet> {
               icon: const Icon(Icons.arrow_upward, size: 18),
               color: accent,
               onPressed: () {
-                final t = _own.text.trim().toLowerCase();
-                if (t.isEmpty) return;
-                int match = opts.indexWhere((o) => o.toLowerCase() == t);
-                if (match == -1) {
-                  match = opts.indexWhere((o) {
-                    final ol = o.toLowerCase();
-                    return ol.contains(t) || t.contains(ol);
-                  });
-                }
-                _submit(match, _own.text.trim());
+                final raw = _own.text.trim();
+                if (raw.isEmpty) return;
+                // Only an exact (case/whitespace-insensitive) option match is
+                // graded locally. Anything else goes to the tutor model.
+                String norm(String s) =>
+                    s.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+                final t = norm(raw);
+                final match = opts.indexWhere((o) => norm(o) == t);
+                _submit(match, raw);
               },
             ),
           ],
@@ -202,15 +215,20 @@ class QuizSheetState extends State<QuizSheet> {
             itemBuilder: (_, i) {
               final a = _answers[i];
               final ok = a['correct'] == true;
+              final pending = a['correct'] == null;
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(
-                      ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
+                      pending
+                          ? Icons.help_rounded
+                          : (ok ? Icons.check_circle_rounded : Icons.cancel_rounded),
                       size: 18,
-                      color: ok ? const Color(0xFF3E7B3E) : const Color(0xFFB3402E),
+                      color: pending
+                          ? sub
+                          : (ok ? const Color(0xFF3E7B3E) : const Color(0xFFB3402E)),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -222,7 +240,9 @@ class QuizSheetState extends State<QuizSheet> {
                           Text(
                             ok
                                 ? 'Your answer: ${a['picked']}'
-                                : 'Your answer: ${a['picked']} — correct: ${a['answer']}',
+                                : pending
+                                    ? 'Your answer: ${a['picked']} — your tutor will grade this'
+                                    : 'Your answer: ${a['picked']} — correct: ${a['answer']}',
                             style: TextStyle(fontSize: 12, color: sub),
                           ),
                         ],

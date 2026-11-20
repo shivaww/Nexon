@@ -2914,10 +2914,15 @@ jobs:
                         _sessions[idx].messages,
                       );
                       if (assistantMessageIndex < msgs.length) {
-                        final cleaned = msgs[assistantMessageIndex]
+                        final stripped = msgs[assistantMessageIndex]
                             .text
                             .replaceFirst(rawQuizBlock, '')
                             .trim();
+                        // A quiz-only reply would otherwise become an empty
+                        // assistant message (bad bubble, bad API history).
+                        final cleaned = stripped.isEmpty
+                            ? '[Interactive quiz completed]'
+                            : stripped;
                         msgs[assistantMessageIndex] =
                             msgs[assistantMessageIndex].copyWith(
                               text: cleaned,
@@ -2960,11 +2965,13 @@ jobs:
                       sb.writeln(
                         a['correct'] == true
                             ? '  Verdict: CORRECT'
-                            : '  Verdict: WRONG (correct answer: ${a['answer']})',
+                            : a['correct'] == false
+                            ? '  Verdict: WRONG (correct answer: ${a['answer']})'
+                            : '  Verdict: UNGRADED free-text answer. Reference answer: ${a['answer']}. Judge whether their answer means the same thing as the reference: if yes treat it as CORRECT, otherwise as WRONG.',
                       );
                     }
                     sb.writeln(
-                      'For each WRONG answer: first explain why the chosen answer is incorrect, then clearly state the correct answer with a brief explanation. After addressing all wrong answers, continue to the next concept.',
+                      'For each UNGRADED answer: first say whether it counts as correct. For each WRONG answer (including UNGRADED ones you judged wrong): first explain why the chosen answer is incorrect, then clearly state the correct answer with a brief explanation. After addressing all wrong answers, continue to the next concept.',
                     );
                     toolOutputs.add(sb.toString());
                   }
