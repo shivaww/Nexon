@@ -552,9 +552,14 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     // its uploads are freed; new chats need no clear — buckets are scoped
     // per session and the bridge LRU-enforces the 150MB global quota.
     try {
+      final rawUrl = _customMcpUrl.trim();
+      final parsed = rawUrl.isEmpty ? null : Uri.tryParse(rawUrl);
+      final base = (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty)
+          ? '${parsed.scheme}://${parsed.host}${parsed.hasPort ? ':${parsed.port}' : ''}'
+          : 'http://127.0.0.1:8390';
       final target = sessionId == null || sessionId.trim().isEmpty
-          ? 'http://127.0.0.1:8390/workspace/clear'
-          : 'http://127.0.0.1:8390/workspace/clear?session='
+          ? '$base/workspace/clear'
+          : '$base/workspace/clear?session='
                 '${Uri.encodeQueryComponent(sessionId)}';
       final client = HttpClient()..findProxy = ((uri) => 'DIRECT');
       final req = await client

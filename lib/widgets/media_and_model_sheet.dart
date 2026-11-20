@@ -313,6 +313,17 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     );
   }
 
+  /// Base URL of the Termux bridge: host:port of the custom MCP URL when
+  /// set, otherwise the local default.
+  String _bridgeBase() {
+    final raw = widget.customMcpUrl.trim();
+    final u = raw.isEmpty ? null : Uri.tryParse(raw);
+    if (u != null && u.hasScheme && u.host.isNotEmpty) {
+      return '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
+    }
+    return 'http://127.0.0.1:8390';
+  }
+
   Future<Map<String, dynamic>> _checkBridgeAlive() async {
     final endpoint = widget.customMcpUrl.isNotEmpty
         ? widget.customMcpUrl
@@ -834,72 +845,91 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           dialogShown = true;
         }
 
+        HttpClient? httpClient;
+        HttpClient? reindexClient;
         try {
           int uploadedCount = 0;
-          final httpClient = HttpClient();
+          final failedUploads = <String>[];
+          final base = _bridgeBase();
+          final uploadClient = HttpClient()
+            ..connectionTimeout = const Duration(seconds: 5)
+            ..findProxy = ((uri) => 'DIRECT');
+          httpClient = uploadClient;
 
           for (final pickedFile in validFiles) {
-            final path = pickedFile.path!;
-            final file = File(path);
             final fileName = pickedFile.name;
-            final fileSize = await file.length();
+            try {
+              final file = File(pickedFile.path!);
+              final fileSize = await file.length();
+              final doneBefore = uploadedCount + failedUploads.length;
 
-            fileNotifier.value = fileName;
-            statusNotifier.value = 'Uploading ${uploadedCount + 1}/$totalFiles';
-            progressNotifier.value = 0.0;
+              fileNotifier.value = fileName;
+              statusNotifier.value = 'Uploading ${doneBefore + 1}/$totalFiles';
+              progressNotifier.value = 0.0;
 
-            final uploadUri = Uri.parse('http://127.0.0.1:8390/workspace/upload?ingest=false&session=${widget.sessionId}');
-            final httpReq = await httpClient.postUrl(uploadUri);
+              final uploadUri = Uri.parse('$base/workspace/upload?ingest=false&session=${widget.sessionId}');
+              final httpReq = await uploadClient.postUrl(uploadUri);
 
-            final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
-            httpReq.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
+              final boundary = '----NexonUpload${DateTime.now().millisecondsSinceEpoch}';
+              httpReq.headers.set('Content-Type', 'multipart/form-data; boundary=$boundary');
 
-            final header = '--$boundary\r\n'
-                'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n'
-                'Content-Type: application/octet-stream\r\n\r\n';
-            httpReq.add(utf8.encode(header));
+              final header = '--$boundary\r\n'
+                  'Content-Disposition: form-data; name="file"; filename="$fileName"\r\n'
+                  'Content-Type: application/octet-stream\r\n\r\n';
+              httpReq.add(utf8.encode(header));
 
-            int bytesUploaded = 0;
-            final stream = file.openRead();
-            await for (final chunk in stream) {
-              httpReq.add(chunk);
-              bytesUploaded += chunk.length;
-              final fileProgress = bytesUploaded / fileSize;
-              progressNotifier.value = (uploadedCount + fileProgress) / totalFiles;
+              int bytesUploaded = 0;
+              await for (final chunk in file.openRead()) {
+                httpReq.add(chunk);
+                bytesUploaded += chunk.length;
+                final fileProgress = fileSize > 0 ? bytesUploaded / fileSize : 1.0;
+                progressNotifier.value = (doneBefore + fileProgress) / totalFiles;
+              }
+
+              httpReq.add(utf8.encode('\r\n--$boundary--\r\n'));
+              final httpResp = await httpReq.close();
+              final respBody = await httpResp.transform(utf8.decoder).join();
+
+              if (httpResp.statusCode != 200) {
+                throw Exception('Upload failed for $fileName (${httpResp.statusCode}): $respBody');
+              }
+
+              final respJson = jsonDecode(respBody) as Map<String, dynamic>;
+              final workspacePath = respJson['workspace_path'] as String? ?? '';
+
+              widget.onFileAttached(
+                AttachedFile(
+                  name: fileName,
+                  content: '[Workspace file — use workspace_search or workspace_read_page to query]',
+                  workspacePath: workspacePath,
+                ),
+              );
+              uploadedCount++;
+            } on SocketException {
+              rethrow; // bridge unreachable: stop instead of timing out per file
+            } catch (e) {
+              failedUploads.add('$fileName: $e');
             }
-
-            httpReq.add(utf8.encode('\r\n--$boundary--\r\n'));
-            final httpResp = await httpReq.close();
-            final respBody = await httpResp.transform(utf8.decoder).join();
-
-            if (httpResp.statusCode != 200) {
-              throw Exception('Upload failed for $fileName (${httpResp.statusCode}): $respBody');
-            }
-
-            final respJson = jsonDecode(respBody) as Map<String, dynamic>;
-            final workspacePath = respJson['workspace_path'] as String? ?? '';
-
-            widget.onFileAttached(
-              AttachedFile(
-                name: fileName,
-                content: '[Workspace file — use workspace_search or workspace_read_page to query]',
-                workspacePath: workspacePath,
-              ),
-            );
-            uploadedCount++;
           }
 
-          httpClient.close();
+          uploadClient.close(force: true);
+          httpClient = null;
+
+          if (uploadedCount == 0) {
+            throw Exception(failedUploads.isNotEmpty ? failedUploads.first : 'No files were uploaded');
+          }
 
           // ── Chunking / Indexing phase ──
           fileNotifier.value = '';
           statusNotifier.value = 'Indexing & chunking documents…';
           progressNotifier.value = null; // Indeterminate spinner during indexing
 
-          final reindexUri = Uri.parse('http://127.0.0.1:8390/workspace/reindex');
-          final reindexClient = HttpClient()
-            ..connectionTimeout = const Duration(seconds: 5);
-          final reindexReq = await reindexClient.postUrl(reindexUri);
+          final reindexUri = Uri.parse('$base/workspace/reindex');
+          final rClient = HttpClient()
+            ..connectionTimeout = const Duration(seconds: 5)
+            ..findProxy = ((uri) => 'DIRECT');
+          reindexClient = rClient;
+          final reindexReq = await rClient.postUrl(reindexUri);
           reindexReq.headers.set('Content-Type', 'application/json');
           final reindexResp = await reindexReq
               .close()
@@ -908,7 +938,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               .transform(utf8.decoder)
               .join()
               .timeout(const Duration(seconds: 30));
-          reindexClient.close();
+          rClient.close(force: true);
+          reindexClient = null;
 
           if (reindexResp.statusCode != 200) {
             throw Exception('Reindex failed (${reindexResp.statusCode}): $reindexBody');
@@ -929,7 +960,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
           }
 
           if (mounted) {
-            final failedCount = (summary['failed_files'] as List?)?.length ?? 0;
+            final failedCount = ((summary['failed_files'] as List?)?.length ?? 0) + failedUploads.length;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(
                 failedCount > 0
@@ -947,6 +978,16 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               SnackBar(content: Text('Workspace upload failed: $e')),
             );
           }
+        } finally {
+          httpClient?.close(force: true);
+          reindexClient?.close(force: true);
+          // Dispose after the dialog's closing animation so its builders
+          // never listen to a disposed notifier.
+          Future.delayed(const Duration(milliseconds: 500), () {
+            progressNotifier.dispose();
+            statusNotifier.dispose();
+            fileNotifier.dispose();
+          });
         }
       } else {
         // ── Normal mode: read files into memory for inline attachment ──
@@ -2652,9 +2693,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   if (val) {
                     // Check backend dependencies for document extraction
                     try {
-                      final client = HttpClient();
+                      final client = HttpClient()..findProxy = ((uri) => 'DIRECT');
                       client.connectionTimeout = const Duration(seconds: 4);
-                      final req = await client.getUrl(Uri.parse('http://127.0.0.1:8390/workspace/deps'));
+                      final req = await client.getUrl(Uri.parse('${_bridgeBase()}/workspace/deps'));
                       final resp = await req.close();
                       final body = await resp.transform(utf8.decoder).join();
                       client.close();
