@@ -268,6 +268,24 @@ class WorkspaceManager:
             pass
         self._enforce_global_quota()
 
+    def scope_readonly(self, session_id: str) -> bool:
+        """Point this manager at one session's existing bucket, no side effects.
+
+        Unlike ensure_session it never moves the active-session marker,
+        adopts legacy files or touches the LRU clock, so a read-only lookup
+        for an older chat cannot disturb the live one. Returns False when
+        the bucket does not exist.
+        """
+        dirname = self._session_dir_name(session_id)
+        if not dirname:
+            return False
+        session_dir = self.root_path / dirname
+        if not session_dir.is_dir() or session_dir.is_symlink():
+            return False
+        self.workspace_path = session_dir
+        self.index_file = session_dir / ".workspace_index.json"
+        return True
+
     def _resolve_workspace_path(self, file_path: str):
         """Resolve a caller-supplied path strictly inside the workspace root.
 

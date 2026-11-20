@@ -1871,6 +1871,42 @@ class TermuxForgeBridge:
             logger.error("Workspace clear failed (%s)", type(exc).__name__)
             return web.json_response({"status": "error", "message": "Workspace clear failed."}, status=500)
 
+    async def _handle_workspace_page(self, request: web.Request) -> web.Response:
+        """Read-only page lookup behind the app's [Source: file, Page N] chips.
+
+        ?session=<id>&file=<path>&page=<n>. Scopes to that chat's bucket
+        without moving the active-session marker, so tapping a chip in an
+        older chat cannot disturb the live one.
+        """
+        try:
+            from workspace import WorkspaceManager
+            file_name = request.query.get('file', '').strip()
+            if not file_name:
+                return web.json_response({'status': 'error', 'message': 'Missing file.'}, status=400)
+            try:
+                page = int(request.query.get('page', '1'))
+            except ValueError:
+                page = 1
+            mgr = WorkspaceManager()
+            session_id = request.query.get('session', '')
+            if session_id and not mgr.scope_readonly(session_id):
+                return web.json_response({'status': 'error', 'message': 'No workspace for this chat.'}, status=404)
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: mgr.read_page(file_name, page)),
+                timeout=30,
+            )
+            content = result.get('content')
+            if isinstance(content, str) and len(content) > 20000:
+                result['content'] = content[:20000]
+                result['truncated'] = True
+            return web.json_response(result)
+        except asyncio.TimeoutError:
+            return web.json_response({'status': 'error', 'message': 'Page read timed out.'}, status=504)
+        except Exception as exc:
+            logger.error('Workspace page read failed (%s)', type(exc).__name__)
+            return web.json_response({'status': 'error', 'message': 'Page read failed.'}, status=500)
+
     async def _handle_workspace_deps(self, request: web.Request) -> web.Response:
         """Return dependency status for workspace document extraction."""
         try:
@@ -2115,6 +2151,7 @@ class TermuxForgeBridge:
         self._http_app.router.add_post('/workspace/reindex', self._handle_workspace_reindex)
         self._http_app.router.add_post('/workspace/clear', self._handle_workspace_clear)
         self._http_app.router.add_get('/workspace/deps', self._handle_workspace_deps)
+        self._http_app.router.add_get('/workspace/page', self._handle_workspace_page)
         self._http_app.router.add_get('/native/health', self._handle_native_health)
         self._http_app.router.add_post('/native/call', self._handle_native_call)
         

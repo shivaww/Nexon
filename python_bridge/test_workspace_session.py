@@ -119,6 +119,14 @@ def main():
             index_raw = fh.read()
         check("scanned pdf is kept out of the index", "scan.pdf" not in index_raw)
         check("partial pdf is still indexed", "mixed.pdf" in index_raw)
+
+        # Read-only scoping must not move the ambient active-session marker.
+        ro = WorkspaceManager(workspace_path=root)
+        before = ro._read_active_session_id()
+        check("scope_readonly finds an existing bucket", ro.scope_readonly("sess-B"))
+        check("scope_readonly points at that bucket", ro.workspace_path.name == "session_sess-B")
+        check("scope_readonly leaves the active marker alone", ro._read_active_session_id() == before)
+        check("scope_readonly rejects an unknown session", not ro.scope_readonly("no-such-chat"))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
