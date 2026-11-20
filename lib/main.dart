@@ -66,6 +66,7 @@ import 'package:nexon/widgets/message_bubble.dart';
 import 'package:nexon/widgets/streaming_widgets.dart';
 import 'package:nexon/widgets/quiz_sheet.dart';
 import 'package:nexon/widgets/source_page_sheet.dart';
+import 'package:nexon/widgets/workspace_files_sheet.dart';
 import 'package:nexon/widgets/composer.dart';
 import 'package:nexon/utils/model_capabilities.dart';
 import 'package:nexon/widgets/media_and_model_sheet.dart';
@@ -599,6 +600,27 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         sessionId: sessionId,
         file: file,
         page: page,
+      ),
+    );
+  }
+
+  /// Opens the document manager for the active chat: lists its uploads,
+  /// shows quota usage and removes single files through the bridge.
+  void _openWorkspaceFiles() {
+    final sessionId = _activeSessionId;
+    if (sessionId == null || !mounted) return;
+    final rawUrl = _customMcpUrl.trim();
+    final parsed = rawUrl.isEmpty ? null : Uri.tryParse(rawUrl);
+    final base = (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty)
+        ? '${parsed.scheme}://${parsed.host}${parsed.hasPort ? ':${parsed.port}' : ''}'
+        : 'http://127.0.0.1:8390';
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => WorkspaceFilesSheet(
+        baseUrl: base,
+        sessionId: sessionId,
       ),
     );
   }
@@ -8383,7 +8405,12 @@ jobs:
                   if (_deepResearchEnabled) const FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
                   if (_agenticEnabled) const FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
                   if (_searchSettings.enabled) const FeaturePill(icon: Icons.search, label: 'Web Search'),
-                  if (_studyModeEnabled) const FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
+                  if (_studyModeEnabled)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _openWorkspaceFiles,
+                      child: const FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
+                    ),
                   if (_studyModeEnabled && _bridgeOnline != null)
                     FeaturePill(
                       icon: _bridgeOnline! ? Icons.cloud_done : Icons.cloud_off,
