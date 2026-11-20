@@ -41,9 +41,20 @@ class QuizSheet extends StatefulWidget {
 }
 
 class QuizSheetState extends State<QuizSheet> {
-  int _idx = 0;
+  // _order holds the question indices still to ask: all of them at first,
+  // only the missed ones on a retry. _pos is the position within it.
+  late List<int> _order =
+      List<int>.generate(widget.questions.length, (i) => i);
+  int _pos = 0;
   bool _review = false;
-  final List<Map<String, dynamic>> _answers = [];
+  bool _retrying = false;
+  // One slot per question, so a retry replaces the earlier answer in place.
+  late final List<Map<String, dynamic>?> _slots =
+      List<Map<String, dynamic>?>.filled(widget.questions.length, null);
+
+  int get _idx => _order[_pos];
+  List<Map<String, dynamic>> get _answers =>
+      _slots.whereType<Map<String, dynamic>>().toList();
   final TextEditingController _own = TextEditingController();
 
   @override
@@ -56,20 +67,35 @@ class QuizSheetState extends State<QuizSheet> {
     final q = widget.questions[_idx];
     final opts = (q['options'] as List).map((e) => e.toString()).toList();
     final correct = (q['correct'] as num).toInt();
-    _answers.add({
+    _slots[_idx] = {
       'q': q['q'],
       'picked': pickedText,
       'answer': opts[correct],
       // null = free-text answer the tutor model still has to grade
       'correct': picked < 0 ? null : picked == correct,
-    });
+    };
     _own.clear();
     setState(() {
-      if (_idx + 1 < widget.questions.length) {
-        _idx++;
+      if (_pos + 1 < _order.length) {
+        _pos++;
       } else {
         _review = true;
       }
+    });
+  }
+
+  void _retryMissed() {
+    final missed = <int>[
+      for (var i = 0; i < _slots.length; i++)
+        if (_slots[i]?['correct'] == false) i,
+    ];
+    if (missed.isEmpty) return;
+    _own.clear();
+    setState(() {
+      _order = missed;
+      _pos = 0;
+      _retrying = true;
+      _review = false;
     });
   }
 
@@ -113,7 +139,9 @@ class QuizSheetState extends State<QuizSheet> {
         Row(
           children: [
             Text(
-              '${_idx + 1} of ${widget.questions.length}',
+              _retrying
+                  ? 'Retry · ${_pos + 1} of ${_order.length}'
+                  : '${_pos + 1} of ${_order.length}',
               style: TextStyle(fontSize: 12, color: sub),
             ),
             const Spacer(),
@@ -124,7 +152,16 @@ class QuizSheetState extends State<QuizSheet> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: _pos / _order.length,
+            minHeight: 4,
+            backgroundColor: sub.withValues(alpha: 0.18),
+            valueColor: AlwaysStoppedAnimation<Color>(accent),
+          ),
+        ),
+        const SizedBox(height: 12),
         Text(
           q['q'] as String,
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: text),
@@ -198,6 +235,10 @@ class QuizSheetState extends State<QuizSheet> {
   }
 
   Widget _buildReview(Color text, Color sub) {
+    final total = _answers.length;
+    final right = _answers.where((a) => a['correct'] == true).length;
+    final wrong = _answers.where((a) => a['correct'] == false).length;
+    final ungraded = total - right - wrong;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,6 +246,13 @@ class QuizSheetState extends State<QuizSheet> {
         Text(
           'Results',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: text),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          ungraded > 0
+              ? '$right of $total correct · $ungraded for your tutor to grade'
+              : '$right of $total correct',
+          style: TextStyle(fontSize: 13, color: sub),
         ),
         const SizedBox(height: 12),
         Flexible(
@@ -255,6 +303,19 @@ class QuizSheetState extends State<QuizSheet> {
           ),
         ),
         const SizedBox(height: 12),
+        if (wrong > 0) ...[
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF7B4E2E),
+              ),
+              onPressed: _retryMissed,
+              child: Text('Retry $wrong missed'),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
