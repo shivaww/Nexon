@@ -12,7 +12,7 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
 [![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue.svg)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/shivaww/Nexon/total.svg?color=blue)](https://github.com/shivaww/Nexon/releases)
 [![Flutter](https://img.shields.io/badge/Flutter-3.32%2B-blue.svg)](https://flutter.dev)
 
@@ -151,4 +151,4 @@ Contributions, bug reports, and feature requests are open and welcome! Feel free
 
 ## 📜 License & Usage
 
-Distributed under the **Apache License 2.0** — free to use, modify, and distribute, including commercially. Managed subscriptions (Go, Plus, Pro, Max) are coming soon for convenient access to Claude and other models as credits with usage limits. See [`LICENSE`](LICENSE) for details.
+Distributed under the **PolyForm Noncommercial License 1.0.0** — free to use, modify, and share for any noncommercial purpose (personal projects, hobby use, study, research, and use by nonprofits, schools, and government bodies). **Commercial use is not permitted.** If you want to use this project commercially, contact the maintainer for a separate license. Managed subscriptions (Go, Plus, Pro, Max) are coming soon for convenient access to Claude and other models as credits with usage limits. See [`LICENSE`](LICENSE) for details.
