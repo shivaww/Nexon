@@ -106,6 +106,31 @@ class WorkspaceManager:
             self.clear_session_documents()
         marker.write_text(session_id)
 
+    def _resolve_workspace_path(self, file_path: str):
+        """Resolve a caller-supplied path strictly inside the workspace root.
+
+        Blocks path traversal: absolute paths outside the workspace and
+        relative paths that escape it via '..' both resolve to None, as do
+        paths whose canonical location leaves the workspace via symlinks.
+        """
+        root = self.workspace_path.resolve()
+        try:
+            raw = Path(file_path)
+            if raw.is_absolute():
+                candidate = raw.resolve()
+            else:
+                candidate = (self.workspace_path / raw).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return None
+        try:
+            if candidate.is_relative_to(root):
+                return candidate
+        except AttributeError:
+            # Python < 3.9 fallback (is_relative_to landed in 3.9)
+            if str(candidate) == str(root) or str(candidate).startswith(str(root) + os.sep):
+                return candidate
+        return None
+
     def ingest_file(self, file_path: str, rebuild: bool = True) -> Dict[str, Any]:
         """Ingests a file or unzips archives safely, discarding prohibited binaries."""
         path = Path(file_path)
@@ -129,9 +154,16 @@ class WorkspaceManager:
                     for member in zip_ref.infolist():
                         member_path = Path(member.filename)
 
-                        # Prevent Zip-Slip
+                        # Prevent Zip-Slip: is_relative_to, not a string
+                        # prefix check (a sibling dir like nexon_workspace_evil
+                        # must not pass, and symlinked escapes resolve out).
+                        zip_root = self.workspace_path.resolve()
                         target_path = (self.workspace_path / member_path).resolve()
-                        if not str(target_path).startswith(str(self.workspace_path.resolve())):
+                        try:
+                            inside_ws = target_path.is_relative_to(zip_root)
+                        except AttributeError:
+                            inside_ws = str(target_path).startswith(str(zip_root) + os.sep)
+                        if not inside_ws:
                             continue
 
                         # Reject APKs and binary formats
@@ -197,9 +229,20 @@ class WorkspaceManager:
                 return "\n".join(pages)
             except ImportError:
                 if shutil.which("pdftotext"):
-                    # pdftotext extracts text only, images are ignored
+                    # pdftotext extracts text only, images are ignored.
+                    # List-form subprocess: no shell string, so apostrophes
+                    # or shell metacharacters in a filename cannot inject
+                    # commands; bounded by a 60s timeout.
+                    import subprocess
                     out_txt = file_path.with_suffix(".tmp.txt")
-                    os.system(f"pdftotext '{file_path}' '{out_txt}'")
+                    try:
+                        subprocess.run(
+                            ["pdftotext", str(file_path), str(out_txt)],
+                            check=False,
+                            timeout=60,
+                        )
+                    except Exception:
+                        pass
                     if out_txt.exists():
                         res = out_txt.read_text(errors="ignore")
                         out_txt.unlink()
@@ -425,12 +468,9 @@ class WorkspaceManager:
 
     def read_page(self, file_path: str, page: int = 1) -> Dict[str, Any]:
         """Read a specific page of a document (text only, images skipped)."""
-        path = Path(file_path)
-        if not path.exists():
-            # Try relative to workspace
-            path = self.workspace_path / file_path
-        if not path.exists():
-            return {"status": "error", "message": f"File not found: {file_path}"}
+        path = self._resolve_workspace_path(file_path)
+        if path is None or not path.exists():
+            return {"status": "error", "message": f"File not found in workspace: {file_path}"}
 
         ext = path.suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
@@ -500,11 +540,9 @@ class WorkspaceManager:
 
     def get_outline(self, file_path: str) -> Dict[str, Any]:
         """Get document structure (headings, chapters, outline) — text only."""
-        path = Path(file_path)
-        if not path.exists():
-            path = self.workspace_path / file_path
-        if not path.exists():
-            return {"status": "error", "message": f"File not found: {file_path}"}
+        path = self._resolve_workspace_path(file_path)
+        if path is None or not path.exists():
+            return {"status": "error", "message": f"File not found in workspace: {file_path}"}
 
         ext = path.suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:

@@ -2949,6 +2949,18 @@ jobs:
                 }
                 continue;
               }
+              // Study Mode sandbox: without Agentic File Access, only the
+              // read-only workspace_* document tools reach the Python bridge.
+              // run_command / delete_path / git_push / service_* / dart_* stay
+              // agentic-only; plain chat is rejected further below.
+              final bool studyOnly = _studyModeEnabled && !_agenticEnabled;
+              if (studyOnly && !toolName.startsWith('workspace_')) {
+                executedTools = true;
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"error":"Study Mode is sandboxed: only workspace_* document tools are available. Enable Agentic File Access for $toolName."}',
+                );
+                continue;
+              }
               // Python-bridge passthrough (run_background, service_*, dart_*,
               // workspace_*...). Translated to the bridge's method/params
               // shape; the HTTP block below handles validation, permission
@@ -2956,6 +2968,17 @@ jobs:
               // legacy calls.
               nativeHttpCalls.add(
                 jsonEncode({'method': toolName, 'params': toolArgs}),
+              );
+              continue;
+            }
+            // ── Mode gate: C++ native tools require Agentic File Access ──
+            // Study Mode and plain chat never execute the local C++ binary
+            // directly; they stay on the sandboxed workspace_* / web_search /
+            // quiz paths above.
+            if (!_agenticEnabled) {
+              executedTools = true;
+              toolOutputs.add(
+                'Tool Result [$toolName]:\n\n{"error":"$toolName requires Agentic File Access. In Study Mode, use workspace_* tools to read uploaded documents."}',
               );
               continue;
             }
