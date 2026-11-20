@@ -330,29 +330,32 @@ class QuizSheetState extends State<QuizSheet> {
 }
 
 class FeaturePill extends StatelessWidget {
-  const FeaturePill({required this.icon, required this.label});
+  const FeaturePill({required this.icon, required this.label, this.color});
   final IconData icon;
   final String label;
+
+  /// Overrides the default brown accent (used for status pills).
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFF7B4E2E).withOpacity(0.08),
+        color: (color ?? const Color(0xFF7B4E2E)).withOpacity(0.08),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 11, color: const Color(0xFF7B4E2E).withOpacity(0.8)),
+          Icon(icon, size: 11, color: (color ?? const Color(0xFF7B4E2E)).withOpacity(0.8)),
           const SizedBox(width: 4),
           Text(
             label,
             style: TextStyle(
               fontSize: 10.5,
               fontWeight: FontWeight.w600,
-              color: const Color(0xFF7B4E2E).withOpacity(0.8),
+              color: (color ?? const Color(0xFF7B4E2E)).withOpacity(0.8),
             ),
           ),
         ],

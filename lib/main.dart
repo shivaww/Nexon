@@ -247,6 +247,10 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     ..findProxy = ((uri) => 'DIRECT');
   bool _deepResearchEnabled = false;
   bool _studyModeEnabled = false;
+  // Live bridge status for the Study Mode pill: null until the first ping.
+  bool? _bridgeOnline;
+  bool _bridgePinging = false;
+  Timer? _bridgeTimer;
   String _userName = '';
   String _promptSig = '';
   int _promptUseCount = 0;
@@ -1361,6 +1365,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     _messageController.addListener(_handleMessageTextChanged);
     _loadSettings();
     NexonTts.init();
+    _startBridgeTimer();
+    Future.delayed(const Duration(seconds: 2), _pingBridge);
   }
 
   @override
@@ -1368,7 +1374,62 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     // Android commonly emits inactive immediately before paused. Backing up
     // on both states can start duplicate full-history uploads.
     if (state == AppLifecycleState.paused) {
+      _bridgeTimer?.cancel();
+      _bridgeTimer = null;
       _autoBackup();
+    } else if (state == AppLifecycleState.resumed) {
+      _startBridgeTimer();
+      _pingBridge();
+    }
+  }
+
+  void _startBridgeTimer() {
+    _bridgeTimer?.cancel();
+    _bridgeTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _pingBridge(),
+    );
+  }
+
+  /// Pings the bridge and updates the Study Mode status pill. Does nothing
+  /// unless Study Mode is on, so idle chats cost no traffic.
+  Future<void> _pingBridge() async {
+    if (!_studyModeEnabled || _bridgePinging) return;
+    _bridgePinging = true;
+    final endpoint = _customMcpUrl.isNotEmpty
+        ? _customMcpUrl
+        : 'http://127.0.0.1:8390/mcp';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 3)
+      ..findProxy = ((uri) => 'DIRECT');
+    var ok = false;
+    try {
+      final request = await client
+          .postUrl(Uri.parse(endpoint))
+          .timeout(const Duration(seconds: 3));
+      request.headers.contentType = ContentType.json;
+      final bytes = utf8.encode(jsonEncode({'method': 'ping', 'params': {}}));
+      request.headers.contentLength = bytes.length;
+      request.add(bytes);
+      final response = await request.close().timeout(const Duration(seconds: 3));
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 3));
+      final decoded = jsonDecode(body);
+      ok = response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          decoded is Map &&
+          decoded['result'] is Map &&
+          (decoded['result'] as Map)['ok'] == true;
+    } catch (_) {
+      ok = false;
+    } finally {
+      client.close(force: true);
+      _bridgePinging = false;
+    }
+    if (mounted && _bridgeOnline != ok) {
+      setState(() => _bridgeOnline = ok);
     }
   }
 
@@ -1420,6 +1481,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _bridgeTimer?.cancel();
     _messageController.removeListener(_handleMessageTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
@@ -7899,6 +7961,7 @@ jobs:
             });
             await _saveSettings();
             _saveSessions();
+            if (val) _pingBridge();
           },
           onUserNameChanged: (val) async {
             setState(() {
@@ -8321,6 +8384,14 @@ jobs:
                   if (_agenticEnabled) const FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
                   if (_searchSettings.enabled) const FeaturePill(icon: Icons.search, label: 'Web Search'),
                   if (_studyModeEnabled) const FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
+                  if (_studyModeEnabled && _bridgeOnline != null)
+                    FeaturePill(
+                      icon: _bridgeOnline! ? Icons.cloud_done : Icons.cloud_off,
+                      label: _bridgeOnline! ? 'Bridge online' : 'Bridge offline',
+                      color: _bridgeOnline!
+                          ? const Color(0xFF3E7B3E)
+                          : const Color(0xFFB3402E),
+                    ),
                   if (_artifactsEnabled) const FeaturePill(icon: Icons.extension, label: 'Artifacts'),
                   if (_svgVisualsEnabled) const FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
                 ],
