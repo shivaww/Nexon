@@ -961,12 +961,32 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
           if (mounted) {
             final failedCount = ((summary['failed_files'] as List?)?.length ?? 0) + failedUploads.length;
+            final scanned = (summary['scanned_files'] as List?)
+                    ?.whereType<Map>()
+                    .toList() ??
+                const <Map>[];
+            final scannedNames = scanned
+                .where((s) => s['status'] == 'scanned')
+                .map((s) => '${s['file']}')
+                .toList();
+            final partialNames = scanned
+                .where((s) => s['status'] == 'partial')
+                .map((s) => '${s['file']}')
+                .toList();
+            final scanNote = [
+              if (scannedNames.isNotEmpty)
+                'No readable text in ${scannedNames.join(', ')} (scanned images, not indexed).',
+              if (partialNames.isNotEmpty)
+                'Some pages of ${partialNames.join(', ')} have no text.',
+            ].join(' ');
+            final baseMsg = failedCount > 0
+                ? '$uploadedCount file(s) uploaded, $totalChunks chunks indexed. $failedCount file(s) failed to process.'
+                : '$uploadedCount file(s) uploaded & indexed ($totalChunks chunks)';
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(
-                failedCount > 0
-                    ? '$uploadedCount file(s) uploaded, $totalChunks chunks indexed. $failedCount file(s) failed to process.'
-                    : '$uploadedCount file(s) uploaded & indexed ($totalChunks chunks)',
-              )),
+              SnackBar(
+                duration: Duration(seconds: scanNote.isEmpty ? 4 : 8),
+                content: Text(scanNote.isEmpty ? baseMsg : '$baseMsg\n$scanNote'),
+              ),
             );
           }
         } catch (e) {
