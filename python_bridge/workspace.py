@@ -160,6 +160,39 @@ class WorkspaceManager:
             "freed_mb": round(freed / (1024 * 1024), 2),
         }
 
+    def global_used_mb(self) -> float:
+        """Total size of every session bucket under the root, in MB."""
+        total = 0
+        for f in self.root_path.rglob('*'):
+            try:
+                if f.is_file() and not f.is_symlink():
+                    total += f.stat().st_size
+            except OSError:
+                continue
+        return round(total / (1024 * 1024), 2)
+
+    def delete_file(self, file_path: str) -> Dict[str, Any]:
+        """Delete ONE document from the current bucket and refresh its index.
+
+        The path is confined to the workspace and dotfiles (index, markers)
+        are never deletable. Callers scope the manager to a session first.
+        """
+        path = self._resolve_workspace_path(file_path)
+        if path is None or path.name.startswith(".") or not path.is_file():
+            return {"status": "error", "message": "File not found in this workspace."}
+        try:
+            freed = path.stat().st_size
+            os.remove(path)
+        except OSError:
+            return {"status": "error", "message": "Could not delete the file."}
+        summary = self.rebuild_index()
+        return {
+            "status": "success",
+            "removed": path.name,
+            "freed_mb": round(freed / (1024 * 1024), 2),
+            "index_summary": summary,
+        }
+
     @staticmethod
     def _session_dir_name(session_id: str) -> Optional[str]:
         """Sanitise a chat session id into a safe single path segment."""
@@ -1091,6 +1124,7 @@ class WorkspaceManager:
             "workspace_dir": str(self.workspace_path),
             "file_count": len(files),
             "total_used_mb": round(total_size / (1024 * 1024), 2),
+            "global_used_mb": self.global_used_mb(),
             "quota_mb": MAX_WORKSPACE_MB,
             "files": files
         }

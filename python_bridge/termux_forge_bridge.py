@@ -1907,6 +1907,63 @@ class TermuxForgeBridge:
             logger.error('Workspace page read failed (%s)', type(exc).__name__)
             return web.json_response({'status': 'error', 'message': 'Page read failed.'}, status=500)
 
+    async def _handle_workspace_files(self, request: web.Request) -> web.Response:
+        """Read-only file inventory and quota for one chat's bucket.
+
+        ?session=<id>. Scopes without moving the active-session marker. A
+        chat with no uploads yet returns an empty list instead of an error.
+        """
+        try:
+            from workspace import WorkspaceManager, MAX_WORKSPACE_MB
+            session_id = request.query.get('session', '').strip()
+            if not session_id:
+                return web.json_response({'status': 'error', 'message': 'Missing session.'}, status=400)
+            mgr = WorkspaceManager()
+            if not mgr.scope_readonly(session_id):
+                return web.json_response({
+                    'status': 'success',
+                    'file_count': 0,
+                    'total_used_mb': 0.0,
+                    'global_used_mb': mgr.global_used_mb(),
+                    'quota_mb': MAX_WORKSPACE_MB,
+                    'files': [],
+                })
+            result = mgr.list_files()
+            result.pop('workspace_dir', None)
+            result['status'] = 'success'
+            return web.json_response(result)
+        except Exception as exc:
+            logger.error('Workspace file list failed (%s)', type(exc).__name__)
+            return web.json_response({'status': 'error', 'message': 'File list failed.'}, status=500)
+
+    async def _handle_workspace_delete(self, request: web.Request) -> web.Response:
+        """Delete one document from one chat's bucket, then reindex that bucket.
+
+        ?session=<id>&file=<relative path>. Both are required: no ambient
+        session is used, so a stale sheet can never delete from the wrong chat.
+        """
+        try:
+            from workspace import WorkspaceManager
+            session_id = request.query.get('session', '').strip()
+            file_name = request.query.get('file', '').strip()
+            if not session_id or not file_name:
+                return web.json_response({'status': 'error', 'message': 'Missing session or file.'}, status=400)
+            mgr = WorkspaceManager()
+            if not mgr.scope_readonly(session_id):
+                return web.json_response({'status': 'error', 'message': 'No workspace for this chat.'}, status=404)
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: mgr.delete_file(file_name)),
+                timeout=240,
+            )
+            status = 200 if result.get('status') == 'success' else 422
+            return web.json_response(result, status=status)
+        except asyncio.TimeoutError:
+            return web.json_response({'status': 'error', 'message': 'Delete timed out.'}, status=504)
+        except Exception as exc:
+            logger.error('Workspace delete failed (%s)', type(exc).__name__)
+            return web.json_response({'status': 'error', 'message': 'Delete failed.'}, status=500)
+
     async def _handle_workspace_deps(self, request: web.Request) -> web.Response:
         """Return dependency status for workspace document extraction."""
         try:
@@ -2152,6 +2209,8 @@ class TermuxForgeBridge:
         self._http_app.router.add_post('/workspace/clear', self._handle_workspace_clear)
         self._http_app.router.add_get('/workspace/deps', self._handle_workspace_deps)
         self._http_app.router.add_get('/workspace/page', self._handle_workspace_page)
+        self._http_app.router.add_get('/workspace/files', self._handle_workspace_files)
+        self._http_app.router.add_post('/workspace/delete', self._handle_workspace_delete)
         self._http_app.router.add_get('/native/health', self._handle_native_health)
         self._http_app.router.add_post('/native/call', self._handle_native_call)
         

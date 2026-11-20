@@ -127,6 +127,56 @@ def main():
         check("scope_readonly points at that bucket", ro.workspace_path.name == "session_sess-B")
         check("scope_readonly leaves the active marker alone", ro._read_active_session_id() == before)
         check("scope_readonly rejects an unknown session", not ro.scope_readonly("no-such-chat"))
+
+        # Per-file delete: confined to one bucket, never touches other chats.
+        d = WorkspaceManager(workspace_path=root)
+        check("delete setup scopes to sess-B", d.scope_readonly("sess-B"))
+        (d.workspace_path / "gone.txt").write_text("delete me please", encoding="utf-8")
+        (d.workspace_path / "twin.txt").write_text("twin in B", encoding="utf-8")
+        (a3.workspace_path / "twin.txt").write_text("twin in A", encoding="utf-8")
+        d.rebuild_index()
+        with open(d.index_file, encoding="utf-8") as fh:
+            check("index lists gone.txt before delete", "gone.txt" in fh.read())
+        marker_before = d._read_active_session_id()
+        lf_before = d.list_files()
+        check("list_files reports global_used_mb", "global_used_mb" in lf_before)
+        check(
+            "global usage covers at least this bucket",
+            lf_before["global_used_mb"] >= lf_before["total_used_mb"],
+        )
+        res = d.delete_file("gone.txt")
+        check("delete_file succeeds", res.get("status") == "success" and res.get("removed") == "gone.txt")
+        check("deleted file is gone from disk", not (d.workspace_path / "gone.txt").exists())
+        with open(d.index_file, encoding="utf-8") as fh:
+            check("index drops gone.txt after delete", "gone.txt" not in fh.read())
+        check("other files in the bucket stay", (d.workspace_path / "twin.txt").exists())
+        check("list_files no longer shows gone.txt", all(f["name"] != "gone.txt" for f in d.list_files()["files"]))
+        check(
+            "delete refuses a missing file",
+            d.delete_file("nope.txt").get("status") == "error",
+        )
+        check(
+            "delete refuses dotfiles",
+            d.delete_file(".workspace_index.json").get("status") == "error"
+            and d.index_file.exists(),
+        )
+        check(
+            "delete refuses traversal into another bucket",
+            d.delete_file("../session_sess-A/twin.txt").get("status") == "error"
+            and (a3.workspace_path / "twin.txt").exists(),
+        )
+        check(
+            "delete refuses an absolute path into another bucket",
+            d.delete_file(str(a3.workspace_path / "twin.txt")).get("status") == "error"
+            and (a3.workspace_path / "twin.txt").exists(),
+        )
+        check(
+            "same-named file in B deletes without touching A",
+            d.delete_file("twin.txt").get("status") == "success"
+            and not (d.workspace_path / "twin.txt").exists()
+            and (a3.workspace_path / "twin.txt").exists(),
+        )
+        check("delete leaves the active marker alone", d._read_active_session_id() == marker_before)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
