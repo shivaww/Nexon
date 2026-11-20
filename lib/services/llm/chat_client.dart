@@ -598,6 +598,60 @@ class ChatClient {
     }
   }
 
+  static final RegExp _snipBoiler = RegExp(
+    r'(e-?paper|log in|sign up|relevant people|profile picture|subscribe|follow us|what.s happening)',
+    caseSensitive: false,
+  );
+  static final RegExp _snipSocial = RegExp(
+    r'(twitter|whatsapp|facebook|reddit|linkedin|telegram|instagram|pinterest)',
+    caseSensitive: false,
+  );
+  static final RegExp _snipShareStart = RegExp(
+    r'^(share|follow|via)\b',
+    caseSensitive: false,
+  );
+
+  /// True for short UI lines (login prompts, share rows, nav labels) that
+  /// scraped pages mix into snippets. A short factual line that merely
+  /// mentions one social site is kept.
+  static bool _isBoilerLine(String t) {
+    if (t.length >= 60) return false;
+    if (t.toLowerCase() == 'avatar') return true;
+    if (_snipBoiler.hasMatch(t)) return true;
+    if (_snipShareStart.hasMatch(t) && _snipSocial.hasMatch(t)) return true;
+    final names = _snipSocial
+        .allMatches(t.toLowerCase())
+        .map((m) => m[0])
+        .toSet();
+    return names.length >= 2;
+  }
+
+  /// Cleans one scraped search snippet: drops links, images, share/login
+  /// boilerplate lines and heading marks, collapses whitespace, and caps
+  /// the length at a word boundary so every result fits the output budget.
+  static String _cleanSnippet(Object? raw, {int max = 500}) {
+    var s = (raw ?? '').toString();
+    s = s.replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), ' ');
+    s = s.replaceAllMapped(
+      RegExp(r'\[([^\]]*)\]\([^)]*\)'),
+      (m) => m[1] ?? '',
+    );
+    s = s.replaceAll(RegExp(r'\[\.{3}\]'), ' ');
+    final kept = s
+        .split('\n')
+        .map((l) => l.trim())
+        .where(
+          (t) => t.isNotEmpty && !_isBoilerLine(t),
+        )
+        .map((t) => t.replaceFirst(RegExp(r'^#{1,6}\s*'), ''));
+    s = kept.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (s.length <= max) return s;
+    var cut = s.substring(0, max);
+    final sp = cut.lastIndexOf(' ');
+    if (sp > max * 0.6) cut = cut.substring(0, sp);
+    return '$cut...';
+  }
+
   Future<String> searchWeb(
     String query,
     String provider,
@@ -652,17 +706,18 @@ class ChatClient {
             // outlets and skews non-news queries (pricing, docs, benchmarks).
             final effectiveTopic = topic;
             final effectiveTimeRange = trVal ?? (isFreshQuery ? 'month' : null);
-            // Accuracy: default to Tavily's deeper search. Callers can still
-            // request 'basic' explicitly for low-latency lookups.
+            // Default to Tavily's concise 'basic' search: 'advanced' returns
+            // long scraped pages (navbars, login prompts) and costs 2x. Callers
+            // can still request 'advanced' explicitly.
             final effectiveDepth =
                 searchDepth == 'advanced' || searchDepth == 'basic'
                 ? searchDepth!
-                : 'advanced';
+                : 'basic';
 
             final Map<String, dynamic> payload = {
               'api_key': currentKey,
               'query': query,
-              'max_results': 8,
+              'max_results': 6,
               'search_depth': effectiveDepth,
             };
             if (effectiveTopic != null) payload['topic'] = effectiveTopic;
@@ -670,6 +725,18 @@ class ChatClient {
               payload['time_range'] = effectiveTimeRange;
             if (startDate != null) payload['start_date'] = startDate;
             if (endDate != null) payload['end_date'] = endDate;
+            // Social posts return reel comments instead of facts; skip them
+            // unless the query itself is about those sites.
+            if (!RegExp(
+              r'instagram|facebook|pinterest',
+              caseSensitive: false,
+            ).hasMatch(query)) {
+              payload['exclude_domains'] = [
+                'instagram.com',
+                'facebook.com',
+                'pinterest.com',
+              ];
+            }
 
             request.write(jsonEncode(payload));
             final response = await request.close();
@@ -689,7 +756,7 @@ class ChatClient {
                         publishedDate == null || publishedDate.isEmpty
                         ? ''
                         : 'Published $publishedDate — ';
-                    return '- [${r['title']}](${r['url']}): $datePrefix${r['content']}';
+                    return '- [${r['title']}](${r['url']}): $datePrefix${_cleanSnippet(r['content'], max: searchDepth == 'advanced' ? 1200 : 500)}';
                   })
                   .join('\n\n');
             }
@@ -713,7 +780,7 @@ class ChatClient {
               return results
                   .map(
                     (r) =>
-                        '- [${r['title']}](${r['url']}): ${r['text'] ?? r['highlights']?.first ?? ''}',
+                        '- [${r['title']}](${r['url']}): ${_cleanSnippet(r['text'] ?? r['highlights']?.first)}',
                   )
                   .join('\n\n');
             }
@@ -735,7 +802,7 @@ class ChatClient {
               return results
                   .map(
                     (r) =>
-                        '- [${r['title'] ?? r['metadata']?['title']}](${r['url'] ?? r['metadata']?['source']}): ${r['markdown'] ?? r['snippet'] ?? ''}',
+                        '- [${r['title'] ?? r['metadata']?['title']}](${r['url'] ?? r['metadata']?['source']}): ${_cleanSnippet(r['markdown'] ?? r['snippet'])}',
                   )
                   .join('\n\n');
             }
