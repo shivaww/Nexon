@@ -498,6 +498,29 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             color: Colors.black54,
                           ),
                         ),
+                        if (stepStatus == 'failed' &&
+                            (step['error'] ?? '').toString().isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFDECEA),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: const Color(0xFFF2B8B5),
+                              ),
+                            ),
+                            child: SelectableText(
+                              step['error'].toString(),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                height: 1.35,
+                                color: Color(0xFFB3261E),
+                              ),
+                            ),
+                          ),
+                        ],
                         if ((step['events'] as List? ?? []).isNotEmpty) ...[
                           const SizedBox(height: 12),
                           ListView.builder(
