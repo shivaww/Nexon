@@ -726,9 +726,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         type: FileType.custom,
         allowedExtensions: [
           'pdf', 'txt', 'md', 'json', 'py', 'dart', 'js', 'html',
-          'css', 'yaml', 'yml', 'csv', 'docx', 'doc', 'rtf', 'odt',
-          'pptx', 'ppt', 'xlsx', 'xls', 'epub', 'htm', 'xml',
-          'log', 'tex',
+          'css', 'yaml', 'yml', 'csv', 'docx', 'rtf', 'odt',
+          'pptx', 'xlsx', 'epub', 'htm', 'xml',
+          'log', 'tex', 'zip',
         ],
         allowMultiple: true,
       );

@@ -1759,16 +1759,16 @@ class TermuxForgeBridge:
             safe_name = Path(filename).name
 
             # Pre-check extension before streaming — reject non-document files
-            from workspace import ALLOWED_EXTENSIONS, BLOCKED_EXTENSIONS
+            from workspace import UPLOAD_EXTENSIONS, BLOCKED_EXTENSIONS
             file_ext = Path(safe_name).suffix.lower()
             if file_ext in BLOCKED_EXTENSIONS:
                 return web.json_response(
                     {"status": "error", "message": f"Blocked file type: {file_ext}. Binary/media files are not allowed."},
                     status=415,
                 )
-            if file_ext not in ALLOWED_EXTENSIONS:
+            if file_ext not in UPLOAD_EXTENSIONS:
                 return web.json_response(
-                    {"status": "error", "message": f"Unsupported file type: {file_ext}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"},
+                    {"status": "error", "message": f"Unsupported file type: {file_ext}. Allowed: {', '.join(sorted(UPLOAD_EXTENSIONS))}"},
                     status=415,
                 )
 

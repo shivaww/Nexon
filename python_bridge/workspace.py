@@ -39,11 +39,20 @@ BLOCKED_EXTENSIONS = {
     ".svg", ".ico", ".psd", ".ai", ".raw"
 }
 
+# Plain-text source/config files, read as UTF-8 text like .txt.
+CODE_EXTENSIONS = {".py", ".dart", ".js", ".css", ".yaml", ".yml"}
+
+# Legacy binary Office formats (.doc/.ppt/.xls) are intentionally absent:
+# stdlib cannot parse them and they would index only a warning string.
 ALLOWED_EXTENSIONS = {
     ".pdf", ".docx", ".txt", ".md", ".csv", ".json",
-    ".rtf", ".odt", ".pptx", ".ppt", ".xlsx", ".xls",
-    ".epub", ".html", ".htm", ".xml", ".log", ".tex"
-}
+    ".rtf", ".odt", ".pptx", ".xlsx",
+    ".epub", ".html", ".htm", ".xml", ".log", ".tex",
+} | CODE_EXTENSIONS
+
+# Accepted at the upload gate: documents plus .zip archives, which
+# ingest_file unpacks (members are re-filtered against ALLOWED_EXTENSIONS).
+UPLOAD_EXTENSIONS = ALLOWED_EXTENSIONS | {".zip"}
 
 
 class WorkspaceManager:
@@ -304,6 +313,14 @@ class WorkspaceManager:
         if path.suffix.lower() == ".zip":
             try:
                 with zipfile.ZipFile(path, 'r') as zip_ref:
+                    # Zip-bomb guard: the declared size of every member we would
+                    # extract must fit in 150 MB, checked before extracting anything.
+                    declared = sum(
+                        m.file_size for m in zip_ref.infolist()
+                        if not m.is_dir() and Path(m.filename).suffix.lower() in ALLOWED_EXTENSIONS
+                    )
+                    if declared > 150 * 1024 * 1024:
+                        return {"status": "error", "message": "Archive expands beyond the 150 MB workspace limit"}
                     for member in zip_ref.infolist():
                         member_path = Path(member.filename)
 
@@ -363,7 +380,7 @@ class WorkspaceManager:
         """Extracts readable text and tables while ignoring bitmap images."""
         ext = file_path.suffix.lower()
 
-        if ext in [".txt", ".md", ".csv", ".json"]:
+        if ext in [".txt", ".md", ".csv", ".json"] or ext in CODE_EXTENSIONS:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     return f.read()
@@ -466,11 +483,13 @@ class WorkspaceManager:
         elif ext == ".doc":
             return "[Legacy .doc format not supported. Convert to .docx for text extraction.]"
 
-        elif ext in [".pptx", ".ppt"]:
-            return "[PowerPoint files require manual conversion. Export as PDF or text for indexing.]"
+        elif ext == ".pptx":
+            from office_extract import extract_pptx_text
+            return extract_pptx_text(file_path)
 
-        elif ext in [".xlsx", ".xls"]:
-            return "[Excel files require manual conversion. Export as CSV for indexing.]"
+        elif ext == ".xlsx":
+            from office_extract import extract_xlsx_text
+            return extract_xlsx_text(file_path)
 
         elif ext == ".epub":
             try:
