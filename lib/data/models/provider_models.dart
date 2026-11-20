@@ -386,6 +386,10 @@ class ChatSession {
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
   final bool studyModeEnabled;
+
+  /// Quiz questions the user missed in this chat, newest first. Stored per
+  /// chat so deleting the chat deletes them too.
+  final List<Map<String, dynamic>> mistakes;
   final DateTime updatedAt;
 
   ChatSession({
@@ -401,6 +405,7 @@ class ChatSession {
     this.branches,
     this.activeBranchIndex,
     this.studyModeEnabled = false,
+    this.mistakes = const [],
     DateTime? updatedAt,
   }) : updatedAt = updatedAt ?? _parseIdDate(id);
 
@@ -425,6 +430,7 @@ class ChatSession {
     List<List<ChatMessage>>? branches,
     int? activeBranchIndex,
     bool? studyModeEnabled,
+    List<Map<String, dynamic>>? mistakes,
     DateTime? updatedAt,
   }) {
     List<List<ChatMessage>>? updatedBranches = branches ?? this.branches;
@@ -456,6 +462,7 @@ class ChatSession {
       branches: updatedBranches,
       activeBranchIndex: updatedActiveIndex,
       studyModeEnabled: studyModeEnabled ?? this.studyModeEnabled,
+      mistakes: mistakes ?? this.mistakes,
       updatedAt:
           updatedAt ?? (messages != null ? DateTime.now() : this.updatedAt),
     );
@@ -502,6 +509,7 @@ class ChatSession {
         .toList(),
     'activeBranchIndex': activeBranchIndex,
     'studyModeEnabled': studyModeEnabled,
+    'mistakes': mistakes,
     'updatedAt': updatedAt.toIso8601String(),
   };
 
@@ -603,6 +611,12 @@ class ChatSession {
       branches: branchesList,
       activeBranchIndex: json['activeBranchIndex'] as int?,
       studyModeEnabled: json['studyModeEnabled'] as bool? ?? false,
+      mistakes:
+          (json['mistakes'] as List?)
+              ?.whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList() ??
+          const [],
       updatedAt: parsedDate,
     );
   }

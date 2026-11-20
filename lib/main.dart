@@ -68,6 +68,7 @@ import 'package:nexon/widgets/quiz_sheet.dart';
 import 'package:nexon/widgets/source_page_sheet.dart';
 import 'package:nexon/widgets/workspace_files_sheet.dart';
 import 'package:nexon/widgets/study_action_chip.dart';
+import 'package:nexon/utils/quiz_mistakes.dart';
 import 'package:nexon/widgets/composer.dart';
 import 'package:nexon/utils/model_capabilities.dart';
 import 'package:nexon/widgets/media_and_model_sheet.dart';
@@ -3094,6 +3095,28 @@ jobs:
                       'Quiz Tool Result:\n\nUser dismissed the quiz without answering. Ask whether to retry or skip, then continue teaching.',
                     );
                   } else {
+                    // Save questions the user missed (even if a retry fixed
+                    // them) to this chat, so they can be reviewed later.
+                    if (mounted) {
+                      setState(() {
+                        final mIdx = _sessions.indexWhere(
+                          (s) => s.id == targetSessionId,
+                        );
+                        if (mIdx != -1) {
+                          final merged = mergeQuizMistakes(
+                            _sessions[mIdx].mistakes,
+                            answers,
+                            DateTime.now(),
+                          );
+                          if (!identical(merged, _sessions[mIdx].mistakes)) {
+                            _sessions[mIdx] = _sessions[mIdx].copyWith(
+                              mistakes: merged,
+                            );
+                          }
+                        }
+                      });
+                      _saveSessions();
+                    }
                     final sb = StringBuffer(
                       'Quiz results (${answers.length} questions):\n',
                     );

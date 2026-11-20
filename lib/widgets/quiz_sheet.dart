@@ -67,12 +67,18 @@ class QuizSheetState extends State<QuizSheet> {
     final q = widget.questions[_idx];
     final opts = (q['options'] as List).map((e) => e.toString()).toList();
     final correct = (q['correct'] as num).toInt();
+    // The first wrong pick survives a retry, so the mistake can still be
+    // saved after the retry fixes it.
+    final wrongNow = picked >= 0 && picked != correct;
+    final wrongPick =
+        _slots[_idx]?['wrong_pick'] ?? (wrongNow ? pickedText : null);
     _slots[_idx] = {
       'q': q['q'],
       'picked': pickedText,
       'answer': opts[correct],
       // null = free-text answer the tutor model still has to grade
       'correct': picked < 0 ? null : picked == correct,
+      if (wrongPick != null) 'wrong_pick': wrongPick,
     };
     _own.clear();
     setState(() {
