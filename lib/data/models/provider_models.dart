@@ -490,7 +490,8 @@ class ChatSession {
     'attachedImagesBase64': attachedImagesBase64,
     'attachedFiles': attachedFiles.map((f) => f.toJson()).toList(),
     'isPinned': isPinned,
-    'branches': branches
+    // A lone branch only duplicates 'messages', so it is not written to disk.
+    'branches': ((branches?.length ?? 0) > 1 ? branches : null)
         ?.map(
           (branch) => branch
               .map(

@@ -392,6 +392,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   bool _isLoadingMoreHistory = false;
   Future<void> _sessionSaveTail = Future<void>.value();
   bool _autoBackupInFlight = false;
+  bool _backupReminderOpen = false;
 
   Future<void> _loadMoreHistory() async {
     if (_isLoadingMoreHistory) return;
@@ -746,21 +747,29 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       _sessions = loadedSessions;
 
       bool hasEmptySession = false;
-      if (_sessions.isNotEmpty) {
-        final first = _sessions.first;
-        final userMsgs = first.messages.where(
-          (m) => m.role == MessageRole.user,
+      // A pinned chat sorts above the blank one, so checking only the first
+      // session added a new blank chat on every launch. Reuse any blank chat
+      // and drop the extra blanks that earlier launches left behind.
+      bool isBlank(ChatSession s) =>
+          (s.title == 'New Chat' || s.title == 'Welcome Chat') &&
+          !s.messages.any((m) => m.role == MessageRole.user);
+      final blanks = _sessions.where(isBlank).toList();
+      if (blanks.isNotEmpty) {
+        final keep = blanks.first;
+        _sessions.removeWhere(
+          (s) =>
+              s.id != keep.id &&
+              !s.isPinned &&
+              s.messages.isEmpty &&
+              isBlank(s),
         );
-        if (userMsgs.isEmpty &&
-            (first.title == 'New Chat' || first.title == 'Welcome Chat')) {
-          _activeSessionId = first.id;
-          _agenticEnabled = false;
-          _deepResearchEnabled = false;
-          _studyModeEnabled = false;
-          _promptSig = '';
-          _promptUseCount = 0;
-          hasEmptySession = true;
-        }
+        _activeSessionId = keep.id;
+        _agenticEnabled = false;
+        _deepResearchEnabled = false;
+        _studyModeEnabled = false;
+        _promptSig = '';
+        _promptUseCount = 0;
+        hasEmptySession = true;
       }
 
       if (!hasEmptySession) {
@@ -1430,10 +1439,13 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     if (state == AppLifecycleState.paused) {
       _bridgeTimer?.cancel();
       _bridgeTimer = null;
+      // Flush chats to disk first: Android may kill the app right after pause.
+      unawaited(_saveSessions());
       _autoBackup();
     } else if (state == AppLifecycleState.resumed) {
       _startBridgeTimer();
       _pingBridge();
+      unawaited(_maybeShowBackupReminder());
     }
   }
 
@@ -1484,6 +1496,137 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
     if (mounted && _bridgeOnline != ok) {
       setState(() => _bridgeOnline = ok);
+    }
+  }
+
+  /// Weekly soft reminder to back up chats. Later snoozes it for a week and
+  /// any successful backup (see DriveSyncService) pushes it out a week too.
+  Future<void> _maybeShowBackupReminder() async {
+    if (_backupReminderOpen || !mounted) return;
+    _backupReminderOpen = true;
+    try {
+      final prefs = _prefs ?? await SharedPreferences.getInstance();
+      final next = prefs.getInt('backup_reminder_next_ms');
+      if (next != null && DateTime.now().millisecondsSinceEpoch < next) return;
+      final hasChats = _sessions.any(
+        (s) => s.messages.any((m) => m.role == MessageRole.user),
+      );
+      if (!hasChats || !mounted) return;
+      final backUp = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFFFFFBF2),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: Color(0xFFE5DDD3), width: 1),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.cloud_upload_outlined,
+                color: Color(0xFF9B4D39),
+                size: 23,
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Back up your chats',
+                  style: TextStyle(
+                    color: Color(0xFF2D241C),
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Chats live only on this device. Back them up to Google Drive so an uninstall or a cleared app does not lose them.',
+            style: TextStyle(
+              color: Color(0xFF6C5946),
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFFE5DDD3)),
+                      foregroundColor: const Color(0xFF6C5946),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text(
+                      'Later',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7B4E2E),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      elevation: 0,
+                    ),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text(
+                      'Back up',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      // Snooze before the upload: a failed backup asks again in a day, a
+      // skipped one in a week. A successful backup resets it to a week.
+      final snooze = backUp == true
+          ? const Duration(days: 1)
+          : const Duration(days: 7);
+      await prefs.setInt(
+        'backup_reminder_next_ms',
+        DateTime.now().add(snooze).millisecondsSinceEpoch,
+      );
+      if (backUp != true || !mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Backing up chats...')),
+      );
+      final result = await DriveSyncService.syncToDriveDetailed(
+        _sessions,
+        force: true,
+      );
+      messenger.clearSnackBars();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            result.success
+                ? 'Backup complete'
+                : 'Backup failed: ${result.message}',
+          ),
+        ),
+      );
+    } catch (_) {
+      // A reminder must never crash the app.
+    } finally {
+      _backupReminderOpen = false;
     }
   }
 
@@ -1930,6 +2073,12 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
     await _ensureLocalSupportDirs();
     await _loadSessions();
+    unawaited(
+      Future<void>.delayed(
+        const Duration(seconds: 3),
+        _maybeShowBackupReminder,
+      ),
+    );
   }
 
   Future<void> _saveSettings() async {

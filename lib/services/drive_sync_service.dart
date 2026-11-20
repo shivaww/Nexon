@@ -316,11 +316,22 @@ class DriveSyncService {
       } catch (_) {
         // A failed prior sync must not block later backups.
       }
-      return await _performSyncToDriveDetailed(
+      final result = await _performSyncToDriveDetailed(
         snapshot,
         force: force,
         onProgress: onProgress,
       );
+      if (result.success) {
+        // A good backup pushes the weekly reminder out another week.
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setInt(
+            'backup_reminder_next_ms',
+            DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch,
+          );
+        } catch (_) {}
+      }
+      return result;
     } finally {
       release.complete();
     }
