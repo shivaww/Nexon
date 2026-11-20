@@ -11,7 +11,7 @@ An AI-powered Mobile Agentic IDE and Deep Research assistant that runs natively 
 **Team:** K. Shiva Reddy (founder/developer), K. Harsha Vardhan Reddy, R. Rithvik Ram, and C. Naga Charan (developers) — Hyderabad, India.
 
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Termux-orange.svg)](https://termux.dev/)
-[![Status](https://img.shields.io/badge/status-Open%20Source-success.svg)](https://github.com/shivaww/Nexon)
+[![Status](https://img.shields.io/badge/status-Free%20for%20personal%20use%20only-success.svg)](https://github.com/shivaww/Nexon)
 [![License](https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue.svg)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/shivaww/Nexon/total.svg?color=blue)](https://github.com/shivaww/Nexon/releases)
 [![Flutter](https://img.shields.io/badge/Flutter-3.32%2B-blue.svg)](https://flutter.dev)
@@ -110,7 +110,7 @@ Nexon split-processes operations between the Flutter application (visual IDE pan
 
 ## 📌 Project Status
 
-Nexon is an open-source Mobile Agentic IDE project actively developed for Android & Termux. All core infrastructure (Google Drive OAuth token refresh, structured file manipulation, and responsive UI rendering) has been fully stabilized. Nexon is developed with heavy use of Claude.
+Nexon is a source-available Mobile Agentic IDE project, free for personal use only, actively developed for Android & Termux. All core infrastructure (Google Drive OAuth token refresh, structured file manipulation, and responsive UI rendering) has been fully stabilized. Nexon is developed with heavy use of Claude.
 
 ---
 
@@ -152,3 +152,5 @@ Contributions, bug reports, and feature requests are open and welcome! Feel free
 ## 📜 License & Usage
 
 Distributed under the **PolyForm Noncommercial License 1.0.0** — free to use, modify, and share for any noncommercial purpose (personal projects, hobby use, study, research, and use by nonprofits, schools, and government bodies). **Commercial use is not permitted.** If you want to use this project commercially, contact the maintainer for a separate license. Managed subscriptions (Go, Plus, Pro, Max) are coming soon for convenient access to Claude and other models as credits with usage limits. See [`LICENSE`](LICENSE) for details.
+
+The **Nexon** and **NexonAI** names and logos are trademarks of the copyright holder and are not covered by the license. Forks and redistributed builds must use distinct branding. See [`NOTICE`](NOTICE).
