@@ -6315,6 +6315,19 @@ jobs:
               ),
             );
 
+            transientRetries = 0;
+            if (reasoningText.trim().isNotEmpty) {
+              final String prevReasoning =
+                  (steps[i]['reasoning'] ?? '').toString();
+              final String joinedReasoning = prevReasoning.isEmpty
+                  ? reasoningText.trim()
+                  : '$prevReasoning\n\n---\n\n${reasoningText.trim()}';
+              steps[i]['reasoning'] = joinedReasoning.length > 6000
+                  ? joinedReasoning.substring(joinedReasoning.length - 6000)
+                  : joinedReasoning;
+              _publishResearchState(sessionIndex, messageIndex, stateMap);
+            }
+
             final unrecognizedErrors = <Map<String, dynamic>>[];
             // JSON tool calls are extracted directly from fenced ```json blocks
             // in the dispatch loop — no preprocessing/reinterpretation needed.
@@ -7272,7 +7285,16 @@ jobs:
               debugPrint(
                 'Transient research stream error, retry $transientRetries/3: $errStr',
               );
-              await Future.delayed(Duration(seconds: 2 * transientRetries));
+              loopCount--;
+              final bool busyErr = errLower.contains('429') ||
+                  errLower.contains('rate limit') ||
+                  errLower.contains('temporarily busy') ||
+                  errLower.contains('overloaded') ||
+                  errLower.contains('503');
+              final int waitSec = busyErr
+                  ? 10 * (1 << (transientRetries - 1))
+                  : 2 * transientRetries;
+              await Future.delayed(Duration(seconds: waitSec));
               continue;
             }
             stepDone = true;

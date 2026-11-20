@@ -57,6 +57,7 @@ class DeepResearchHelpers {
               )
             : <Map<String, dynamic>>[],
         if (m['error'] != null) 'error': m['error'].toString(),
+        if (m['reasoning'] != null) 'reasoning': m['reasoning'].toString(),
       });
       i++;
     }

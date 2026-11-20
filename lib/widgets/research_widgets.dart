@@ -521,6 +521,47 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             ),
                           ),
                         ],
+                        if ((step['reasoning'] ?? '')
+                            .toString()
+                            .trim()
+                            .isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Theme(
+                            data: Theme.of(context)
+                                .copyWith(dividerColor: Colors.transparent),
+                            child: ExpansionTile(
+                              key: ValueKey('step-reasoning-$idx'),
+                              tilePadding: EdgeInsets.zero,
+                              childrenPadding: const EdgeInsets.only(bottom: 8),
+                              title: const Text(
+                                'Reasoning',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                              children: [
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF3EFE8),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: SelectableText(
+                                    step['reasoning'].toString(),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      height: 1.4,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         if ((step['events'] as List? ?? []).isNotEmpty) ...[
                           const SizedBox(height: 12),
                           ListView.builder(
