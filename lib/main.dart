@@ -67,6 +67,7 @@ import 'package:nexon/widgets/streaming_widgets.dart';
 import 'package:nexon/widgets/quiz_sheet.dart';
 import 'package:nexon/widgets/source_page_sheet.dart';
 import 'package:nexon/widgets/workspace_files_sheet.dart';
+import 'package:nexon/widgets/study_action_chip.dart';
 import 'package:nexon/widgets/composer.dart';
 import 'package:nexon/utils/model_capabilities.dart';
 import 'package:nexon/widgets/media_and_model_sheet.dart';
@@ -623,6 +624,36 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         sessionId: sessionId,
       ),
     );
+  }
+
+  /// Quick study prompts for the pill row. Hidden unless Study Mode is on,
+  /// and while a reply is streaming or a message is being edited.
+  List<Widget> _buildStudyActionChips() {
+    final sid = _activeSessionId;
+    if (!_studyModeEnabled ||
+        sid == null ||
+        _sendingSessionIds.contains(sid) ||
+        _editingMessageIndex != null) {
+      return const <Widget>[];
+    }
+    return [
+      for (final action in kStudyActions)
+        StudyActionChip(action: action, onTap: () => _runStudyAction(action)),
+    ];
+  }
+
+  /// Sends a study prompt without losing a draft the user is typing.
+  /// _sendMessage clears the composer synchronously, so the draft is put
+  /// back right after the call hands back its future.
+  void _runStudyAction(StudyAction action) {
+    final draft = _messageController.text;
+    unawaited(_sendMessage(promptText: action.prompt));
+    if (draft.isNotEmpty) {
+      _messageController.value = TextEditingValue(
+        text: draft,
+        selection: TextSelection.collapsed(offset: draft.length),
+      );
+    }
   }
 
   Future<void> _loadSessions() async {
@@ -7976,6 +8007,7 @@ jobs:
           onStudyModeEnabledChanged: (val) async {
             setState(() {
               _studyModeEnabled = val;
+              if (!val) _bridgeOnline = null;
               final idx = _sessions.indexWhere((s) => s.id == _activeSessionId);
               if (idx != -1) {
                 _sessions[idx] = _sessions[idx].copyWith(studyModeEnabled: val);
@@ -8419,6 +8451,7 @@ jobs:
                           ? const Color(0xFF3E7B3E)
                           : const Color(0xFFB3402E),
                     ),
+                  ..._buildStudyActionChips(),
                   if (_artifactsEnabled) const FeaturePill(icon: Icons.extension, label: 'Artifacts'),
                   if (_svgVisualsEnabled) const FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
                 ],
