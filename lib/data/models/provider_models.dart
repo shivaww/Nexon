@@ -385,6 +385,7 @@ class ChatSession {
   final bool isPinned;
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
+  final bool studyModeEnabled;
   final DateTime updatedAt;
 
   ChatSession({
@@ -399,6 +400,7 @@ class ChatSession {
     this.isPinned = false,
     this.branches,
     this.activeBranchIndex,
+    this.studyModeEnabled = false,
     DateTime? updatedAt,
   }) : updatedAt = updatedAt ?? _parseIdDate(id);
 
@@ -422,6 +424,7 @@ class ChatSession {
     bool? isPinned,
     List<List<ChatMessage>>? branches,
     int? activeBranchIndex,
+    bool? studyModeEnabled,
     DateTime? updatedAt,
   }) {
     List<List<ChatMessage>>? updatedBranches = branches ?? this.branches;
@@ -452,6 +455,7 @@ class ChatSession {
       isPinned: isPinned ?? this.isPinned,
       branches: updatedBranches,
       activeBranchIndex: updatedActiveIndex,
+      studyModeEnabled: studyModeEnabled ?? this.studyModeEnabled,
       updatedAt:
           updatedAt ?? (messages != null ? DateTime.now() : this.updatedAt),
     );
@@ -497,6 +501,7 @@ class ChatSession {
         )
         .toList(),
     'activeBranchIndex': activeBranchIndex,
+    'studyModeEnabled': studyModeEnabled,
     'updatedAt': updatedAt.toIso8601String(),
   };
 
@@ -597,6 +602,7 @@ class ChatSession {
       isPinned: json['isPinned'] as bool? ?? false,
       branches: branchesList,
       activeBranchIndex: json['activeBranchIndex'] as int?,
+      studyModeEnabled: json['studyModeEnabled'] as bool? ?? false,
       updatedAt: parsedDate,
     );
   }

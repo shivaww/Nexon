@@ -542,14 +542,22 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     );
     _promptSig = '';
     _promptUseCount = 0;
-    _clearWorkspaceBucket();
+    // No workspace wipe here: bridge buckets are per-session now.
   }
 
-  Future<void> _clearWorkspaceBucket() async {
+  Future<void> _clearWorkspaceBucket({String? sessionId}) async {
+    // Clears ONE session's document bucket on the Termux bridge (the active
+    // session when sessionId is omitted). Called when a chat is deleted so
+    // its uploads are freed; new chats need no clear — buckets are scoped
+    // per session and the bridge LRU-enforces the 150MB global quota.
     try {
-    final client = HttpClient()..findProxy = ((uri) => 'DIRECT');
-    final req = await client
-        .postUrl(Uri.parse('http://127.0.0.1:8390/workspace/clear'))
+      final target = sessionId == null || sessionId.trim().isEmpty
+          ? 'http://127.0.0.1:8390/workspace/clear'
+          : 'http://127.0.0.1:8390/workspace/clear?session='
+                '${Uri.encodeQueryComponent(sessionId)}';
+      final client = HttpClient()..findProxy = ((uri) => 'DIRECT');
+      final req = await client
+          .postUrl(Uri.parse(target))
           .timeout(const Duration(seconds: 5));
       req.headers.contentType = ContentType.json;
       req.add(utf8.encode('{}'));
@@ -557,7 +565,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       await resp.drain<void>();
       client.close(force: true);
     } catch (_) {
-      // Bridge offline at startup — upload-time session check clears instead.
+      // Bridge offline — the bucket stays until the next LRU quota pass.
     }
   }
 
@@ -663,7 +671,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
           _studyModeEnabled = false;
           _promptSig = '';
           _promptUseCount = 0;
-          _clearWorkspaceBucket();
           hasEmptySession = true;
         }
       }
@@ -686,7 +693,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         _studyModeEnabled = false;
         _promptSig = '';
         _promptUseCount = 0;
-        _clearWorkspaceBucket();
       }
       _editingMessageIndex = null;
     });
@@ -1199,10 +1205,11 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         );
       }
 
-      // Turn off agentic file access, deep research, and study modes when switching sessions
+      // Turn off agentic file access and deep research when switching sessions;
+      // study mode is restored from the session being opened.
       _agenticEnabled = false;
       _deepResearchEnabled = false;
-      _studyModeEnabled = false;
+      _studyModeEnabled = session.studyModeEnabled;
       _searchSettings = SearchSettings(
         enabled: false,
         provider: _searchSettings.provider,
@@ -1237,13 +1244,14 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       _sessions.removeAt(deletedIndex);
       if (_activeSessionId == sessionId) {
         _activeSessionId = _sessions.first.id;
+        _studyModeEnabled = _sessions.first.studyModeEnabled;
       }
       _editingMessageIndex = null;
     });
     _saveSessions();
 
     ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
+    final deleteSnack = ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Chat "${deletedSession.title}" deleted.'),
         duration: const Duration(seconds: 15),
@@ -1254,12 +1262,20 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
             setState(() {
               _sessions.insert(deletedIndex, deletedSession);
               _activeSessionId = deletedSession.id;
+              _studyModeEnabled = deletedSession.studyModeEnabled;
             });
             _saveSessions();
           },
         ),
       ),
     );
+    // Free this chat's workspace bucket only once Undo is no longer possible,
+    // so Undo restores the uploaded files along with the conversation.
+    deleteSnack.closed.then((reason) {
+      if (reason != SnackBarClosedReason.action) {
+        _clearWorkspaceBucket(sessionId: sessionId);
+      }
+    });
   }
 
   void _renameSession(String sessionId, String newTitle) {
@@ -7431,7 +7447,8 @@ jobs:
       _studyModeEnabled = false; // Default off for new chat
     });
     _saveSessions();
-    _clearWorkspaceBucket();
+    // Per-session workspace buckets: a new chat gets its own empty bucket;
+    // previous sessions' docs stay until the bridge LRU quota pass reclaims.
   }
 
   String _safeFileStem(String input) {
@@ -7588,6 +7605,7 @@ jobs:
       setState(() {
         _sessions.insert(0, loaded);
         _activeSessionId = loaded.id;
+        _studyModeEnabled = loaded.studyModeEnabled;
         _editingMessageIndex = null;
       });
     }
@@ -7676,6 +7694,12 @@ jobs:
       setState(() {
         _sessions = restored;
         _activeSessionId = activeId ?? restored.first.id;
+        _studyModeEnabled = restored
+            .firstWhere(
+              (s) => s.id == _activeSessionId,
+              orElse: () => restored.first,
+            )
+            .studyModeEnabled;
         _editingMessageIndex = null;
       });
     }
@@ -7831,8 +7855,13 @@ jobs:
           onStudyModeEnabledChanged: (val) async {
             setState(() {
               _studyModeEnabled = val;
+              final idx = _sessions.indexWhere((s) => s.id == _activeSessionId);
+              if (idx != -1) {
+                _sessions[idx] = _sessions[idx].copyWith(studyModeEnabled: val);
+              }
             });
             await _saveSettings();
+            _saveSessions();
           },
           onUserNameChanged: (val) async {
             setState(() {

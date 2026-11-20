@@ -22,6 +22,13 @@ MAX_FILE_SIZE_MB = 150    # Max single upload file size (MB)
 CHUNK_SIZE_CHARS = 1200   # ~250-300 words per chunk
 CHUNK_OVERLAP = 150       # Overlap between consecutive chunks
 
+# Common English stopwords dropped from workspace search keywords.
+SEARCH_STOPWORDS = {
+    "the", "a", "an", "of", "and", "or", "to", "in", "is", "for", "on",
+    "at", "by", "with", "as", "from", "that", "this", "it", "be",
+    "are", "was", "were", "has", "have", "had", "will", "would", "can",
+}
+
 # Prohibited executable/binary/media/image formats
 BLOCKED_EXTENSIONS = {
     ".apk", ".exe", ".dll", ".so", ".bin", ".iso", ".img",
@@ -33,7 +40,7 @@ BLOCKED_EXTENSIONS = {
 }
 
 ALLOWED_EXTENSIONS = {
-    ".pdf", ".docx", ".doc", ".txt", ".md", ".csv", ".json",
+    ".pdf", ".docx", ".txt", ".md", ".csv", ".json",
     ".rtf", ".odt", ".pptx", ".ppt", ".xlsx", ".xls",
     ".epub", ".html", ".htm", ".xml", ".log", ".tex"
 }
@@ -43,16 +50,33 @@ class WorkspaceManager:
     """Memory-efficient document workspace engine for Termux/mobile environments."""
 
     def __init__(self, workspace_path: str = WORKSPACE_DIR):
-        self.workspace_path = Path(workspace_path)
+        # workspace_path is the ROOT bucket (~/nexon_workspace). Documents
+        # are scoped per chat session under <root>/<session_id>/ so switching
+        # or restarting never wipes another session's uploads; the active
+        # session is ambient state in <root>/.workspace_session (set on
+        # upload, re-read on every WorkspaceManager() construction).
+        self.root_path = Path(workspace_path)
+        self.root_path.mkdir(parents=True, exist_ok=True)
+        self.session_marker = self.root_path / ".workspace_session"
+        active = self._read_active_session_id()
+        if active:
+            self.workspace_path = self.root_path / active
+        else:
+            # Legacy flat mode (CLI use / hybrid tools before any upload):
+            # operate directly on the root bucket.
+            self.workspace_path = self.root_path
         self.workspace_path.mkdir(parents=True, exist_ok=True)
         self.index_file = self.workspace_path / ".workspace_index.json"
 
     def check_storage_quota(self, incoming_bytes: int = 0) -> Dict[str, Any]:
-        """Ensures mobile device storage and workspace quota limits are respected."""
-        total_used = sum(
-            f.stat().st_size for f in self.workspace_path.rglob('*')
-            if f.is_file() and not f.is_symlink()
-        )
+        """Ensures the global workspace quota (all session buckets) and device storage are respected."""
+        total_used = 0
+        for f in self.root_path.rglob('*'):
+            try:
+                if f.is_file() and not f.is_symlink():
+                    total_used += f.stat().st_size
+            except OSError:
+                continue
         total_used_mb = total_used / (1024 * 1024)
         incoming_mb = incoming_bytes / (1024 * 1024)
 
@@ -77,17 +101,46 @@ class WorkspaceManager:
             "free_disk_mb": round(free_mb, 2)
         }
 
-    def clear_session_documents(self) -> Dict[str, Any]:
-        """Remove all documents left by the previous session, freeing the 150MB quota."""
+    def clear_session_documents(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Clear ONE session's document bucket (the active session by default).
+
+        Per-session buckets mean other chats keep their uploads; the LRU
+        pass in ensure_session reclaims space when the global quota is hit.
+        With no session marker set (legacy flat mode) the whole root bucket
+        is cleared, preserving the original semantics.
+        """
         removed, freed = 0, 0
-        for entry in list(self.workspace_path.iterdir()):
+
+        def _size(p: Path) -> int:
+            try:
+                return p.stat().st_size
+            except OSError:
+                return 0
+
+        if session_id:
+            dirname = self._session_dir_name(session_id)
+            target = self.root_path / dirname if dirname else None
+        elif self._read_active_session_id():
+            target = self.workspace_path
+        else:
+            target = self.root_path  # legacy flat mode
+
+        if target is None or not target.exists():
+            return {"status": "success", "removed_items": 0, "freed_mb": 0.0}
+
+        keep_marker = target == self.root_path
+        for entry in list(target.iterdir()):
+            if keep_marker and (
+                entry.name == ".workspace_session" or entry.name.startswith("session_")
+            ):
+                continue
             try:
                 if entry.is_dir() and not entry.is_symlink():
                     freed += sum(f.stat().st_size for f in entry.rglob('*') if f.is_file())
                     shutil.rmtree(entry)
                 else:
                     if entry.is_file():
-                        freed += entry.stat().st_size
+                        freed += _size(entry)
                     os.remove(entry)
                 removed += 1
             except OSError:
@@ -98,13 +151,113 @@ class WorkspaceManager:
             "freed_mb": round(freed / (1024 * 1024), 2),
         }
 
+    @staticmethod
+    def _session_dir_name(session_id: str) -> Optional[str]:
+        """Sanitise a chat session id into a safe single path segment."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", sid)[:80]
+        if not safe or safe in {".", ".."}:
+            return None
+        return f"session_{safe}"
+
+    def _read_active_session_id(self) -> Optional[str]:
+        try:
+            raw = self.session_marker.read_text().strip()
+        except (OSError, ValueError):
+            return None
+        return self._session_dir_name(raw) if raw else None
+
+    def _iter_session_dirs(self):
+        """All per-session directories under the root bucket."""
+        if not self.root_path.is_dir():
+            return
+        for entry in self.root_path.iterdir():
+            if entry.is_dir() and not entry.is_symlink() and entry.name.startswith("session_"):
+                yield entry
+
+    def _enforce_global_quota(self) -> None:
+        """LRU eviction: drop oldest session buckets until the quota is met.
+
+        The active session's bucket is never evicted; loose root files are
+        left alone (legacy flat-mode docs adopted on next ensure_session).
+        """
+        def dir_size(p: Path) -> int:
+            total = 0
+            try:
+                for f in p.rglob("*"):
+                    try:
+                        if f.is_file() and not f.is_symlink():
+                            total += f.stat().st_size
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            return total
+
+        def dir_mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        try:
+            sessions = list(self._iter_session_dirs())
+        except OSError:
+            return
+        used = sum(dir_size(s) for s in sessions)
+        limit = MAX_WORKSPACE_MB * 1024 * 1024
+        if used <= limit:
+            return
+        active = self.workspace_path.resolve()
+        evictable = [s for s in sessions if s.resolve() != active]
+        evictable.sort(key=dir_mtime)  # oldest first
+        for victim in evictable:
+            if used <= limit:
+                break
+            used -= dir_size(victim)
+            try:
+                shutil.rmtree(victim)
+            except OSError:
+                pass
+
     def ensure_session(self, session_id: str) -> None:
-        """First upload from a different session clears the previous session's docs."""
-        marker = self.workspace_path / ".workspace_session"
-        prev = marker.read_text().strip() if marker.exists() else ""
-        if prev and prev != session_id:
-            self.clear_session_documents()
-        marker.write_text(session_id)
+        """Scope the workspace to one chat session without wiping others.
+
+        Each session owns <root>/<session_id>/; switching sessions just
+        moves the ambient marker. The first scoping call adopts loose
+        legacy files from the flat root into the new session bucket so
+        pre-upgrade docs stay reachable, then enforces the LRU quota.
+        """
+        dirname = self._session_dir_name(session_id)
+        if not dirname:
+            return
+        session_dir = self.root_path / dirname
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        prev = self._read_active_session_id()
+        if prev != dirname:
+            # Adopt loose legacy files (flat-root era) into this session.
+            for entry in list(self.root_path.iterdir()):
+                if entry.name == ".workspace_session" or entry.name.startswith("session_"):
+                    continue
+                try:
+                    if entry.is_file() and not entry.is_symlink():
+                        shutil.move(str(entry), str(session_dir / entry.name))
+                    elif entry.is_dir() and not entry.is_symlink():
+                        shutil.move(str(entry), str(session_dir / entry.name))
+                except (OSError, shutil.Error):
+                    continue
+
+        self.session_marker.write_text(str(session_id).strip())
+        self.workspace_path = session_dir
+        self.index_file = session_dir / ".workspace_index.json"
+        try:
+            os.utime(session_dir, None)  # LRU freshness touch
+        except OSError:
+            pass
+        self._enforce_global_quota()
 
     def _resolve_workspace_path(self, file_path: str):
         """Resolve a caller-supplied path strictly inside the workspace root.
@@ -352,6 +505,10 @@ class WorkspaceManager:
         current_chunk = []
         current_len = 0
         
+        current_page = 1
+        chunk_page = 1
+        page_re = re.compile(r'---\s*\[Page (\d+)\]')
+
         def flush_chunk():
             nonlocal current_chunk, current_len
             if current_chunk:
@@ -361,6 +518,7 @@ class WorkspaceManager:
                         "file": file_name,
                         "relative_path": rel_path,
                         "chunk_id": len(chunks),
+                        "page": chunk_page,
                         "content": chunk_text
                     })
                 current_chunk = []
@@ -368,6 +526,14 @@ class WorkspaceManager:
 
         for line in lines:
             stripped = line.strip()
+            # Track the source page: PDF extraction emits --- [Page N] lines.
+            page_hit = page_re.search(stripped)
+            if page_hit:
+                # New page marker starts a new chunk so each chunk keeps one accurate page.
+                flush_chunk()
+                current_page = int(page_hit.group(1))
+            if not current_chunk:
+                chunk_page = current_page
             # Structural boundaries
             is_header = stripped.startswith('#') or stripped.startswith('--- [Page')
             is_table_row = stripped.startswith('|')
@@ -398,6 +564,7 @@ class WorkspaceManager:
                         "file": file_name,
                         "relative_path": rel_path,
                         "chunk_id": len(final_chunks),
+                        "page": c["page"],
                         "content": chunk_text
                     })
             else:
@@ -505,19 +672,28 @@ class WorkspaceManager:
                         "content": result.stdout.strip()
                     }
                 return {"status": "error", "message": "PDF extractor unavailable"}
-        elif ext in [".docx", ".doc"]:
+        elif ext == ".docx":
             try:
                 import docx
                 doc = docx.Document(str(path))
-                all_paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-                total_paras = len(all_paragraphs)
-                paras_per_page = max(1, total_paras // 10) if total_paras > 50 else total_paras
-                total_pages = max(1, (total_paras + paras_per_page - 1) // paras_per_page)
-                start_idx = (page - 1) * paras_per_page
-                end_idx = min(start_idx + paras_per_page, total_paras)
-                if page < 1 or start_idx >= total_paras:
+                # Paragraphs + tables as Markdown rows, so page slicing no
+                # longer drops table content (parity with extract_text_content).
+                blocks = [p.text for p in doc.paragraphs if p.text.strip()]
+                for table in doc.tables:
+                    rows = []
+                    for row in table.rows:
+                        cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                        rows.append("| " + " | ".join(cells) + " |")
+                    if rows:
+                        blocks.append("\n[Table]\n" + "\n".join(rows))
+                total_blocks = len(blocks)
+                blocks_per_page = max(1, total_blocks // 10) if total_blocks > 50 else total_blocks
+                total_pages = max(1, (total_blocks + blocks_per_page - 1) // blocks_per_page)
+                start_idx = (page - 1) * blocks_per_page
+                end_idx = min(start_idx + blocks_per_page, total_blocks)
+                if page < 1 or start_idx >= total_blocks:
                     return {"status": "error", "message": f"Page {page} out of range (1-{total_pages})"}
-                content = "\n".join(all_paragraphs[start_idx:end_idx])
+                content = "\n".join(blocks[start_idx:end_idx])
                 return {
                     "status": "success",
                     "file": path.name,
@@ -527,15 +703,32 @@ class WorkspaceManager:
                 }
             except ImportError:
                 return {"status": "error", "message": "python-docx unavailable"}
+            except Exception as e:
+                return {"status": "error", "message": f"Failed to read docx: {e}"}
         else:
-            # For text files, return entire content
-            text = self.extract_text_content(path)
+            # Non-PDF/DOCX text files: paginate at ~5000 chars per virtual
+            # page so a large .txt/.csv/.html no longer dumps the whole
+            # file into one response.
+            text = (self.extract_text_content(path) or "").strip()
+            page_chars = 5000
+            if not text:
+                return {
+                    "status": "success",
+                    "file": path.name,
+                    "page": 1,
+                    "total_pages": 1,
+                    "content": ""
+                }
+            total_pages = max(1, (len(text) + page_chars - 1) // page_chars)
+            if page < 1 or page > total_pages:
+                return {"status": "error", "message": f"Page {page} out of range (1-{total_pages})"}
+            start = (page - 1) * page_chars
             return {
                 "status": "success",
                 "file": path.name,
-                "page": 1,
-                "total_pages": 1,
-                "content": text.strip()
+                "page": page,
+                "total_pages": total_pages,
+                "content": text[start:start + page_chars]
             }
 
     def get_outline(self, file_path: str) -> Dict[str, Any]:
@@ -651,32 +844,73 @@ class WorkspaceManager:
         except Exception:
             return []
 
+        # Multi-query support: each item in a queries list is searched
+        # separately and the results merged + deduped (old code flattened
+        # the list into one string, losing per-query intent).
+        query_list: List[str] = []
         if isinstance(query, list):
-            query = " ".join(str(q) for q in query)
+            query_list = [str(q).strip() for q in query if str(q).strip()]
+        elif isinstance(query, str) and query.strip():
+            query_list = [query.strip()]
 
-        keywords = [k.lower() for k in re.findall(r'\w+', query) if len(k) > 2]
-        if not keywords:
-            keywords = [query.lower().strip()]
+        keyword_sets: List[List[str]] = []
+        for q in query_list:
+            terms = [
+                k.lower() for k in re.findall(r'\w+', q)
+                if len(k) >= 2 and k.lower() not in SEARCH_STOPWORDS
+            ]
+            if terms:
+                keyword_sets.append(terms)
+        if not keyword_sets and query_list:
+            # Punctuation/stopword-only queries: fall back to raw strings so
+            # short technical terms (5G, pH, Q1, AI) still search.
+            keyword_sets = [[q.lower() for q in query_list]]
 
         scored = []
         for chunk in chunks:
             text_lower = chunk["content"].lower()
-            score = sum(text_lower.count(kw) for kw in keywords)
-            if score > 0:
+            best = 0
+            for terms in keyword_sets:
+                score = 0
+                for term in terms:
+                    # Word-boundary match: "car" must not hit "carbon".
+                    score += len(re.findall(
+                        r"(?<![0-9a-z])" + re.escape(term) + r"(?![0-9a-z])",
+                        text_lower,
+                    ))
+                best = max(best, score)
+            if best <= 0:
+                continue
+            enriched = dict(chunk)
+            if "page" not in enriched:
                 page_match = re.search(r'\[Page (\d+)\]', chunk["content"])
-                page_num = page_match.group(1) if page_match else None
-                enriched = dict(chunk)
-                if page_num:
-                    enriched["page"] = int(page_num)
-                scored.append((score, enriched))
+                if page_match:
+                    enriched["page"] = int(page_match.group(1))
+            scored.append((best, enriched))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [item[1] for item in scored[:top_k]]
+        seen = set()
+        results = []
+        for scored_item in scored:
+            item = scored_item[1]
+            key = (item.get("relative_path"), item.get("chunk_id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(item)
+            if len(results) >= top_k:
+                break
+        return results
 
-    def cross_compare(self, query: str, max_per_doc: int = 2) -> Dict[str, Any]:
+    def cross_compare(self, query, max_per_doc: int = 2, queries: list = None) -> Dict[str, Any]:
         """Like search_chunks, but guarantees EVERY matching document contributes
         its own top chunks — needed for timeline / cross-year comparisons where
-        a global top-k would let one verbose document dominate."""
+        a global top-k would let one verbose document dominate.
+
+        Documents are grouped by relative_path (not basename) so same-named
+        files in different folders — 2024/report.pdf vs 2025/report.pdf —
+        stay separate documents. Every match carries its source page, and
+        each item of a queries array is scored independently."""
         if not self.index_file.exists():
             self.rebuild_index()
         try:
@@ -685,32 +919,65 @@ class WorkspaceManager:
         except Exception:
             return {"status": "error", "message": "Workspace index unavailable.", "per_document": []}
 
-        keywords = [k.lower() for k in re.findall(r'\w+', query) if len(k) > 2]
-        if not keywords:
-            return {"status": "error", "message": "Query too short. Use specific terms (e.g. 'crude oil price').", "per_document": []}
+        query_list: List[str] = []
+        if isinstance(queries, list):
+            query_list += [str(q).strip() for q in queries if str(q).strip()]
+        if isinstance(query, list):
+            query_list += [str(q).strip() for q in query if str(q).strip()]
+        elif isinstance(query, str) and query.strip() and query.strip() not in query_list:
+            query_list.append(query.strip())
+
+        keyword_sets: List[List[str]] = []
+        for q in query_list:
+            terms = [
+                k.lower() for k in re.findall(r'\w+', q)
+                if len(k) >= 2 and k.lower() not in SEARCH_STOPWORDS
+            ]
+            if terms:
+                keyword_sets.append(terms)
+        if not keyword_sets:
+            return {"status": "error", "message": "Query too short. Use specific terms of at least 2 characters (e.g. 'crude oil price').", "per_document": []}
 
         max_per_doc = max(1, min(int(max_per_doc), 4))
-        by_file: Dict[str, list] = {}
+        by_doc: Dict[str, list] = {}
         for chunk in chunks:
             text_lower = chunk["content"].lower()
-            score = sum(text_lower.count(kw) for kw in keywords)
-            if score > 0:
-                by_file.setdefault(chunk["file"], []).append((score, chunk))
+            best = 0
+            for terms in keyword_sets:
+                score = 0
+                for term in terms:
+                    # Word-boundary match: "car" must not hit "carbon".
+                    score += len(re.findall(
+                        r"(?<![0-9a-z])" + re.escape(term) + r"(?![0-9a-z])",
+                        text_lower,
+                    ))
+                best = max(best, score)
+            if best > 0:
+                rel = chunk.get("relative_path") or chunk.get("file") or "unknown"
+                by_doc.setdefault(rel, []).append((best, chunk))
 
         per_document = []
-        for fname in sorted(by_file):
-            items = sorted(by_file[fname], key=lambda x: x[0], reverse=True)
+        for rel in sorted(by_doc):
+            items = sorted(by_doc[rel], key=lambda x: x[0], reverse=True)
+            matches = []
+            for s, c in items[:max_per_doc]:
+                page = c.get("page")
+                if page is None:
+                    page_match = re.search(r"\[Page (\d+)\]", c["content"])
+                    page = int(page_match.group(1)) if page_match else None
+                match = {"content": c["content"][:900], "score": s}
+                if page is not None:
+                    match["page"] = page
+                matches.append(match)
             per_document.append({
-                "file": fname,
-                "matches": [
-                    {"content": c["content"][:900], "score": s}
-                    for s, c in items[:max_per_doc]
-                ],
+                "file": rel.rsplit("/", 1)[-1],
+                "relative_path": rel,
+                "matches": matches,
             })
 
         return {
             "status": "success",
-            "query": query,
+            "query": query if isinstance(query, str) else query_list,
             "documents_matched": len(per_document),
             "per_document": per_document,
         }

@@ -606,9 +606,9 @@ class TermuxForgeBridge:
         from workspace import WorkspaceManager
         return WorkspaceManager().check_dependencies()
 
-    async def _workspace_cross_compare(self, query: str = "", max_per_doc: int = 2) -> dict:
+    async def _workspace_cross_compare(self, query: str = "", max_per_doc: int = 2, queries: list = None) -> dict:
         from workspace import WorkspaceManager
-        return WorkspaceManager().cross_compare(query, max_per_doc=max_per_doc)
+        return WorkspaceManager().cross_compare(query, max_per_doc=max_per_doc, queries=queries)
 
     # ── MCP ───────────────────────────────────────────────────────────
 
@@ -1855,10 +1855,18 @@ class TermuxForgeBridge:
             return web.json_response({"status": "error", "message": "Reindex failed."}, status=500)
 
     async def _handle_workspace_clear(self, request: web.Request) -> web.Response:
-        """Clear previous-session documents so a new session gets a clean quota."""
+        """Clear one session's workspace documents (active session by default).
+
+        Optional ?session=<id> scopes the clear to that chat's bucket — used
+        when the app deletes a chat. Other sessions keep their uploads; the
+        bridge-side LRU pass reclaims space when the global quota is hit.
+        """
         try:
             from workspace import WorkspaceManager
-            return web.json_response(WorkspaceManager().clear_session_documents())
+            session_id = request.query.get("session", "") or None
+            return web.json_response(
+                WorkspaceManager().clear_session_documents(session_id)
+            )
         except Exception as exc:
             logger.error("Workspace clear failed (%s)", type(exc).__name__)
             return web.json_response({"status": "error", "message": "Workspace clear failed."}, status=500)
