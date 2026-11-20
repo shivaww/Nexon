@@ -1607,6 +1607,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       value: models.contains(_selectedModel)
                           ? _selectedModel
                           : (models.isNotEmpty ? models.first : null),
+                      isExpanded: true,
                       dropdownColor: const Color(0xFFFFFBF2),
                       decoration: const InputDecoration(
                         labelText: 'Model Name',
@@ -1639,6 +1640,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                           value: m,
                           child: Text(
                             m,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontSize: 13,
