@@ -222,6 +222,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   List<ProviderDefinition> _customProviders = [];
   var _selectedProviderId = providerCatalog.first.id;
   final Set<String> _sendingSessionIds = {};
+  // True while the user is reading earlier output; auto-scroll yields instead
+  // of yanking them back to the bottom on every streaming tick.
+  bool _userScrolledUp = false;
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
@@ -2404,6 +2407,7 @@ jobs:
         );
 
         final completer = Completer<void>();
+        var tagHold = '';
         var fullText = '';
         var reasoningText = '';
         var isThinking = false;
@@ -2417,7 +2421,11 @@ jobs:
             if (chunk.startsWith('[REASONING]')) {
               reasoningText += chunk.substring(11);
             } else {
-              var textChunk = chunk;
+              var textChunk = tagHold + chunk;
+              tagHold = '';
+              final held = _splitPartialTag(textChunk, isThinking);
+              textChunk = held.$1;
+              tagHold = held.$2;
 
               // Start of <think> or <reasoning> or <thought>
               if (!isThinking &&
@@ -2450,6 +2458,17 @@ jobs:
                 isThinking = false;
                 textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
                 fullText += textChunk;
+                // The first answer tokens arrive in the same chunk as the
+                // closing tag; count them and feed live voice here too, or
+                // the opening words are displayed but never spoken.
+                streamCharCount += textChunk.length;
+                if (_liveVoiceEngine.state == LiveVoiceState.thinking ||
+                    _liveVoiceEngine.state == LiveVoiceState.speaking) {
+                  final fenceCount = '```'.allMatches(fullText).length;
+                  if (!textChunk.contains('<') && fenceCount.isEven) {
+                    _liveVoiceEngine.feedStreamToken(textChunk);
+                  }
+                }
               } else if (isThinking) {
                 reasoningText += textChunk;
               } else {
@@ -5860,6 +5879,7 @@ jobs:
           String reasoningText = '';
           var isThinking = false;
           var researchStreamCharCount = 0;
+          var tagHold = '';
 
           try {
             final stream = _chatClient.sendChatStream(
@@ -5878,7 +5898,11 @@ jobs:
               reasoningText += chunk.substring(11);
               researchStreamCharCount += chunk.length - 11;
             } else {
-                var textChunk = chunk;
+                var textChunk = tagHold + chunk;
+                tagHold = '';
+                final held = _splitPartialTag(textChunk, isThinking);
+                textChunk = held.$1;
+                tagHold = held.$2;
                 if (!isThinking &&
                     (textChunk.contains('<think>') ||
                         textChunk.contains('<reasoning>') ||
@@ -7204,11 +7228,16 @@ jobs:
             studyModeEnabled: _studyModeEnabled,
           );
 
+          var tagHold = '';
           await for (final chunk in stream) {
             if (chunk.startsWith('[REASONING]')) {
               reasoningText += chunk.substring(11);
             } else {
-              var textChunk = chunk;
+              var textChunk = tagHold + chunk;
+              tagHold = '';
+              final held = _splitPartialTag(textChunk, isThinking);
+              textChunk = held.$1;
+              tagHold = held.$2;
               if (!isThinking &&
                   (textChunk.contains('<think>') ||
                       textChunk.contains('<reasoning>') ||
@@ -8056,6 +8085,26 @@ jobs:
     _saveSessions();
   }
 
+  /// Splits a trailing partial think-tag (e.g. "</th") off [chunk] so a tag
+  /// torn across two SSE chunks is still recognised once the next chunk
+  /// completes it. Returns (safePrefix, heldSuffix).
+  (String, String) _splitPartialTag(String chunk, bool thinking) {
+    final tags = thinking
+        ? const ['</think>', '</reasoning>', '</thought>']
+        : const ['<think>', '<reasoning>', '<thought>'];
+    for (final tag in tags) {
+      for (int k = tag.length - 1; k >= 1; k--) {
+        if (chunk.endsWith(tag.substring(0, k))) {
+          return (
+            chunk.substring(0, chunk.length - k),
+            chunk.substring(chunk.length - k),
+          );
+        }
+      }
+    }
+    return (chunk, '');
+  }
+
   void _scrollToBottom({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
@@ -8063,12 +8112,35 @@ jobs:
       final maxScroll = position.maxScrollExtent;
       final currentScroll = position.pixels;
 
-      if (force || (maxScroll - currentScroll) <= 400.0) {
+      if (force) {
+        _userScrolledUp = false;
+      } else {
+        // ScrollPosition knows whether a finger is driving the view: forward
+        // means dragging toward the top. Yield the moment the user reads up,
+        // re-arm only once they are back at the bottom.
+        if (position.userScrollDirection == ScrollDirection.forward) {
+          _userScrolledUp = true;
+        }
+        if (_userScrolledUp) {
+          if (maxScroll - currentScroll <= 48.0) {
+            _userScrolledUp = false;
+          } else {
+            return;
+          }
+        }
+      }
+
+      if (force) {
         _scrollController.animateTo(
           maxScroll,
           duration: const Duration(milliseconds: 280),
           curve: Curves.easeOutCubic,
         );
+      } else if (maxScroll - currentScroll > 0.5) {
+        // Streaming ticks fire every ~80ms; restarting a 280ms eased
+        // animation each tick cancels the previous one mid-flight and
+        // stutters. Follow-along jumps; only explicit jumps animate.
+        _scrollController.jumpTo(maxScroll);
       }
     });
   }

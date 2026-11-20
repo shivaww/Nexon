@@ -549,12 +549,20 @@ class ChatClient {
                   if (first is Map) {
                     final delta = first['delta'];
                     if (delta is Map) {
-                      if (delta['reasoning_content'] != null) {
-                        yield '[REASONING]${delta['reasoning_content']}';
-                      } else if (delta['content'] != null) {
-                        yield delta['content'].toString();
+                      // Independent checks: a delta may carry reasoning and
+                      // content together (e.g. reasoning_content: "" on the
+                      // thinking-to-answer transition). An else-if chain
+                      // would drop the first content word in that case.
+                      final reasoning = delta['reasoning_content']?.toString();
+                      if (reasoning != null && reasoning.isNotEmpty) {
+                        yield '[REASONING]$reasoning';
+                      }
+                      final content = delta['content']?.toString();
+                      if (content != null && content.isNotEmpty) {
+                        yield content;
                       } else if (first['text'] != null) {
-                        yield first['text'].toString();
+                        final text = first['text'].toString();
+                        if (text.isNotEmpty) yield text;
                       }
                     }
                   }
