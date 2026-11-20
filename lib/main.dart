@@ -65,6 +65,7 @@ import 'package:nexon/widgets/chat_media_widgets.dart';
 import 'package:nexon/widgets/message_bubble.dart';
 import 'package:nexon/widgets/streaming_widgets.dart';
 import 'package:nexon/widgets/quiz_sheet.dart';
+import 'package:nexon/widgets/source_page_sheet.dart';
 import 'package:nexon/widgets/composer.dart';
 import 'package:nexon/utils/model_capabilities.dart';
 import 'package:nexon/widgets/media_and_model_sheet.dart';
@@ -573,6 +574,29 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     } catch (_) {
       // Bridge offline — the bucket stays until the next LRU quota pass.
     }
+  }
+
+  /// Opens the page behind a tapped [Source: file, Page N] chip. Reads from
+  /// the active chat's workspace bucket through the bridge's read-only route.
+  void _openSourcePage(String file, int page) {
+    final sessionId = _activeSessionId;
+    if (sessionId == null || !mounted) return;
+    final rawUrl = _customMcpUrl.trim();
+    final parsed = rawUrl.isEmpty ? null : Uri.tryParse(rawUrl);
+    final base = (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty)
+        ? '${parsed.scheme}://${parsed.host}${parsed.hasPort ? ':${parsed.port}' : ''}'
+        : 'http://127.0.0.1:8390';
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SourcePageSheet(
+        baseUrl: base,
+        sessionId: sessionId,
+        file: file,
+        page: page,
+      ),
+    );
   }
 
   Future<void> _loadSessions() async {
@@ -8291,6 +8315,7 @@ jobs:
                 onStartResearch: _startResearchLoop,
                 fileName: _getResearchFileName(activeSession.title),
                 onOpenLiveVoice: _openLiveVoiceMode,
+                onOpenSource: _openSourcePage,
                 activeFeaturePills: [
                   if (_deepResearchEnabled) const FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
                   if (_agenticEnabled) const FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),

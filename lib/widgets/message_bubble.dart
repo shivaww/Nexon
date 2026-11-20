@@ -16,6 +16,7 @@ import 'package:nexon/widgets/nexon_chart.dart';
 import 'package:nexon/widgets/diff_viewer_widget.dart';
 import 'package:nexon/widgets/tool_card.dart';
 import 'package:nexon/widgets/scrollable_table_builder.dart';
+import 'package:nexon/widgets/source_chip.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -32,6 +33,7 @@ class MessageBubble extends StatelessWidget {
     this.isLiveTurn = false,
     this.animationState = AvatarAnimationState.idle,
     this.onStartResearch,
+    this.onOpenSource,
     this.versionsCount = 0,
     this.currentVersionIndex = 0,
     this.onVersionChanged,
@@ -57,6 +59,9 @@ class MessageBubble extends StatelessWidget {
   final AvatarAnimationState animationState;
   final VoidCallback onEditUserMessage;
   final void Function([Map<String, dynamic>? editedStateMap])? onStartResearch;
+
+  /// Called when a [Source: file, Page N] chip is tapped.
+  final void Function(String file, int page)? onOpenSource;
   final int versionsCount;
   final int currentVersionIndex;
   final ValueChanged<int>? onVersionChanged;
@@ -1213,6 +1218,7 @@ bool _foldedRoundHasCards(String text) {
               .replaceAll(r'\boldsymbol', r'\mathbf'),
           selectable: true,
           builders: {
+            'source': SourceChipBuilder(onTap: onOpenSource),
             'latex': LatexElementBuilder(
               textStyle: const TextStyle(
                 color: Color(0xFF1E1E1E),
@@ -1228,6 +1234,7 @@ bool _foldedRoundHasCards(String text) {
               ...md.ExtensionSet.gitHubFlavored.blockSyntaxes,
             ],
             [
+              SourceChipSyntax(),
               LatexInlineSyntax(),
               ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
             ],

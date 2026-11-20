@@ -44,6 +44,7 @@ class ChatSurface extends StatelessWidget {
     this.activeBranchIndex,
     this.onBranchChanged,
     this.onStop,
+    this.onOpenSource,
     this.onOpenLiveVoice,
     this.activeFeaturePills = const [],
     super.key,
@@ -80,6 +81,7 @@ class ChatSurface extends StatelessWidget {
   final void Function(int, [Map<String, dynamic>? editedStateMap])
   onStartResearch;
   final VoidCallback? onStop;
+  final void Function(String file, int page)? onOpenSource;
   final List<List<ChatMessage>>? branches;
   final int? activeBranchIndex;
   final ValueChanged<int>? onBranchChanged;
@@ -270,6 +272,7 @@ class ChatSurface extends StatelessWidget {
                   animationState: state,
                   agenticWorkspace: agenticWorkspace,
                   fileName: fileName,
+                  onOpenSource: onOpenSource,
                   isSending: isSending,
                   isLiveTurn:
                       isSending && !isUser && index > lastUserIndex,
