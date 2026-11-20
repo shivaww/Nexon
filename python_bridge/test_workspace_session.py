@@ -69,6 +69,56 @@ def main():
             and not (a2.workspace_path / "notes.txt").exists()
             and (b.workspace_path / "b.txt").exists(),
         )
+
+        # Scanned-PDF detection. The extractor is stubbed so the test
+        # needs neither pypdf nor poppler.
+        def pdf_text(bodies):
+            return "\n".join(
+                f"\n--- [Page {i + 1}] ---\n{b}" for i, b in enumerate(bodies)
+            )
+
+        real = "This page carries plenty of readable sentences about carbon."
+        scanned_txt = pdf_text(["", "  ", ""])
+        mixed_txt = pdf_text([real, "", real, ""])
+        good_txt = pdf_text([real, real, real])
+
+        check(
+            "coverage: image-only pdf is all empty",
+            WorkspaceManager._pdf_text_coverage(scanned_txt) == (3, 3),
+        )
+        check(
+            "coverage: mixed pdf counts empty pages",
+            WorkspaceManager._pdf_text_coverage(mixed_txt) == (4, 2),
+        )
+        check(
+            "coverage: text pdf has no empty pages",
+            WorkspaceManager._pdf_text_coverage(good_txt) == (3, 0),
+        )
+        check(
+            "coverage: pdftotext form-feed pages",
+            WorkspaceManager._pdf_text_coverage(real + "\f\f") == (2, 1),
+        )
+
+        a3 = WorkspaceManager(workspace_path=root)
+        a3.ensure_session("sess-A")
+        a3.workspace_path.mkdir(parents=True, exist_ok=True)
+        texts = {
+            "scan.pdf": scanned_txt,
+            "mixed.pdf": mixed_txt,
+            "good.pdf": good_txt,
+        }
+        for name in texts:
+            (a3.workspace_path / name).write_bytes(b"%PDF-stub")
+        a3.extract_text_content = lambda p: texts[p.name]
+        res = a3.rebuild_index()
+        flagged = {s["file"]: s["status"] for s in res.get("scanned_files", [])}
+        check("rebuild flags image-only pdf as scanned", flagged.get("scan.pdf") == "scanned")
+        check("rebuild flags half-empty pdf as partial", flagged.get("mixed.pdf") == "partial")
+        check("rebuild leaves text pdf unflagged", "good.pdf" not in flagged)
+        with open(a3.index_file, encoding="utf-8") as fh:
+            index_raw = fh.read()
+        check("scanned pdf is kept out of the index", "scan.pdf" not in index_raw)
+        check("partial pdf is still indexed", "mixed.pdf" in index_raw)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

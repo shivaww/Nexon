@@ -629,10 +629,31 @@ class WorkspaceManager:
             "all_present": len(missing) == 0
         }
 
+    @staticmethod
+    def _pdf_text_coverage(text):
+        """Return (total_pages, empty_pages) for extracted PDF text.
+
+        A page counts as empty when it has fewer than 20 non-space
+        characters, which is what an image-only (scanned) PDF yields.
+        """
+        import re as _re
+        if "--- [Page " in text:
+            parts = _re.split(r"\n--- \[Page \d+\] ---\n", text)
+            pages = parts[1:] if len(parts) > 1 else parts
+        else:
+            pages = text.split("\f")
+            if pages and not pages[-1].strip():
+                pages = pages[:-1]
+        if not pages:
+            return 1, 1
+        empty = sum(1 for p in pages if len("".join(p.split())) < 20)
+        return len(pages), empty
+
     def rebuild_index(self) -> Dict[str, Any]:
         """Chunk workspace documents and save chunk index to disk."""
         chunks = []
         failed_files = []
+        scanned_files = []
         files = [f for f in self.workspace_path.rglob('*') if f.is_file() and not f.name.startswith('.')]
 
         for f in files:
@@ -641,6 +662,25 @@ class WorkspaceManager:
                     text = self.extract_text_content(f)
                     if not text.strip():
                         continue
+                    if f.suffix.lower() == ".pdf":
+                        total_pages, empty_pages = self._pdf_text_coverage(text)
+                        if empty_pages == total_pages:
+                            # Image-only PDF: nothing searchable, so skip it
+                            # instead of indexing page headers as noise.
+                            scanned_files.append({
+                                "file": f.name,
+                                "pages": total_pages,
+                                "empty_pages": empty_pages,
+                                "status": "scanned",
+                            })
+                            continue
+                        if empty_pages * 2 >= total_pages:
+                            scanned_files.append({
+                                "file": f.name,
+                                "pages": total_pages,
+                                "empty_pages": empty_pages,
+                                "status": "partial",
+                            })
                     chunks.extend(self._chunk_text(text, f.name, str(f.relative_to(self.workspace_path))))
                 except Exception as exc:
                     # One malformed document must not kill the whole reindex;
@@ -650,7 +690,12 @@ class WorkspaceManager:
         with open(self.index_file, "w", encoding="utf-8") as idx_f:
             json.dump(chunks, idx_f)
 
-        return {"total_files": len(files), "total_chunks": len(chunks), "failed_files": failed_files}
+        return {
+            "total_files": len(files),
+            "total_chunks": len(chunks),
+            "failed_files": failed_files,
+            "scanned_files": scanned_files,
+        }
 
     def read_page(self, file_path: str, page: int = 1) -> Dict[str, Any]:
         """Read a specific page of a document (text only, images skipped)."""
@@ -670,13 +715,20 @@ class WorkspaceManager:
                 if page < 1 or page > total_pages:
                     return {"status": "error", "message": f"Page {page} out of range (1-{total_pages})"}
                 page_text = reader.pages[page - 1].extract_text() or ""
-                return {
+                result = {
                     "status": "success",
                     "file": path.name,
                     "page": page,
                     "total_pages": total_pages,
                     "content": page_text.strip()
                 }
+                if len(page_text.strip()) < 20:
+                    result["note"] = (
+                        "No extractable text on this page; it is probably a scanned "
+                        "image. Tell the user the page cannot be read and suggest "
+                        "a text-based copy or OCR."
+                    )
+                return result
             except ImportError:
                 if shutil.which("pdftotext"):
                     import subprocess
