@@ -7,7 +7,9 @@ class DeepResearchBridgeClient {
 
   final String endpoint;
   static final HttpClient _sharedClient = HttpClient()
-    ..idleTimeout = const Duration(seconds: 10);
+    ..connectionTimeout = const Duration(seconds: 10)
+    ..idleTimeout = const Duration(seconds: 10)
+    ..findProxy = ((uri) => 'DIRECT');
 
   Future<Map<String, dynamic>> call(
     String method, {

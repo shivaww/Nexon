@@ -238,7 +238,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   final Map<String, StreamSubscription<String>> _activeSubscriptions = {};
   final Map<String, Completer<void>> _activeCompleters = {};
   final HttpClient _mcpHttpClient = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 30);
+    ..connectionTimeout = const Duration(seconds: 30)
+    ..findProxy = ((uri) => 'DIRECT');
   bool _deepResearchEnabled = false;
   bool _studyModeEnabled = false;
   String _userName = '';
@@ -288,7 +289,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     final endpoint = _customMcpUrl.isNotEmpty
         ? _customMcpUrl
         : 'http://127.0.0.1:8390/mcp';
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4)
+      ..findProxy = ((uri) => 'DIRECT');
     try {
       final request = await client
           .postUrl(Uri.parse(endpoint))
@@ -532,6 +535,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       apiKey: _searchSettings.apiKey,
       fallbackApiKeys: _searchSettings.fallbackApiKeys,
       googleCx: _searchSettings.googleCx,
+      customProviders: _searchSettings.customProviders,
     );
     _promptSig = '';
     _promptUseCount = 0;
@@ -540,9 +544,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   Future<void> _clearWorkspaceBucket() async {
     try {
-      final client = HttpClient();
-      final req = await client
-          .postUrl(Uri.parse('http://127.0.0.1:8390/workspace/clear'))
+    final client = HttpClient()..findProxy = ((uri) => 'DIRECT');
+    final req = await client
+        .postUrl(Uri.parse('http://127.0.0.1:8390/workspace/clear'))
           .timeout(const Duration(seconds: 5));
       req.headers.contentType = ContentType.json;
       req.add(utf8.encode('{}'));
@@ -1202,6 +1206,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         apiKey: _searchSettings.apiKey,
         fallbackApiKeys: _searchSettings.fallbackApiKeys,
         googleCx: _searchSettings.googleCx,
+        customProviders: _searchSettings.customProviders,
       );
       _promptSig = '';
       _promptUseCount = 0;
@@ -5471,7 +5476,13 @@ jobs:
       await _resetDeepResearch();
 
       final activeSession = _sessions[sessionIndex];
-      final prompt = activeSession.messages[messageIndex - 1].text;
+      // Guard against RangeError if the plan message index is ever 0 or the
+      // session was trimmed — an empty prompt is recoverable, a crash is not.
+      final int promptIndex = messageIndex - 1;
+      final String prompt =
+          (promptIndex >= 0 && promptIndex < activeSession.messages.length)
+          ? activeSession.messages[promptIndex].text
+          : '';
 
       // ── STAGE 1: PLANNING ──
       // Reuse an existing usable plan (UI-edited / resume) instead of re-calling the planner.
@@ -5820,6 +5831,7 @@ jobs:
         int consecutiveMalformedTags = 0;
         final Map<String, String> stepSearchCache = {};
         String stepContent = '';
+        int transientRetries = 0;
 
         while (!stepDone && loopCount < 20) {
           if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
@@ -6169,6 +6181,7 @@ jobs:
                                 attrs['search_depth'] ??
                                 attrs['search-depth'] ??
                                 'basic',
+                            customProviders: _searchSettings.customProviders,
                           )
                           .timeout(const Duration(seconds: 60));
                       stepSearchCache[normQuery] = res;
@@ -6847,9 +6860,37 @@ jobs:
                 }
             }
           } catch (e) {
+            // Transient provider/network faults (rate limit, timeout, socket
+            // reset) must not red-flag a phase that already gathered evidence.
+            // Retry the iteration a bounded number of times — but only when
+            // this iteration produced no output yet, so a partial stream is
+            // never replayed and duplicated.
+            final String errStr = e.toString();
+            final String errLower = errStr.toLowerCase();
+            final bool transientErr =
+                errLower.contains('timeoutexception') ||
+                errLower.contains('socketexception') ||
+                errLower.contains('httpexception') ||
+                errLower.contains('429') ||
+                errLower.contains('502') ||
+                errLower.contains('503') ||
+                errLower.contains('504') ||
+                errLower.contains('connection reset') ||
+                errLower.contains('failed host lookup');
+            if (transientErr &&
+                responseText.isEmpty &&
+                reasoningText.isEmpty &&
+                transientRetries < 3) {
+              transientRetries++;
+              debugPrint(
+                'Transient research stream error, retry $transientRetries/3: $errStr',
+              );
+              await Future.delayed(Duration(seconds: 2 * transientRetries));
+              continue;
+            }
             stepDone = true;
             stepFailed = true;
-            stepFailure = e.toString();
+            stepFailure = errStr;
             break;
           }
         }
@@ -7729,6 +7770,7 @@ jobs:
                   apiKey: _searchSettings.apiKey,
                   fallbackApiKeys: _searchSettings.fallbackApiKeys,
                   googleCx: _searchSettings.googleCx,
+                  customProviders: _searchSettings.customProviders,
                 );
               }
             });

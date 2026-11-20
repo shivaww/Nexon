@@ -106,11 +106,13 @@ class _MetalRingPainter extends CustomPainter {
             .toList(growable: false),
         stops: const <double>[0.0, 0.35, 0.65, 1.0],
       ).createShader(rect);
-    canvas.drawPath(outer, sheen);
-
     // Punch the centre back out so the icon/child sits on its own colour.
+    // The sheen must be drawn INSIDE this isolated layer: BlendMode.clear
+    // only erases within the layer, so compositing it back leaves just the
+    // ring. Drawing black here instead would paint a black band over the
+    // child and leave the sheen covering the icon.
     canvas.saveLayer(rect, Paint());
-    canvas.drawPath(outer, Paint()..color = const Color(0xFF000000));
+    canvas.drawPath(outer, sheen);
     canvas.drawPath(
       _shapePath(rect.deflate(band)),
       Paint()..blendMode = BlendMode.clear,

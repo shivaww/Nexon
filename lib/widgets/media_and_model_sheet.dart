@@ -317,7 +317,9 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
     final endpoint = widget.customMcpUrl.isNotEmpty
         ? widget.customMcpUrl
         : 'http://127.0.0.1:8390/mcp';
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 3)
+      ..findProxy = ((uri) => 'DIRECT');
     try {
       final request = await client
           .postUrl(Uri.parse(endpoint))

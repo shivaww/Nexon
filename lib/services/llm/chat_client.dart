@@ -740,19 +740,19 @@ class ChatClient {
             final uri = Uri.parse(cp.endpoint);
             final request = cp.method.toUpperCase() == 'GET'
                 ? await client.getUrl(Uri.parse(
-                    '$cp.endpoint?${cp.queryParam}=${Uri.encodeComponent(query)}'
+                    '${cp.endpoint}?${cp.queryParam}=${Uri.encodeComponent(query)}'
                     '${cp.extraParams.entries.map((e) => '&${e.key}=${Uri.encodeComponent(e.value)}').join('')}'
                   ))
                 : await client.postUrl(uri);
             request.followRedirects = false;
             if (cp.method.toUpperCase() == 'GET') {
               if (currentKey.isNotEmpty) {
-                request.headers.set(cp.apiKeyHeader, '$cp.apiKeyPrefix$currentKey');
+                request.headers.set(cp.apiKeyHeader, '${cp.apiKeyPrefix}$currentKey');
               }
             } else {
               request.headers.contentType = ContentType.json;
               if (currentKey.isNotEmpty) {
-                request.headers.set(cp.apiKeyHeader, '$cp.apiKeyPrefix$currentKey');
+                request.headers.set(cp.apiKeyHeader, '${cp.apiKeyPrefix}$currentKey');
               }
               final payload = <String, dynamic>{
                 cp.queryParam: query,
