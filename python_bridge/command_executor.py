@@ -153,7 +153,7 @@ class CommandExecutor:
         # Security check
         safety = self.security.evaluate(command, cwd)
         if not safety.allowed:
-            logger.warning("Command blocked: %s – %s", command, safety.reason)
+            logger.warning("Command blocked: %s", safety.reason)
             raise ValueError(f"Command blocked: {safety.reason}")
 
         # Prepare environment
@@ -168,7 +168,7 @@ class CommandExecutor:
 
         # Validate working directory
         if not os.path.isdir(cwd):
-            logger.error("Working directory does not exist: %s", cwd)
+            logger.error("Working directory does not exist")
             return CommandResult(
                 exit_code=1,
                 stdout="",
@@ -202,7 +202,7 @@ class CommandExecutor:
                 )
             except asyncio.TimeoutError:
                 timed_out = True
-                logger.warning("Command timed out after %ds: %s", timeout, command)
+                logger.warning("Command timed out after %ds", timeout)
                 await self._terminate_process(process)
                 stdout_bytes = b""
                 stderr_bytes = f"Command timed out after {timeout}s".encode()
@@ -225,7 +225,7 @@ class CommandExecutor:
 
         except Exception as exc:
             duration = time.monotonic() - start
-            logger.exception("Command execution error: %s", command)
+            logger.exception("Command execution error")
             result = CommandResult(
                 exit_code=-1,
                 stdout="",

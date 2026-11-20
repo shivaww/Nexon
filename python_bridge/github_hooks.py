@@ -343,7 +343,7 @@ class GitHubHooks:
             Timeout in seconds.
         """
         work_dir = cwd or self.cwd
-        logger.debug("Running: %s (cwd=%s)", command, work_dir)
+        logger.debug("Running GitHub operation")
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -372,5 +372,5 @@ class GitHubHooks:
                 error=f"Command timed out after {timeout}s: {command}",
             )
         except Exception as exc:
-            logger.exception("GitHub hook error: %s", command)
+            logger.exception("GitHub hook error")
             return GitResult(success=False, error=str(exc))

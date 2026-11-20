@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
@@ -11,7 +14,42 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// HTTP client that injects a Bearer token into every request.
+List<int> _gzipBackupBytes(List<int> bytes) => gzip.encode(bytes);
+
+Future<List<int>> _gunzipBackupBytes(List<int> bytes) async {
+  const maxExpandedBytes = 256 * 1024 * 1024;
+  final output = BytesBuilder(copy: false);
+  var expandedLength = 0;
+  await for (final chunk in gzip.decoder.bind(Stream<List<int>>.value(bytes))) {
+    expandedLength += chunk.length;
+    if (expandedLength > maxExpandedBytes) {
+      throw const FormatException('Backup expands beyond the supported size.');
+    }
+    output.add(chunk);
+  }
+  return output.takeBytes();
+}
+
+Object? _canonicalJsonValue(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.map((key) => key.toString()).toList()..sort();
+    return <String, dynamic>{
+      for (final key in keys) key: _canonicalJsonValue(value[key]),
+    };
+  }
+  if (value is Iterable) return value.map(_canonicalJsonValue).toList();
+  return value;
+}
+
+String _hashBackupPayload(Map<String, dynamic> backupData) {
+  final digestData = Map<String, dynamic>.from(backupData)
+    ..remove('created_at');
+  return sha256
+      .convert(utf8.encode(jsonEncode(_canonicalJsonValue(digestData))))
+      .toString();
+}
+
+/// HTTP client that injects a Bearer token only into Google Drive API calls.
 class GoogleAuthClient extends http.BaseClient {
   GoogleAuthClient(this._token);
 
@@ -20,6 +58,13 @@ class GoogleAuthClient extends http.BaseClient {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) {
+    if (request.url.scheme != 'https' ||
+        request.url.host != 'www.googleapis.com') {
+      throw StateError(
+        'Refusing to send Google Drive credentials to an unexpected host.',
+      );
+    }
+    request.followRedirects = false;
     request.headers['Authorization'] = 'Bearer $_token';
     return _inner.send(request);
   }
@@ -54,7 +99,16 @@ class DriveSyncService {
   static const _tokenKey = 'google_provider_token';
   static const _refreshTokenKey = 'google_provider_refresh_token';
   static const _tokenExpiryKey = 'google_provider_token_expiry';
+  // V1 keys are retained only so existing same-device backups remain readable.
   static const _encryptionKeyStorage = 'nexon_backup_enc_key';
+  static const _encryptionKeyStorageV2 = 'nexon_backup_enc_key_v2';
+  static const _backupV1Header = 'NEXON_ENC_V1:';
+  static const _backupV2Header = 'NEXON_AESGCM_V2:';
+  static const _backupV3Header = 'NEXON_GZIP_AESGCM_V3:';
+  static const _backupV2NonceBytes = 12;
+  static const _backupV2MacBytes = 16;
+  static final _backupCipher = AesGcm.with256bits();
+  static Future<List<int>>? _creatingBackupKeyV2;
   static const _maxBackupVersions = 5;
   // Public OAuth client identifier for Google Drive token refresh.
   // Matches the Google OAuth Web Client ID configured in Supabase Auth.
@@ -129,6 +183,7 @@ class DriveSyncService {
   // ──────────────────────────────────────────────────────────────────
   /// Guards against multiple concurrent auto-syncs.
   static bool _isSyncing = false;
+  static Future<void> _driveSyncTail = Future<void>.value();
   /// Pending debounce data for auto-sync.
   static List<dynamic>? _pendingSessions;
   static Future<void>? _pendingDebounce;
@@ -189,12 +244,91 @@ class DriveSyncService {
     return result.success;
   }
 
+  /// Private app storage for the full local chat history. Chat content should
+  /// not be written under the user-selected workspace, which may be a repo.
+  static Future<File> sessionBackupFile() async {
+    final docs = await getApplicationDocumentsDirectory();
+    final directory = Directory('${docs.path}/.nexon/sessions');
+    await directory.create(recursive: true);
+    return File('${directory.path}/prefs_backup.json');
+  }
+
+  static Future<void> _writeSessionBackup(File backupFile, String json) async {
+    await backupFile.parent.create(recursive: true);
+    final tmp = File(
+      '${backupFile.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+    );
+    await tmp.writeAsString(json, flush: true);
+    await tmp.rename(backupFile.path);
+  }
+
+  static Future<List<File>> _legacySessionBackupFiles(
+    SharedPreferences prefs,
+  ) async {
+    final docs = await getApplicationDocumentsDirectory();
+    var workspace = (prefs.getString('agentic_workspace_v1') ??
+            '/data/data/com.termux/files/home')
+        .trim();
+    if (workspace.isEmpty) {
+      workspace = '/data/data/com.termux/files/home';
+    }
+    final home = Platform.environment['HOME'] ??
+        '/data/data/com.termux/files/home';
+    if (workspace == '~') {
+      workspace = home;
+    } else if (workspace.startsWith('~/')) {
+      workspace = '$home/${workspace.substring(2)}';
+    }
+    workspace = workspace.replaceAll(RegExp(r'/+$'), '');
+    return [
+      File('$workspace/.nexon/sessions/prefs_backup.json'),
+      File('${docs.path}/sessions/prefs_backup.json'),
+    ];
+  }
+
+  static Future<void> _removeLegacySessionBackupFiles(
+    SharedPreferences prefs,
+  ) async {
+    final current = await sessionBackupFile();
+    for (final file in await _legacySessionBackupFiles(prefs)) {
+      if (file.path == current.path) continue;
+      try {
+        if (await file.exists()) await file.delete();
+      } catch (_) {}
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // BACKUP (upload to Drive)
   // ──────────────────────────────────────────────────────────────────
   static Future<DriveSyncResult> syncToDriveDetailed(
     List<dynamic> sessions, {
     bool force = false,
+    SyncProgressCallback? onProgress,
+  }) async {
+    final snapshot = List<dynamic>.from(sessions);
+    final previous = _driveSyncTail;
+    final release = Completer<void>();
+    _driveSyncTail = release.future;
+    try {
+      try {
+        await previous;
+      } catch (_) {
+        // A failed prior sync must not block later backups.
+      }
+      return await _performSyncToDriveDetailed(
+        snapshot,
+        force: force,
+        onProgress: onProgress,
+      );
+    } finally {
+      release.complete();
+    }
+  }
+
+  static Future<DriveSyncResult> _performSyncToDriveDetailed(
+    List<dynamic> sessions, {
+    required bool force,
     SyncProgressCallback? onProgress,
   }) async {
     final log = <String>[];
@@ -246,16 +380,13 @@ class DriveSyncService {
         '✅ Payload ready — $sessionCount chats, $artifactCount artifacts, $keyCount keys',
       );
 
-      // ── Step 3: encode ──
-      onProgress?.call('Encoding backup ($sessionCount chats, $artifactCount artifacts)…');
-      log.add('⏳ Encoding JSON…');
-      final jsonBackup = jsonEncode(backupData);
-      final rawBytes = utf8.encode(jsonBackup);
-      final bytes = await _encryptBackup(rawBytes);
-      final sizeKB = (bytes.length / 1024).toStringAsFixed(1);
-      log.add('✅ Encoded — ${sizeKB} KB');
+      final contentHash = await compute(
+        _hashBackupPayload,
+        backupData,
+        debugLabel: 'fingerprint chat backup',
+      );
 
-      // ── Step 4: find existing file ──
+      // ── Step 3: find existing file ──
       onProgress?.call('Checking for existing backup on Drive…');
       log.add('⏳ Searching for existing backup file…');
       drive.File? existing;
@@ -282,9 +413,32 @@ class DriveSyncService {
           details: log,
         );
       }
+      if (existing?.id != null &&
+          existing!.appProperties?['contentHash'] == contentHash) {
+        log.add('✅ Backup is unchanged; skipped upload');
+        return DriveSyncResult(
+          success: true,
+          message: 'Backup is already up to date; upload skipped.',
+          details: log,
+        );
+      }
       log.add(existing?.id != null
           ? '✅ Found existing backup — creating new version'
           : '✅ No existing backup — creating new file');
+
+      // Delay compression and encryption until after the fingerprint check so
+      // an unchanged backup costs neither upload data nor compression work.
+      onProgress?.call('Compressing and encrypting backup…');
+      log.add('⏳ Compressing and encrypting…');
+      final rawBytes = utf8.encode(jsonEncode(backupData));
+      final compressedBytes = await compute(
+        _gzipBackupBytes,
+        rawBytes,
+        debugLabel: 'compress chat backup',
+      );
+      final bytes = await _encryptBackup(compressedBytes);
+      final sizeKB = (bytes.length / 1024).toStringAsFixed(1);
+      log.add('✅ Compressed and encrypted — ${sizeKB} KB');
 
       final timestamp = DateTime.now().toUtc().millisecondsSinceEpoch;
       final versionedName = 'nexon_backup_$timestamp.enc';
@@ -295,7 +449,8 @@ class DriveSyncService {
           await driveApi.files.create(
             drive.File()
               ..name = versionedName
-              ..parents = [folderId!],
+              ..parents = [folderId!]
+              ..appProperties = {'contentHash': contentHash},
             uploadMedia: upload,
           );
         }, log);
@@ -311,20 +466,13 @@ class DriveSyncService {
 
       try {
         await _withDriveAuthRetry((driveApi) async {
-          final oldFiles = await driveApi.files.list(
-            spaces: 'appDataFolder',
-            q: "'$folderId' in parents and trashed = false and name != '$versionedName'",
-            $fields: 'files(id,name)',
-            orderBy: 'modifiedTime desc',
-            pageSize: _maxBackupVersions + 10,
-          );
-          final allFiles = oldFiles.files ?? [];
-          if (allFiles.length >= _maxBackupVersions) {
-            for (int i = _maxBackupVersions - 1; i < allFiles.length; i++) {
-              try {
-                await driveApi.files.delete(allFiles[i].id!);
-              } catch (_) {}
-            }
+          final backupFiles = await _listBackupFiles(driveApi, folderId!);
+          for (final oldFile in backupFiles.skip(_maxBackupVersions)) {
+            final id = oldFile.id;
+            if (id == null || id == existing?.id) continue;
+            try {
+              await driveApi.files.delete(id);
+            } catch (_) {}
           }
         }, log);
       } catch (_) {}
@@ -387,14 +535,7 @@ class DriveSyncService {
           );
           if (folderList.files?.isEmpty != false) return null;
           final folderId = folderList.files!.first.id!;
-          final allFiles = await driveApi.files.list(
-            spaces: 'appDataFolder',
-            q: "'$folderId' in parents and trashed = false",
-            $fields: 'files(id,name,modifiedTime,size)',
-            orderBy: 'modifiedTime desc',
-            pageSize: 10,
-          );
-          return allFiles.files?.isNotEmpty == true ? allFiles.files!.first : null;
+          return _findBackupFile(driveApi, folderId);
         }, log);
       } catch (e) {
         _appendDriveFailure(log, 'Drive search', e);
@@ -426,11 +567,11 @@ class DriveSyncService {
                 downloadOptions: drive.DownloadOptions.fullMedia,
               )
               as drive.Media;
-          final downloaded = <int>[];
+          final downloaded = BytesBuilder(copy: false);
           await for (final chunk in response.stream) {
-            downloaded.addAll(chunk);
+            downloaded.add(chunk);
           }
-          return downloaded;
+          return downloaded.takeBytes();
         }, log);
         final sizeKB = (bytes.length / 1024).toStringAsFixed(1);
         log.add('✅ Downloaded ${sizeKB} KB');
@@ -447,7 +588,14 @@ class DriveSyncService {
           );
         }
         log.add('✅ Decrypted');
-        backupData = jsonDecode(utf8.decode(decryptedBytes)) as Map<String, dynamic>;
+        final jsonBytes = _hasPrefix(bytes, utf8.encode(_backupV3Header))
+            ? await compute(
+                _gunzipBackupBytes,
+                decryptedBytes,
+                debugLabel: 'decompress chat backup',
+              )
+            : decryptedBytes;
+        backupData = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
         log.add('✅ Parsed — version ${backupData['version'] ?? 'unknown'}');
       } catch (e) {
         _appendDriveFailure(log, 'Download/parse', e);
@@ -462,6 +610,7 @@ class DriveSyncService {
       // ── Step 4: restore & merge chats ──
       onProgress?.call('Merging chats from Drive…');
       log.add('⏳ Merging chats…');
+      var chatRestoreFailed = false;
       try {
         final totalCount = await _mergeAndRestoreChatSessions(
           prefs,
@@ -469,8 +618,9 @@ class DriveSyncService {
           log,
         );
         log.add('✅ Restored & merged $totalCount chat session(s)');
-      } catch (e) {
-        log.add('⚠️ Chat restore error (non-fatal): $e');
+      } catch (_) {
+        chatRestoreFailed = true;
+        log.add('⚠️ Chat restore failed; other backup data will still be restored.');
       }
 
       // ── Step 5: restore settings ──
@@ -583,6 +733,15 @@ class DriveSyncService {
 
       // ── Done ──
       onProgress?.call('Restore complete ✅');
+      if (chatRestoreFailed) {
+        log.add('⚠️ Restore finished with chat history not saved.');
+        return DriveSyncResult(
+          success: false,
+          message:
+              'Other backup data was restored, but chat history could not be saved locally.',
+          details: log,
+        );
+      }
       log.add('✅ Restore finished successfully');
       return DriveSyncResult(
         success: true,
@@ -680,17 +839,23 @@ class DriveSyncService {
     // 1. Nexon backend (Render): server-side secret exchange. Only the
     // refresh token travels — backup data never touches the backend.
     final jwtToken = Supabase.instance.client.auth.currentSession?.accessToken;
-    Future<http.Response> renderCall(Duration t) => http.post(
-          Uri.parse(
-            'https://nexon-jyp1.onrender.com/api/refresh-google-drive-token',
-          ),
-          headers: {
-            'Content-Type': 'application/json',
-            if (jwtToken != null && jwtToken.isNotEmpty)
-              'Authorization': 'Bearer $jwtToken',
-          },
-          body: jsonEncode({'refresh_token': refreshToken}),
-        ).timeout(t);
+    final backendClient = http.Client();
+    Future<http.Response> renderCall(Duration t) async {
+      final request = http.Request(
+        'POST',
+        Uri.parse(
+          'https://nexon-jyp1.onrender.com/api/refresh-google-drive-token',
+        ),
+      )
+        ..followRedirects = false
+        ..headers['Content-Type'] = 'application/json'
+        ..body = jsonEncode({'refresh_token': refreshToken});
+      if (jwtToken != null && jwtToken.isNotEmpty) {
+        request.headers['Authorization'] = 'Bearer $jwtToken';
+      }
+      final streamed = await backendClient.send(request).timeout(t);
+      return http.Response.fromStream(streamed).timeout(t);
+    }
     try {
       http.Response response;
       try {
@@ -717,7 +882,7 @@ class DriveSyncService {
         }
       }
       final body = response.body;
-      diagnostics?.add('⚠️ Backend refresh failed (${response.statusCode}): $body');
+      diagnostics?.add('⚠️ Backend refresh failed (${response.statusCode}).');
       if (body.contains('invalid_grant')) {
         return const _RefreshResult(
           error: 'Google Drive authorization was revoked or expired. Please sign in again.',
@@ -725,7 +890,9 @@ class DriveSyncService {
         );
       }
     } catch (e) {
-      diagnostics?.add('⚠️ Backend refresh attempt failed: $e');
+      diagnostics?.add('⚠️ Backend refresh attempt failed (${e.runtimeType}).');
+    } finally {
+      backendClient.close();
     }
 
     // 2. Delegate token refresh to server-side Supabase Edge Function refresh-google-drive-token
@@ -759,7 +926,7 @@ class DriveSyncService {
         }
       } else {
         final errText = data is Map ? (data['error'] ?? data['message']) : data.toString();
-        diagnostics?.add('⚠️ Edge Function status ${res.status}: $errText');
+        diagnostics?.add('⚠️ Edge Function request failed (${res.status}).');
         if (errText.toString().toLowerCase().contains('invalid_grant')) {
           return const _RefreshResult(
             error: 'Google Drive authorization was revoked or expired. Please sign in again.',
@@ -768,24 +935,37 @@ class DriveSyncService {
         }
       }
     } catch (e) {
-      diagnostics?.add('⚠️ Edge Function refresh request failed: $e');
+      diagnostics?.add('⚠️ Edge Function refresh request failed (${e.runtimeType}).');
     }
 
     // Direct Google refresh. Web-type OAuth clients require the client
     // secret; without it Google rejects the refresh grant.
     if (_googleOAuthClientId.isNotEmpty) {
       try {
-        final response = await http.post(
+        final tokenClient = http.Client();
+        final tokenRequest = http.Request(
+          'POST',
           Uri.parse('https://oauth2.googleapis.com/token'),
-          headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: {
+        )
+          ..followRedirects = false
+          ..headers['Content-Type'] = 'application/x-www-form-urlencoded'
+          ..bodyFields = {
             'client_id': _googleOAuthClientId,
             if (_googleOAuthClientSecret.isNotEmpty)
               'client_secret': _googleOAuthClientSecret,
             'grant_type': 'refresh_token',
             'refresh_token': refreshToken,
-          },
-        ).timeout(const Duration(seconds: 15));
+          };
+        final http.Response response;
+        try {
+          final streamedResponse = await tokenClient
+              .send(tokenRequest)
+              .timeout(const Duration(seconds: 15));
+          response = await http.Response.fromStream(streamedResponse)
+              .timeout(const Duration(seconds: 15));
+        } finally {
+          tokenClient.close();
+        }
         final body = response.body;
         if (response.statusCode == 200) {
           final payload = jsonDecode(body) as Map<String, dynamic>;
@@ -806,7 +986,7 @@ class DriveSyncService {
           }
         }
         final failure = _DriveFailure.fromResponse(response.statusCode, body);
-        diagnostics?.add('⚠️ Direct Google OAuth refresh failed (${response.statusCode}): $body');
+        diagnostics?.add('⚠️ Direct Google OAuth refresh failed (${response.statusCode}).');
         if (failure.invalidGrant) {
           return const _RefreshResult(
             error: 'Google Drive authorization was revoked or expired. Please sign in again.',
@@ -814,7 +994,7 @@ class DriveSyncService {
           );
         }
       } catch (e) {
-        diagnostics?.add('⚠️ Direct Google OAuth refresh request failed: $e');
+        diagnostics?.add('⚠️ Direct Google OAuth refresh request failed (${e.runtimeType}).');
       }
     }
 
@@ -883,7 +1063,7 @@ class DriveSyncService {
   // ──────────────────────────────────────────────────────────────────
   // Drive file lookup
   // ──────────────────────────────────────────────────────────────────
-  /// Gets or creates a visible "Nexon Backups" folder in the user's Drive.
+  /// Gets or creates an app-private folder inside Drive's appDataFolder.
   static Future<String> _getOrCreateBackupFolder(drive.DriveApi driveApi) async {
     final folderList = await driveApi.files.list(
       spaces: 'appDataFolder',
@@ -902,14 +1082,29 @@ class DriveSyncService {
     return folder.id!;
   }
 
-  static Future<drive.File?> _findBackupFile(drive.DriveApi driveApi, String folderId) async {
+  static Future<List<drive.File>> _listBackupFiles(
+    drive.DriveApi driveApi,
+    String folderId,
+  ) async {
     final files = await driveApi.files.list(
-      spaces: 'drive',
-      q: "name = '$_backupFileName' and '$folderId' in parents and trashed = false",
-      $fields: 'files(id,name,modifiedTime,size,md5Checksum)',
-      pageSize: 1,
+      spaces: 'appDataFolder',
+      q: "'$folderId' in parents and trashed = false",
+      $fields: 'files(id,name,modifiedTime,size,md5Checksum,appProperties)',
+      orderBy: 'modifiedTime desc',
+      pageSize: 100,
     );
-    return files.files?.isNotEmpty == true ? files.files!.first : null;
+    return (files.files ?? []).where((file) {
+      final name = file.name ?? '';
+      return name == _backupFileName || name.startsWith('nexon_backup_');
+    }).toList();
+  }
+
+  static Future<drive.File?> _findBackupFile(
+    drive.DriveApi driveApi,
+    String folderId,
+  ) async {
+    final files = await _listBackupFiles(driveApi, folderId);
+    return files.isNotEmpty ? files.first : null;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -983,10 +1178,7 @@ class DriveSyncService {
       String? value;
       try {
         value = await _secureStorage.read(key: storageKey);
-      } catch (_) {
-        value = prefs.getString('fallback_api_key_$providerId');
-      }
-      value ??= prefs.getString('fallback_api_key_$providerId');
+      } catch (_) {}
       if (value != null && value.trim().isNotEmpty) {
         keys[providerId] = value;
       }
@@ -1111,16 +1303,54 @@ class DriveSyncService {
     if (rawLocal != null && rawLocal.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(rawLocal) as List<dynamic>;
-        localSessions = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        for (final item in decoded) {
+          if (item is! Map) continue;
+          try {
+            localSessions.add(Map<String, dynamic>.from(item));
+          } catch (_) {
+            continue;
+          }
+        }
       } catch (_) {
         // Local sessions JSON is corrupted; proceed with empty local set.
       }
     }
 
+    // Preferences hold only the newest sessions after the size threshold.
+    // Include the app-private full copy before merging Drive so a restore
+    // cannot replace newer local history with an older cloud snapshot.
+    try {
+      final localBackup = await sessionBackupFile();
+      final backups = [
+        localBackup,
+        ...await _legacySessionBackupFiles(prefs),
+      ];
+      for (final file in backups) {
+        try {
+          if (file.path == localBackup.path || await file.exists()) {
+            final decoded = jsonDecode(await file.readAsString());
+            if (decoded is List) {
+              localSessions.addAll(
+                decoded.whereType<Map>().map(
+                  (item) => Map<String, dynamic>.from(item),
+                ),
+              );
+            }
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    } catch (_) {
+      // Keep any valid preference sessions if the full local copy is damaged.
+    }
+
     final mergedMap = <String, Map<String, dynamic>>{};
     for (final s in localSessions) {
       final id = s['id']?.toString();
-      if (id != null && id.isNotEmpty) {
+      if (id == null || id.isEmpty) continue;
+      final previous = mergedMap[id];
+      if (previous == null || _shouldReplaceSession(previous, s)) {
         mergedMap[id] = s;
       }
     }
@@ -1131,7 +1361,12 @@ class DriveSyncService {
 
     for (final remoteRaw in backupSessionsRaw) {
       if (remoteRaw is! Map) continue;
-      final remote = Map<String, dynamic>.from(remoteRaw);
+      final Map<String, dynamic> remote;
+      try {
+        remote = Map<String, dynamic>.from(remoteRaw);
+      } catch (_) {
+        continue;
+      }
       final id = remote['id']?.toString();
       if (id == null || id.isEmpty) continue;
 
@@ -1140,13 +1375,7 @@ class DriveSyncService {
         addedFromRemote++;
       } else {
         final local = mergedMap[id]!;
-        final localMsgs = (local['messages'] is List) ? (local['messages'] as List).length : 0;
-        final remoteMsgs = (remote['messages'] is List) ? (remote['messages'] as List).length : 0;
-
-        final localUpdated = DateTime.tryParse(local['updatedAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final remoteUpdated = DateTime.tryParse(remote['updatedAt']?.toString() ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-
-        if (remoteMsgs > localMsgs || (remoteMsgs == localMsgs && remoteUpdated.isAfter(localUpdated))) {
+        if (_shouldReplaceSession(local, remote)) {
           mergedMap[id] = remote;
           updatedFromRemote++;
         }
@@ -1169,27 +1398,50 @@ class DriveSyncService {
     });
 
     final allJson = jsonEncode(mergedList);
+    final allJsonBytes = utf8.encode(allJson).length;
     const maxPrefsBytes = 1500 * 1024;
 
-    if (utf8.encode(allJson).length <= maxPrefsBytes) {
-      await prefs.setString('chat_sessions_v1', allJson);
+    if (allJsonBytes <= maxPrefsBytes) {
+      final backupFile = await sessionBackupFile();
+      final saved = await prefs.setString('chat_sessions_v1', allJson);
+      if (saved) {
+        try {
+          if (await backupFile.exists()) await backupFile.delete();
+        } catch (_) {}
+        await _removeLegacySessionBackupFiles(prefs);
+      } else {
+        await _writeSessionBackup(backupFile, allJson);
+        log.add('📦 Preferences were unavailable; kept the full chat copy locally.');
+      }
     } else {
-      final trimmed = mergedList.take(20).toList();
-      await prefs.setString('chat_sessions_v1', jsonEncode(trimmed));
+      var backupOk = false;
       try {
-        final docDir = await getApplicationDocumentsDirectory();
-        final backupFile = File('${docDir.path}/sessions/prefs_backup.json');
-        if (!await backupFile.parent.exists()) {
-          await backupFile.parent.create(recursive: true);
-        }
-        final tmp = File('${backupFile.path}.tmp');
-        await tmp.writeAsString(allJson, flush: true);
-        await tmp.rename(backupFile.path);
+        final backupFile = await sessionBackupFile();
+        await _writeSessionBackup(backupFile, allJson);
+        backupOk = true;
         log.add(
           '📦 Session payload exceeds 1.5MB; offloaded complete set to local backup file.',
         );
       } catch (e) {
         log.add('⚠️ Failed to write local session backup: $e');
+      }
+      if (backupOk) {
+        final saved = await prefs.setString(
+          'chat_sessions_v1',
+          jsonEncode(mergedList.take(20).toList()),
+        );
+        if (!saved) {
+          log.add('📦 Full chat history is safe locally; preferences could not be updated.');
+        }
+        await _removeLegacySessionBackupFiles(prefs);
+      } else {
+        // Preserve all chats in preferences if the full local copy could not
+        // be committed; never truncate first and hope the file write succeeds.
+        final saved = await prefs.setString('chat_sessions_v1', allJson);
+        if (!saved) {
+          throw StateError('Could not persist restored chat history.');
+        }
+        await _removeLegacySessionBackupFiles(prefs);
       }
     }
 
@@ -1197,6 +1449,37 @@ class DriveSyncService {
       '✅ Merged $localCount local chats with ${backupSessionsRaw.length} remote chats. Result: ${mergedList.length} chats ($addedFromRemote added, $updatedFromRemote updated).',
     );
     return mergedList.length;
+  }
+
+  static bool _shouldReplaceSession(
+    Map<String, dynamic> current,
+    Map<String, dynamic> candidate,
+  ) {
+    final currentMessages = current['messages'] is List
+        ? current['messages'] as List
+        : const [];
+    final candidateMessages = candidate['messages'] is List
+        ? candidate['messages'] as List
+        : const [];
+    if (candidateMessages.length < currentMessages.length) return false;
+
+    for (var i = 0; i < currentMessages.length; i++) {
+      final currentMessage = jsonEncode(_canonicalJsonValue(currentMessages[i]));
+      final candidateMessage = jsonEncode(_canonicalJsonValue(candidateMessages[i]));
+      if (currentMessage != candidateMessage) return false;
+    }
+
+    final currentUpdated = DateTime.tryParse(
+          current['updatedAt']?.toString() ?? '',
+        ) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+    final candidateUpdated = DateTime.tryParse(
+          candidate['updatedAt']?.toString() ?? '',
+        ) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+    return candidateMessages.length > currentMessages.length ||
+        (candidateMessages.length == currentMessages.length &&
+            candidateUpdated.isAfter(currentUpdated));
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -1268,13 +1551,15 @@ class DriveSyncService {
           key: _providerApiKeyStorageName(providerId),
           value: apiKey,
         );
+        final savedKey = await _secureStorage.read(
+          key: _providerApiKeyStorageName(providerId),
+        );
+        if (savedKey != apiKey) {
+          throw StateError('Secure key storage could not be verified.');
+        }
         await prefs.remove('fallback_api_key_$providerId');
       } catch (_) {
-        final existingFallback = prefs.getString('fallback_api_key_$providerId');
-        if (existingFallback != null && existingFallback.trim().isNotEmpty) {
-          continue;
-        }
-        await prefs.setString('fallback_api_key_$providerId', apiKey);
+        // Do not persist provider credentials in plaintext preferences.
       }
     }
   }
@@ -1401,57 +1686,124 @@ class DriveSyncService {
     return '$prefix: ${e.toString()}';
   }
 
-  static Future<String> _getOrCreateEncryptionKey() async {
-    try {
-      final existing = await _secureStorage.read(key: _encryptionKeyStorage);
-      if (existing != null && existing.length == 32) return existing;
-    } catch (_) {}
-    final newKey = _generateRandomKey(32);
-    try {
-      await _secureStorage.write(key: _encryptionKeyStorage, value: newKey);
-    } catch (_) {}
-    return newKey;
-  }
-
-  static String _generateRandomKey(int length) {
-    final random = DateTime.now().microsecondsSinceEpoch;
-    final chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    final buffer = StringBuffer();
-    for (int i = 0; i < length; i++) {
-      final idx = (random + i * 7919) % chars.length;
-      buffer.write(chars[idx.abs() % chars.length]);
-    }
-    return buffer.toString();
-  }
-
   static Future<List<int>> _encryptBackup(List<int> plaintext) async {
-    final key = await _getOrCreateEncryptionKey();
-    final keyBytes = utf8.encode(key);
-    final keyHash = md5.convert(keyBytes).bytes;
-    final iv = List<int>.generate(16, (i) => (keyHash[i] + i * 31) & 0xFF);
-    final xorBytes = List<int>.generate(plaintext.length, (i) {
-      return plaintext[i] ^ keyBytes[i % keyBytes.length] ^ iv[i % iv.length];
-    });
-    final header = utf8.encode('NEXON_ENC_V1:');
-    return [...header, ...xorBytes];
+    final keyBytes = await _getOrCreateBackupKeyV2();
+    final header = utf8.encode(_backupV3Header);
+    final secretBox = await _backupCipher.encrypt(
+      plaintext,
+      secretKey: SecretKey(keyBytes),
+      nonce: _backupCipher.newNonce(),
+      aad: header,
+    );
+    return [
+      ...header,
+      ...secretBox.nonce,
+      ...secretBox.mac.bytes,
+      ...secretBox.cipherText,
+    ];
   }
 
   static Future<List<int>?> _decryptBackup(List<int> ciphertext) async {
-    final header = utf8.encode('NEXON_ENC_V1:');
-    if (ciphertext.length < header.length) return null;
-    for (int i = 0; i < header.length; i++) {
-      if (ciphertext[i] != header[i]) return null;
+    final v3Header = utf8.encode(_backupV3Header);
+    final v2Header = utf8.encode(_backupV2Header);
+    final authenticatedHeader = _hasPrefix(ciphertext, v3Header)
+        ? v3Header
+        : (_hasPrefix(ciphertext, v2Header) ? v2Header : null);
+    if (authenticatedHeader != null) {
+      final payloadOffset = authenticatedHeader.length;
+      final minimumLength =
+          payloadOffset + _backupV2NonceBytes + _backupV2MacBytes;
+      if (ciphertext.length < minimumLength) return null;
+
+      final keyBytes = await _readBackupKeyV2();
+      if (keyBytes == null) return null;
+      final nonceStart = payloadOffset;
+      final macStart = nonceStart + _backupV2NonceBytes;
+      final encryptedStart = macStart + _backupV2MacBytes;
+      final secretBox = SecretBox(
+        ciphertext.sublist(encryptedStart),
+        nonce: ciphertext.sublist(nonceStart, macStart),
+        mac: Mac(ciphertext.sublist(macStart, encryptedStart)),
+      );
+      try {
+        return await _backupCipher.decrypt(
+          secretBox,
+          secretKey: SecretKey(keyBytes),
+          aad: authenticatedHeader,
+        );
+      } catch (_) {
+        // Authentication failure means the backup was changed or the key differs.
+        return null;
+      }
     }
-    final key = await _getOrCreateEncryptionKey();
-    if (key.isEmpty) return null;
-    final keyBytes = utf8.encode(key);
+
+    // Compatibility path for existing V1 backups. V1 has no authentication;
+    // new backups are never written in this format.
+    final v1Header = utf8.encode(_backupV1Header);
+    if (!_hasPrefix(ciphertext, v1Header)) return null;
+    final legacyKey = await _secureStorage.read(key: _encryptionKeyStorage);
+    if (legacyKey == null || legacyKey.isEmpty) return null;
+    final keyBytes = utf8.encode(legacyKey);
     final keyHash = md5.convert(keyBytes).bytes;
     final iv = List<int>.generate(16, (i) => (keyHash[i] + i * 31) & 0xFF);
-    final encrypted = ciphertext.sublist(header.length);
-    final plaintext = List<int>.generate(encrypted.length, (i) {
+    final encrypted = ciphertext.sublist(v1Header.length);
+    return List<int>.generate(encrypted.length, (i) {
       return encrypted[i] ^ keyBytes[i % keyBytes.length] ^ iv[i % iv.length];
     });
-    return plaintext;
+  }
+
+  static bool _hasPrefix(List<int> bytes, List<int> prefix) {
+    if (bytes.length < prefix.length) return false;
+    for (var i = 0; i < prefix.length; i++) {
+      if (bytes[i] != prefix[i]) return false;
+    }
+    return true;
+  }
+
+  static Future<List<int>?> _readBackupKeyV2() async {
+    final encoded = await _secureStorage.read(key: _encryptionKeyStorageV2);
+    if (encoded == null) return null;
+    try {
+      final keyBytes = base64Url.decode(encoded);
+      return keyBytes.length == 32 ? keyBytes : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<List<int>> _getOrCreateBackupKeyV2() async {
+    final pending = _creatingBackupKeyV2;
+    if (pending != null) return pending;
+
+    final existing = await _readBackupKeyV2();
+    if (existing != null) return existing;
+    if (await _secureStorage.read(key: _encryptionKeyStorageV2) != null) {
+      throw StateError('The stored backup encryption key is invalid.');
+    }
+
+    final pendingAfterRead = _creatingBackupKeyV2;
+    if (pendingAfterRead != null) return pendingAfterRead;
+
+    final creation = () async {
+      final random = math.Random.secure();
+      final keyBytes = List<int>.generate(32, (_) => random.nextInt(256));
+      final encoded = base64UrlEncode(keyBytes);
+      await _secureStorage.write(
+        key: _encryptionKeyStorageV2,
+        value: encoded,
+      );
+      final persisted = await _secureStorage.read(key: _encryptionKeyStorageV2);
+      if (persisted != encoded) {
+        throw StateError('Could not persist the backup encryption key securely.');
+      }
+      return keyBytes;
+    }();
+    _creatingBackupKeyV2 = creation;
+    try {
+      return await creation;
+    } finally {
+      _creatingBackupKeyV2 = null;
+    }
   }
 
   static void _appendDriveFailure(List<String> log, String context, Object e) {

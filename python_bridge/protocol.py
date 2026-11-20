@@ -530,10 +530,6 @@ class MethodRouter:
 
         try:
             if isinstance(request.params, dict):
-                if "active_llm_provider" in request.params:
-                    os.environ["DEEP_RESEARCH_REFLECTION_URL"] = str(request.params.get("active_llm_base_url") or "")
-                    os.environ["DEEP_RESEARCH_REFLECTION_KEY"] = str(request.params.get("active_llm_api_key") or "")
-                    os.environ["DEEP_RESEARCH_REFLECTION_MODEL"] = str(request.params.get("active_llm_model") or "")
                 normalized_params = self._normalize_aliases(request.params)
                 # Pre-process parameters to expand tilde paths ('~') for path-related arguments
                 path_keys = {'path', 'cwd', 'directory', 'dir', 'dir_path', 'dest', 'src', 'path_a', 'path_b', 'output_dir'}
@@ -566,10 +562,10 @@ class MethodRouter:
                 result = await handler()
             return _finish(JsonRpcResponse(id=request.id, result=result))
         except JsonRpcError as exc:
-            logger.error("RPC error in %s: %s", request.method, exc.message)
+            logger.error("RPC error in %s", request.method)
             return _finish(JsonRpcResponse(id=request.id, error=exc.to_dict()))
         except TypeError as exc:
-            logger.error("Invalid params for %s: %s", request.method, exc)
+            logger.error("Invalid params for %s", request.method)
             return _finish(JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(
@@ -578,7 +574,7 @@ class MethodRouter:
                 ).to_dict(),
             ))
         except Exception as exc:
-            logger.exception("Internal error in %s", request.method)
+            logger.error("Internal error in %s (%s)", request.method, type(exc).__name__)
             return _finish(JsonRpcResponse(
                 id=request.id,
                 error=JsonRpcError(

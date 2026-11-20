@@ -636,34 +636,24 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         }
       }
 
-      if (source == ImageSource.gallery) {
-        final result = await FilePicker.platform.pickFiles(
-          type: FileType.image,
-          allowMultiple: false,
-        );
-        if (result != null && result.files.single.path != null) {
-          final file = File(result.files.single.path!);
-          final bytes = await file.readAsBytes();
-          final base64String = base64Encode(bytes);
-          widget.onImageAttached(base64String);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Image attached successfully')),
-            );
-          }
-        }
-      } else {
-        final picker = ImagePicker();
-        final pickedFile = await picker.pickImage(source: source);
-        if (pickedFile != null) {
-          final bytes = await pickedFile.readAsBytes();
-          final base64String = base64Encode(bytes);
-          widget.onImageAttached(base64String);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Image attached successfully')),
-            );
-          }
+      // Images are included in later chat requests and backups. Resize and
+      // recompress them at selection time so a large camera/gallery original
+      // is not repeatedly uploaded in base64 form.
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+      );
+      if (pickedFile != null) {
+        final bytes = await pickedFile.readAsBytes();
+        final base64String = base64Encode(bytes);
+        widget.onImageAttached(base64String);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Image attached successfully')),
+          );
         }
       }
     } catch (e) {

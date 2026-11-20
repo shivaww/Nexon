@@ -337,6 +337,10 @@ class _ChatScreenState extends State<ChatScreen> {
     request.headers.set('Content-Type', 'application/json');
     request.headers.set('Accept', 'text/event-stream');
     final customHeaders = _provider!['customHeaders'];
+    if ((_apiKey?.trim().isNotEmpty ?? false) ||
+        (customHeaders is Map && customHeaders.isNotEmpty)) {
+      request.followRedirects = false;
+    }
     if (customHeaders is Map) {
       for (final entry in customHeaders.entries) {
         request.headers.set(entry.key.toString(), entry.value.toString());

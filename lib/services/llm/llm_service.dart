@@ -457,6 +457,9 @@ class LLMService {
   }
 
   void _setProviderHeaders(HttpClientRequest request, LLMProvider provider) {
+    if (provider.apiKey.trim().isNotEmpty || provider.customHeaders.isNotEmpty) {
+      request.followRedirects = false;
+    }
     if (provider.apiKey.trim().isNotEmpty) {
       request.headers.set('Authorization', 'Bearer ${provider.apiKey.trim()}');
       if (provider.id == 'sarvam') {

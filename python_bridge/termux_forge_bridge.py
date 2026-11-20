@@ -35,6 +35,7 @@ import shlex
 import signal
 import sys
 import time
+import socket
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,6 +82,7 @@ MCP_HTTP_TIMEOUT_SECONDS = float(os.getenv("MCP_HTTP_TIMEOUT_SECONDS", "110"))
 LOG_DIR = os.path.expanduser("~/.termux_forge/logs")
 HISTORY_FILE = os.path.expanduser("~/.termux_forge/command_history.json")
 DEFAULT_CWD = os.path.expanduser("~")
+MAX_READ_URL_BYTES = 2 * 1024 * 1024
 
 # ── Logging setup ─────────────────────────────────────────────────────
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -95,6 +97,17 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("termux_forge.bridge")
+
+
+@web.middleware
+async def _reject_browser_origin(request: web.Request, handler):
+    """The localhost HTTP API is for native clients, never web pages."""
+    if "Origin" in request.headers:
+        return web.json_response(
+            {"error": "Browser-origin requests are not supported."},
+            status=403,
+        )
+    return await handler(request)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -130,6 +143,18 @@ class TermuxForgeBridge:
     """
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+        if host.lower() != "localhost":
+            try:
+                bind_address = ipaddress.ip_address(host)
+            except ValueError as exc:
+                raise ValueError(
+                    "The bridge must bind to localhost or a loopback IP address."
+                ) from exc
+            if not bind_address.is_loopback:
+                raise ValueError(
+                    "The bridge must bind to localhost or a loopback IP address; "
+                    "network interfaces are not authenticated."
+                )
         self.host = host
         self.port = port
 
@@ -368,7 +393,7 @@ class TermuxForgeBridge:
         # Auto-detect long-running background server commands
         is_server, _, _ = detect_server_command(command)
         if is_server:
-            logger.info("Auto-intercepted long-running server command: %s", command)
+            logger.info("Auto-intercepted a long-running server command")
             return await self._run_background(
                 command=command, cwd=cwd, env=env, workspace_dir=workspace_dir,
             )
@@ -822,38 +847,71 @@ class TermuxForgeBridge:
         When a query is provided, the cleaner applies keyword relevance filtering
         to reduce the output by ~90%, keeping only paragraphs relevant to the query.
         """
-        target_url = url or uri
+        target_value = url if isinstance(url, str) and url.strip() else uri
+        target_url = target_value.strip() if isinstance(target_value, str) else ""
         if not target_url:
             return {"error": "Fetch failed: URL is required."}
-        if not target_url.startswith("http"):
-            target_url = "https://" + target_url
+        from urllib.parse import urljoin, urlsplit
 
         try:
-            from urllib.parse import urlparse
-            parsed = urlparse(target_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                return {"error": "Fetch failed: only public HTTP(S) URLs are allowed."}
-            host = parsed.hostname.lower()
-            _blocked_hosts = {
-                "localhost", "metadata.google.internal",
-                "127.0.0.1", "0.0.0.0", "::1", "[::1]",
-                "169.254.169.254",
-            }
-            if host in _blocked_hosts or host.endswith(".local") or host.endswith(".internal"):
-                return {"error": "Fetch failed: local/private URLs are not allowed."}
-            try:
-                address = ipaddress.ip_address(host)
-                if not address.is_global:
-                    return {"error": "Fetch failed: local/private URLs are not allowed."}
-            except ValueError:
-                pass
-        except Exception:
+            initial_scheme = urlsplit(target_url).scheme
+        except ValueError:
             return {"error": "Fetch failed: invalid URL."}
+        if not initial_scheme:
+            target_url = "https://" + target_url
 
-        looks_like_pdf = target_url.lower().split("?", 1)[0].endswith(".pdf")
+        def validate_target(value: str) -> tuple[bool, str]:
+            try:
+                parsed = urlsplit(value)
+                host = (parsed.hostname or "").rstrip(".").lower()
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or not host
+                    or parsed.username is not None
+                    or parsed.password is not None
+                ):
+                    return False, "Fetch failed: only public HTTP(S) URLs are allowed."
+                # Accessing .port also validates malformed and out-of-range ports.
+                _ = parsed.port
+                if (
+                    host in {"localhost", "metadata.google.internal"}
+                    or host.endswith((".local", ".internal"))
+                ):
+                    return False, "Fetch failed: local/private URLs are not allowed."
+                try:
+                    address = ipaddress.ip_address(host)
+                except ValueError:
+                    address = None
+                if address is not None and not address.is_global:
+                    return False, "Fetch failed: local/private URLs are not allowed."
+                return True, ""
+            except Exception:
+                return False, "Fetch failed: invalid URL."
+
+        valid, validation_error = validate_target(target_url)
+        if not valid:
+            return {"error": validation_error}
 
         try:
             import aiohttp
+
+            class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
+                """Reject private DNS answers at the point aiohttp connects."""
+
+                def __init__(self) -> None:
+                    self._resolver = aiohttp.resolver.DefaultResolver()
+
+                async def resolve(self, host, port=0, family=socket.AF_INET):
+                    addresses = await self._resolver.resolve(host, port, family)
+                    for result in addresses:
+                        address_text = result["host"].split("%", 1)[0]
+                        if not ipaddress.ip_address(address_text).is_global:
+                            raise OSError("URL resolved to a non-public address")
+                    return addresses
+
+                async def close(self) -> None:
+                    await self._resolver.close()
+
             headers = {
                 "User-Agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -870,53 +928,67 @@ class TermuxForgeBridge:
                 "Sec-Fetch-User": "?1",
                 "Upgrade-Insecure-Requests": "1",
             }
-            async with aiohttp.ClientSession(headers=headers) as session:
-                # Termux often lacks proper CA certificates — try with SSL first,
-                # fallback to no verification if SSL error occurs.
-                try:
-                    import ssl
-                    ssl_context = ssl.create_default_context()
-                except Exception:
-                    ssl_context = False
-                
-                try:
-                    async with session.get(
-                        target_url, allow_redirects=True, max_redirects=10, 
-                        timeout=aiohttp.ClientTimeout(total=45),
-                        ssl=ssl_context
-                    ) as resp:
-                        result = await self._process_read_url_response(resp, target_url, query)
-                        # Retry once on 5xx transient server errors
-                        if result.get("retryable"):
-                            import asyncio
-                            logger.info("read_url: retrying %s after 5xx (status %d)", target_url, resp.status)
-                            await asyncio.sleep(1.5)
-                            async with session.get(
-                                target_url, allow_redirects=True, max_redirects=10,
-                                timeout=aiohttp.ClientTimeout(total=45),
-                                ssl=ssl_context
-                            ) as retry_resp:
-                                result = await self._process_read_url_response(retry_resp, target_url, query)
-                        return result
-                except (aiohttp.ClientSSLError, ssl.SSLError) as ssl_err:
-                    logger.warning("read_url: SSL failed for %s, retrying without verification: %s", target_url, ssl_err)
-                    try:
+            connector = aiohttp.TCPConnector(
+                resolver=PublicOnlyResolver(),
+                use_dns_cache=False,
+                limit=10,
+            )
+            timeout = aiohttp.ClientTimeout(total=45)
+            async with aiohttp.ClientSession(
+                headers=headers,
+                connector=connector,
+                timeout=timeout,
+            ) as session:
+                async def fetch_once(start_url: str) -> tuple[dict, int]:
+                    current_url = start_url
+                    for redirect_count in range(11):
                         async with session.get(
-                            target_url, allow_redirects=True, max_redirects=10,
-                            timeout=aiohttp.ClientTimeout(total=45),
-                            ssl=False
-                        ) as retry_resp:
-                            result = await self._process_read_url_response(retry_resp, target_url, query)
-                            return result
-                    except Exception as retry_err:
-                        logger.error("read_url: SSL fallback also failed for %s: %s", target_url, retry_err)
-                        return {
-                            "error": f"Fetch failed (SSL fallback): {retry_err}",
-                            "url": target_url
-                        }
+                            current_url,
+                            allow_redirects=False,
+                        ) as resp:
+                            if resp.status in {301, 302, 303, 307, 308}:
+                                location = resp.headers.get("Location")
+                                if not location:
+                                    return await self._process_read_url_response(
+                                        resp, current_url, query
+                                    ), resp.status
+                                if redirect_count == 10:
+                                    return {"error": "Fetch failed: too many redirects.", "url": current_url}, resp.status
+                                next_url = urljoin(current_url, location)
+                                next_valid, next_error = validate_target(next_url)
+                                if not next_valid:
+                                    return {"error": next_error, "url": current_url}, resp.status
+                                current_url = next_url
+                                continue
+                            return await self._process_read_url_response(
+                                resp, current_url, query
+                            ), resp.status
+                    return {"error": "Fetch failed: too many redirects.", "url": current_url}, 0
+
+                result, status = await fetch_once(target_url)
+                if status >= 500:
+                    import asyncio
+                    from urllib.parse import urlsplit as _urlsplit
+                    logger.info(
+                        "read_url: retrying host=%s after HTTP %d",
+                        _urlsplit(target_url).hostname or "unknown",
+                        status,
+                    )
+                    await asyncio.sleep(1.5)
+                    result, _ = await fetch_once(target_url)
+                return result
         except Exception as e:
-            logger.error("read_url: Fetch failed completely. URL=%s, error=%s", target_url, e)
-            return {"error": f"Fetch failed: {e}", "url": target_url}
+            from urllib.parse import urlsplit as _urlsplit
+            try:
+                failed_host = _urlsplit(target_url).hostname or "unknown"
+            except ValueError:
+                failed_host = "unknown"
+            logger.error(
+                "read_url: fetch failed host=%s error_type=%s",
+                failed_host,
+                type(e).__name__,
+            )
+            return {"error": "Fetch failed: secure connection could not be established.", "url": target_url}
 
     async def _process_read_url_response(self, resp, target_url: str, query: str) -> dict:
         """Process HTTP response for read_url (extracted to allow SSL retry logic)."""
@@ -953,15 +1025,30 @@ class TermuxForgeBridge:
             }
 
         try:
-            body = await resp.text(errors="replace")
+            if resp.content_length is not None and resp.content_length > MAX_READ_URL_BYTES:
+                return {
+                    "error": "Fetch failed: page exceeds the 2 MiB size limit.",
+                    "url": target_url,
+                }
+            body_chunks = []
+            body_size = 0
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                body_size += len(chunk)
+                if body_size > MAX_READ_URL_BYTES:
+                    return {
+                        "error": "Fetch failed: page exceeds the 2 MiB size limit.",
+                        "url": target_url,
+                    }
+                body_chunks.append(chunk)
+            body = b"".join(body_chunks).decode(resp.charset or "utf-8", errors="replace")
             from deep_research.cleaner import TextCleaner
             text = TextCleaner().clean(body, query=query)
             # Defensive: log if cleaning stripped too much content
             if len(text) < 500 and len(body) > 5000:
                 logger.warning(
                     "read_url: TextCleaner stripped aggressively. "
-                    "URL=%s, original=%d chars, cleaned=%d chars, query=%s",
-                    target_url, len(body), len(text), query or "(none)"
+                    "host=%s, original=%d chars, cleaned=%d chars",
+                    resp.url.host, len(body), len(text)
                 )
             return {
                 "status": "success",
@@ -970,8 +1057,8 @@ class TermuxForgeBridge:
                 "parse_format": "html",
             }
         except Exception as e:
-            logger.error("read_url extraction_failed: URL=%s, error=%s", target_url, e)
-            return {"error": f"Extraction failed: {e}", "url": target_url}
+            logger.error("read_url extraction_failed error_type=%s", type(e).__name__)
+            return {"error": "Page content could not be extracted.", "url": target_url}
 
     async def _mcp_transport_handle(
         self, server: str, method: str, params: dict | None = None,
@@ -1734,8 +1821,8 @@ class TermuxForgeBridge:
             })
 
         except Exception as exc:
-            logger.error("Workspace upload failed: %s", exc)
-            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+            logger.error("Workspace upload failed (%s)", type(exc).__name__)
+            return web.json_response({"status": "error", "message": "Upload failed."}, status=500)
 
     async def _handle_workspace_reindex(self, request: web.Request) -> web.Response:
         """Trigger a full workspace re-index (chunking) after batch uploads.
@@ -1764,8 +1851,8 @@ class TermuxForgeBridge:
                 "index_summary": summary,
             })
         except Exception as exc:
-            logger.error("Workspace reindex failed: %s", exc)
-            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+            logger.error("Workspace reindex failed (%s)", type(exc).__name__)
+            return web.json_response({"status": "error", "message": "Reindex failed."}, status=500)
 
     async def _handle_workspace_clear(self, request: web.Request) -> web.Response:
         """Clear previous-session documents so a new session gets a clean quota."""
@@ -1773,8 +1860,8 @@ class TermuxForgeBridge:
             from workspace import WorkspaceManager
             return web.json_response(WorkspaceManager().clear_session_documents())
         except Exception as exc:
-            logger.error("Workspace clear failed: %s", exc)
-            return web.json_response({"status": "error", "message": str(exc)}, status=500)
+            logger.error("Workspace clear failed (%s)", type(exc).__name__)
+            return web.json_response({"status": "error", "message": "Workspace clear failed."}, status=500)
 
     async def _handle_workspace_deps(self, request: web.Request) -> web.Response:
         """Return dependency status for workspace document extraction."""
@@ -1784,8 +1871,8 @@ class TermuxForgeBridge:
             deps = mgr.check_dependencies()
             return web.json_response(deps)
         except Exception as exc:
-            logger.error("Workspace dep check failed: %s", exc)
-            return web.json_response({"error": str(exc)}, status=500)
+            logger.error("Workspace dependency check failed (%s)", type(exc).__name__)
+            return web.json_response({"error": "Dependency check failed."}, status=500)
 
     # ══════════════════════════════════════════════════════════════════
     #  NATIVE TOOLS HANDLERS
@@ -2004,13 +2091,17 @@ class TermuxForgeBridge:
             self._handle_client,
             self.host,
             self.port,
+            origins=[None],
             ping_interval=30,
             ping_timeout=10,
             max_size=10 * 1024 * 1024,  # 10 MB max message
         )
         
         # Start HTTP server
-        self._http_app = web.Application(client_max_size=200 * 1024 * 1024)  # 200 MB upload limit (allows 150MB files)
+        self._http_app = web.Application(
+            client_max_size=200 * 1024 * 1024,  # Upload handler caps individual files at 150 MiB.
+            middlewares=[_reject_browser_origin],
+        )
         self._http_app.router.add_post('/mcp', self._handle_http_post)
         self._http_app.router.add_post('/workspace/upload', self._handle_workspace_upload)
         self._http_app.router.add_post('/workspace/reindex', self._handle_workspace_reindex)
@@ -2018,19 +2109,6 @@ class TermuxForgeBridge:
         self._http_app.router.add_get('/workspace/deps', self._handle_workspace_deps)
         self._http_app.router.add_get('/native/health', self._handle_native_health)
         self._http_app.router.add_post('/native/call', self._handle_native_call)
-        
-        # Also support OPTIONS for CORS if needed
-        async def handle_options(request):
-            return web.Response(
-                status=200,
-                headers={
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type',
-                }
-            )
-        self._http_app.router.add_options('/mcp', handle_options)
-        self._http_app.router.add_options('/workspace/upload', handle_options)
         
         self._http_runner = web.AppRunner(self._http_app)
         await self._http_runner.setup()

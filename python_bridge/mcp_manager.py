@@ -217,11 +217,11 @@ class McpManager:
             elif config.transport == TransportType.SSE:
                 state.status = ServerStatus.RUNNING
                 state.start_time = time.time()
-                logger.info("SSE server registered: %s → %s", name, config.url)
+                logger.info("SSE server registered: %s", name)
             elif config.transport == TransportType.HTTP:
                 state.status = ServerStatus.RUNNING
                 state.start_time = time.time()
-                logger.info("HTTP server registered: %s → %s", name, config.url)
+                logger.info("HTTP server registered: %s", name)
 
             # Start health monitoring
             if config.health_interval > 0:
@@ -234,9 +234,9 @@ class McpManager:
 
         except Exception as exc:
             state.status = ServerStatus.ERROR
-            state.error_message = str(exc)
-            logger.exception("Failed to start MCP server: %s", name)
-            return {"status": "error", "error": str(exc)}
+            state.error_message = type(exc).__name__
+            logger.error("Failed to start MCP server (%s)", type(exc).__name__)
+            return {"status": "error", "error": "MCP server could not be started."}
 
     async def stop_server(self, name: str) -> dict[str, Any]:
         """Stop a running MCP server."""
@@ -395,8 +395,8 @@ class McpManager:
                 return await self._http_request(state, request)
             return {"error": f"Unsupported transport: {state.config.transport.value}"}
         except Exception as exc:
-            logger.error("MCP request failed (%s): %s", server_name, exc)
-            return {"error": str(exc)}
+            logger.error("MCP request failed (%s)", type(exc).__name__)
+            return {"error": "MCP request failed."}
 
     # ── Listing & presets ─────────────────────────────────────────────
 

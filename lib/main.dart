@@ -375,35 +375,62 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   int? _editingMessageIndex;
   int _historyLimit = 50;
   bool _isLoadingMoreHistory = false;
+  Future<void> _sessionSaveTail = Future<void>.value();
+  bool _autoBackupInFlight = false;
 
   Future<void> _loadMoreHistory() async {
     if (_isLoadingMoreHistory) return;
+    if (_sessions.length > _historyLimit) {
+      setState(() {
+        _historyLimit += 25;
+      });
+      return;
+    }
     setState(() {
       _isLoadingMoreHistory = true;
     });
 
     var added = 0;
+    var localHistoryAvailable = false;
     try {
-      // 1) Local full-history backup written by _saveSessions when the
-      //    prefs payload exceeds the size cap. Works offline — no Drive.
+      // 1) Prefer the app-private full-history copy. Older builds wrote this
+      //    file under the selected workspace or a legacy documents path.
       final backupFile = await _sessionBackupPrefsFile();
-      if (await backupFile.exists()) {
-        final raw = await backupFile.readAsString();
-        if (raw.trim().isNotEmpty) {
-          final decoded = jsonDecode(raw) as List<dynamic>;
-          final backupSessions = decoded
-              .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
-              .toList();
-          if (mounted) {
-            setState(() {
-              added = _mergeLoadedSessions(backupSessions);
-            });
+      File? sourceFile = await backupFile.exists()
+          ? backupFile
+          : await _findLegacySessionBackupFile();
+      if (sourceFile != null) {
+        try {
+          final raw = await sourceFile.readAsString();
+          if (raw.trim().isNotEmpty) {
+            final decoded = jsonDecode(raw) as List<dynamic>;
+            final backupSessions = <ChatSession>[];
+            for (final item in decoded) {
+              if (item is! Map) continue;
+              try {
+                backupSessions.add(
+                  ChatSession.fromJson(Map<String, dynamic>.from(item)),
+                );
+              } catch (_) {
+                continue;
+              }
+            }
+            localHistoryAvailable = backupSessions.isNotEmpty;
+            if (mounted && backupSessions.isNotEmpty) {
+              setState(() {
+                added = _mergeLoadedSessions(backupSessions);
+              });
+            }
           }
+        } catch (_) {
+          // A corrupt local copy must not prevent a Drive recovery attempt.
         }
       }
 
-      // 2) Fall back to Google Drive when the local backup added nothing.
-      if (added == 0) {
+      // A valid local full-history copy already covers this device. Avoid
+      // downloading the same backup again just because every session is
+      // already present in memory.
+      if (!localHistoryAvailable && added == 0) {
         final result = await DriveSyncService.restoreFromDriveDetailed();
         if (result.success) {
           final prefs = await SharedPreferences.getInstance();
@@ -450,12 +477,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
         added++;
       } else {
         final local = map[remote.id]!;
-        final localMsgs = local.messages.length;
-        final remoteMsgs = remote.messages.length;
-        final localTime = local.updatedAt;
-        final remoteTime = remote.updatedAt;
-
-        if (remoteMsgs > localMsgs || (remoteMsgs == localMsgs && remoteTime.isAfter(localTime))) {
+        if (_shouldPreferSession(local, remote)) {
           map[remote.id] = remote;
           added++;
         }
@@ -535,119 +557,227 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   Future<void> _loadSessions() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('chat_sessions_v1');
+    final loadedById = <String, ChatSession>{};
     if (raw != null && raw.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(raw) as List<dynamic>;
-        final loadedSessions = decoded
-            .map((s) => ChatSession.fromJson(s as Map<String, dynamic>))
-            .toList();
-        // Purge legacy welcome placeholders from saved history so they
-        // never render or flash on startup.
-        for (var i = 0; i < loadedSessions.length; i++) {
-          final s = loadedSessions[i];
-          final cleaned = s.messages
-              .where(
-                (m) =>
-                    m.role != MessageRole.assistant ||
-                    !_isWelcomePlaceholder(m.text),
-              )
-              .toList();
-          if (cleaned.length != s.messages.length) {
-            loadedSessions[i] = s.copyWith(messages: cleaned);
+        for (final rawSession in decoded) {
+          if (rawSession is! Map) continue;
+          try {
+            final session = ChatSession.fromJson(
+              Map<String, dynamic>.from(rawSession),
+            );
+            if (session.id.isNotEmpty) loadedById[session.id] = session;
+          } catch (_) {
+            continue;
           }
         }
-        setState(() {
-          _sessions = loadedSessions;
+      } catch (_) {
+        // A bad preferences value should not block recovery from the full
+        // local history or Drive.
+      }
+    }
 
-          // Check if the most recent session is already an empty new/welcome chat
-          bool hasEmptySession = false;
-          if (_sessions.isNotEmpty) {
-            final first = _sessions.first;
-            final userMsgs = first.messages.where(
-              (m) => m.role == MessageRole.user,
+    // SharedPreferences contains only the newest sessions after the size cap.
+    // Load the full private copy before _saveSessions can rewrite that entry.
+    File? localBackup;
+    try {
+      final privateBackup = await _sessionBackupPrefsFile();
+      localBackup = await privateBackup.exists()
+          ? privateBackup
+          : await _findLegacySessionBackupFile(
+              prefs.getString('agentic_workspace_v1'),
             );
-            if (userMsgs.isEmpty &&
-                (first.title == 'New Chat' || first.title == 'Welcome Chat')) {
-              _activeSessionId = first.id;
-              _agenticEnabled = false;
-              _deepResearchEnabled = false;
-              _studyModeEnabled = false;
-              _promptSig = '';
-              _promptUseCount = 0;
-              _clearWorkspaceBucket();
-              hasEmptySession = true;
+      if (localBackup != null) {
+        final decoded = jsonDecode(await localBackup.readAsString());
+        if (decoded is List) {
+          for (final rawSession in decoded) {
+            if (rawSession is! Map) continue;
+            try {
+              final session = ChatSession.fromJson(
+                Map<String, dynamic>.from(rawSession),
+              );
+              final current = loadedById[session.id];
+              if (current == null || _shouldPreferSession(current, session)) {
+                loadedById[session.id] = session;
+              }
+            } catch (_) {
+              continue;
             }
           }
-
-          if (!hasEmptySession) {
-            // Create a new fresh chat session on startup
-            final newId = DateTime.now().millisecondsSinceEpoch.toString();
-            final newSession = ChatSession(
-              id: newId,
-              title: 'New Chat',
-              messages: const [],
-              providerId: _selectedProviderId,
-              model: _activeModel,
-            );
-            _sessions.insert(0, newSession);
-            _activeSessionId = newId;
-            _agenticEnabled = false;
-            _deepResearchEnabled = false;
-            _studyModeEnabled = false;
-            _promptSig = '';
-            _promptUseCount = 0;
-            _clearWorkspaceBucket();
-          }
-          _editingMessageIndex = null;
-        });
-        _saveSessions(); // Save the new session layout
-      } catch (_) {
-        setState(() {
-          _initDefaultSession();
-        });
+        }
       }
-    } else {
+    } catch (_) {
+      // Keep valid preference sessions if the local backup is damaged.
+    }
+
+    final loadedSessions = loadedById.values.toList()
+      ..sort((a, b) {
+        if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
+        return b.updatedAt.compareTo(a.updatedAt);
+      });
+    // Purge legacy welcome placeholders from saved history so they never
+    // render or flash on startup.
+    for (var i = 0; i < loadedSessions.length; i++) {
+      final session = loadedSessions[i];
+      final cleaned = session.messages
+          .where(
+            (message) =>
+                message.role != MessageRole.assistant ||
+                !_isWelcomePlaceholder(message.text),
+          )
+          .toList();
+      if (cleaned.length != session.messages.length) {
+        loadedSessions[i] = session.copyWith(messages: cleaned);
+      }
+    }
+
+    if (loadedSessions.isEmpty) {
       setState(() {
         _initDefaultSession();
       });
+      return;
     }
+
+    setState(() {
+      _sessions = loadedSessions;
+
+      bool hasEmptySession = false;
+      if (_sessions.isNotEmpty) {
+        final first = _sessions.first;
+        final userMsgs = first.messages.where(
+          (m) => m.role == MessageRole.user,
+        );
+        if (userMsgs.isEmpty &&
+            (first.title == 'New Chat' || first.title == 'Welcome Chat')) {
+          _activeSessionId = first.id;
+          _agenticEnabled = false;
+          _deepResearchEnabled = false;
+          _studyModeEnabled = false;
+          _promptSig = '';
+          _promptUseCount = 0;
+          _clearWorkspaceBucket();
+          hasEmptySession = true;
+        }
+      }
+
+      if (!hasEmptySession) {
+        final newId = DateTime.now().millisecondsSinceEpoch.toString();
+        _sessions.insert(
+          0,
+          ChatSession(
+            id: newId,
+            title: 'New Chat',
+            messages: const [],
+            providerId: _selectedProviderId,
+            model: _activeModel,
+          ),
+        );
+        _activeSessionId = newId;
+        _agenticEnabled = false;
+        _deepResearchEnabled = false;
+        _studyModeEnabled = false;
+        _promptSig = '';
+        _promptUseCount = 0;
+        _clearWorkspaceBucket();
+      }
+      _editingMessageIndex = null;
+    });
+    await _saveSessions();
   }
 
-  Future<void> _saveSessions() async {
+  bool _shouldPreferSession(ChatSession current, ChatSession candidate) {
+    if (candidate.messages.length < current.messages.length) return false;
+    String messageSignature(ChatMessage message) => jsonEncode({
+      'role': message.role.apiName,
+      'text': message.text,
+      'isError': message.isError,
+      'reasoning': message.reasoning,
+      'images': message.images,
+      'videos': message.videos,
+      'files': message.files.map((file) => file.toJson()).toList(),
+    });
+    for (var i = 0; i < current.messages.length; i++) {
+      if (messageSignature(current.messages[i]) !=
+          messageSignature(candidate.messages[i])) {
+        return false;
+      }
+    }
+    return candidate.messages.length > current.messages.length ||
+        candidate.updatedAt.isAfter(current.updatedAt);
+  }
+
+  Future<void> _saveSessions() {
+    final serialized = _sessions.map((session) => session.toJson()).toList();
+    final activeSessionId = _activeSessionId;
+    final save = _sessionSaveTail.then(
+      (_) => _persistSessionSnapshot(serialized, activeSessionId),
+    );
+    _sessionSaveTail = save.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return save;
+  }
+
+  Future<void> _persistSessionSnapshot(
+    List<Map<String, dynamic>> serialized,
+    String? activeSessionId,
+  ) async {
     final prefs = _prefs ?? await SharedPreferences.getInstance();
-    final serialized = _sessions.map((s) => s.toJson()).toList();
     final allJson = jsonEncode(serialized);
     final maxPrefsBytes = 1500 * 1024;
+    final backupFile = await _sessionBackupPrefsFile();
+    Future<bool> writeFullCopy() async {
+      try {
+        if (!await backupFile.parent.exists()) {
+          await backupFile.parent.create(recursive: true);
+        }
+        final tmp = File(
+          '${backupFile.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+        );
+        await tmp.writeAsString(allJson, flush: true);
+        await tmp.rename(backupFile.path);
+        return true;
+      } catch (e) {
+        debugPrint('Session backup write failed: $e');
+        return false;
+      }
+    }
+
     if (utf8.encode(allJson).length <= maxPrefsBytes) {
-      await prefs.setString('chat_sessions_v1', allJson);
+      final saved = await prefs.setString('chat_sessions_v1', allJson);
+      if (saved) {
+        await _removeLegacySessionBackupFiles();
+        // Deliberately keep any existing full-history file. It is the only
+        // copy of sessions older than the prefs window, and the prefs entry
+        // is trimmed to the 20 newest once this payload outgrows the cap.
+      } else {
+        // prefs.setString returns false (it does not throw) when the platform
+        // rejects the value, which happens below our own byte cap on devices
+        // with a low prefs ceiling. This branch previously did nothing, so
+        // history silently stopped being saved at that point. Fall back to
+        // the durable file instead.
+        await writeFullCopy();
+      }
     } else {
       // Write the full history to the local backup file FIRST. The prefs
       // entry is truncated to the 20 newest sessions below; doing that
       // before (or without) a successful backup silently dropped the rest.
-      bool backupOk = false;
-      try {
-        final backupFile = await _sessionBackupPrefsFile();
-        if (!await backupFile.parent.exists()) {
-          await backupFile.parent.create(recursive: true);
-        }
-        final tmp = File('${backupFile.path}.tmp');
-        await tmp.writeAsString(allJson, flush: true);
-        await tmp.rename(backupFile.path);
-        backupOk = true;
-      } catch (e) {
-        debugPrint('Session backup write failed: $e');
-      }
+      final backupOk = await writeFullCopy();
       if (backupOk) {
-        final trimmed = _sessions.take(20).map((s) => s.toJson()).toList();
+        final trimmed = serialized.take(20).toList();
         await prefs.setString('chat_sessions_v1', jsonEncode(trimmed));
+        await _removeLegacySessionBackupFiles();
       } else {
         // Backup failed — keep the full payload rather than truncating
         // sessions we could not offload anywhere.
-        await prefs.setString('chat_sessions_v1', allJson);
+        final saved = await prefs.setString('chat_sessions_v1', allJson);
+        if (saved) await _removeLegacySessionBackupFiles();
       }
     }
-    if (_activeSessionId != null) {
-      await prefs.setString('active_session_id_v1', _activeSessionId!);
+    if (activeSessionId != null) {
+      await prefs.setString('active_session_id_v1', activeSessionId);
     }
 
     // Drive sync is intentionally NOT triggered from _saveSessions. This
@@ -703,8 +833,47 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   }
 
   Future<File> _sessionBackupPrefsFile() async {
-    final root = await _chooseWritableNexonRoot();
-    return File('${root.path}/sessions/prefs_backup.json');
+    return DriveSyncService.sessionBackupFile();
+  }
+
+  Future<List<File>> _legacySessionBackupPrefsFiles([
+    String? configuredWorkspace,
+  ]) async {
+    final docs = await getApplicationDocumentsDirectory();
+    final selectedWorkspace = (configuredWorkspace ?? '').trim();
+    final workspace = await _expandHomePath(
+      selectedWorkspace.isNotEmpty ? selectedWorkspace : _agenticWorkspace,
+    );
+    return [
+      File('${workspace.replaceAll(RegExp(r'/+$'), '')}/.nexon/sessions/prefs_backup.json'),
+      File('${docs.path}/sessions/prefs_backup.json'),
+    ];
+  }
+
+  Future<File?> _findLegacySessionBackupFile([
+    String? configuredWorkspace,
+  ]) async {
+    final current = await _sessionBackupPrefsFile();
+    for (final candidate in
+        await _legacySessionBackupPrefsFiles(configuredWorkspace)) {
+      if (candidate.path != current.path && await candidate.exists()) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _removeLegacySessionBackupFiles() async {
+    final current = await _sessionBackupPrefsFile();
+    for (final candidate in await _legacySessionBackupPrefsFiles()) {
+      if (candidate.path == current.path) continue;
+      try {
+        if (await candidate.exists()) await candidate.delete();
+      } catch (_) {
+        // Keep the current durable copy even if an old workspace copy cannot
+        // be removed due to filesystem permissions.
+      }
+    }
   }
 
   Future<void> _resetDeepResearch() async {
@@ -1142,12 +1311,16 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    // Android commonly emits inactive immediately before paused. Backing up
+    // on both states can start duplicate full-history uploads.
+    if (state == AppLifecycleState.paused) {
       _autoBackup();
     }
   }
 
   Future<void> _autoBackup() async {
+    if (_autoBackupInFlight) return;
+    _autoBackupInFlight = true;
     try {
       final prefs = await SharedPreferences.getInstance();
       final backupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
@@ -1157,15 +1330,21 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       // Fall back to reading disk backup or SharedPreferences if in-memory is empty.
       List<dynamic> sessionsToBackup = _sessions;
       if (sessionsToBackup.isEmpty) {
-        try {
-          final backupFile = await _sessionBackupPrefsFile();
-          if (await backupFile.exists()) {
-            final raw = await backupFile.readAsString();
-            if (raw.trim().isNotEmpty) {
-              sessionsToBackup = jsonDecode(raw) as List<dynamic>;
+        final backupFiles = <File>[
+          await _sessionBackupPrefsFile(),
+          ...await _legacySessionBackupPrefsFiles(),
+        ];
+        for (final backupFile in backupFiles) {
+          try {
+            if (await backupFile.exists()) {
+              final raw = await backupFile.readAsString();
+              if (raw.trim().isNotEmpty) {
+                sessionsToBackup = jsonDecode(raw) as List<dynamic>;
+                break;
+              }
             }
-          }
-        } catch (_) {}
+          } catch (_) {}
+        }
       }
 
       if (sessionsToBackup.isEmpty) {
@@ -1178,7 +1357,10 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       if (sessionsToBackup.isNotEmpty) {
         await DriveSyncService.syncToDrive(sessionsToBackup, force: true);
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _autoBackupInFlight = false;
+    }
   }
 
   @override
@@ -1364,21 +1546,69 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
     String? savedSearchKey;
     List<String> savedFallbackKeys = const [];
+    final legacySearchKey = loadedSearchSettings.apiKey;
+    final legacySearchFallbacks = loadedSearchSettings.fallbackApiKeys;
+    var searchKeySecured = legacySearchKey.trim().isEmpty;
+    var searchFallbacksSecured = legacySearchFallbacks.isEmpty;
     try {
       savedSearchKey = await _secureStorage.read(key: 'search_api_key');
+      if (savedSearchKey?.isNotEmpty == true) searchKeySecured = true;
+    } catch (_) {}
+    if (!searchKeySecured) {
+      try {
+        await _secureStorage.write(
+          key: 'search_api_key',
+          value: legacySearchKey,
+        );
+        final migratedSearchKey =
+            await _secureStorage.read(key: 'search_api_key');
+        if (migratedSearchKey == legacySearchKey) {
+          savedSearchKey = migratedSearchKey;
+          searchKeySecured = true;
+        }
+      } catch (_) {}
+    }
+    try {
       final savedFallbacks = await _secureStorage.read(key: 'search_fallback_keys');
       if (savedFallbacks != null && savedFallbacks.trim().isNotEmpty) {
         savedFallbackKeys = (jsonDecode(savedFallbacks) as List).map((e) => e.toString()).toList();
+        searchFallbacksSecured = true;
       }
     } catch (_) {}
+    if (!searchFallbacksSecured) {
+      try {
+        final encodedFallbacks = jsonEncode(legacySearchFallbacks);
+        await _secureStorage.write(
+          key: 'search_fallback_keys',
+          value: encodedFallbacks,
+        );
+        final migratedFallbacks =
+            await _secureStorage.read(key: 'search_fallback_keys');
+        if (migratedFallbacks == encodedFallbacks) {
+          savedFallbackKeys = legacySearchFallbacks;
+          searchFallbacksSecured = true;
+        }
+      } catch (_) {}
+    }
     loadedSearchSettings = SearchSettings(
       enabled: loadedSearchSettings.enabled,
       provider: loadedSearchSettings.provider,
-      apiKey: savedSearchKey ?? loadedSearchSettings.apiKey,
-      fallbackApiKeys: savedFallbackKeys.isNotEmpty ? savedFallbackKeys : loadedSearchSettings.fallbackApiKeys,
+      apiKey: savedSearchKey ?? '',
+      fallbackApiKeys: savedFallbackKeys,
       googleCx: loadedSearchSettings.googleCx,
       customProviders: loadedSearchSettings.customProviders,
     );
+    if (searchKeySecured && searchFallbacksSecured) {
+      await prefs.setString(
+        'search_settings_v1',
+        jsonEncode(
+          loadedSearchSettings.copyWith(
+            apiKey: '',
+            fallbackApiKeys: const [],
+          ).toJson(),
+        ),
+      );
+    }
 
     if (raw != null && raw.trim().isNotEmpty) {
       try {
@@ -1394,13 +1624,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
 
     for (final provider in providerCatalog) {
-      String? key;
-      try {
-        key = await _secureStorage.read(key: _keyStorageName(provider.id));
-      } catch (e) {
-        key = prefs.getString('fallback_api_key_${provider.id}');
-        debugPrint('Secure storage read failed for ${provider.id}: $e');
-      }
+      final key = await _readProviderApiKey(prefs, provider.id);
       final current =
           nextSettings[provider.id] ?? ProviderSettings.defaults(provider);
       final normalized = current.maxTokens < 1
@@ -1469,12 +1693,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
 
     for (final provider in loadedCustom) {
-      String? key;
-      try {
-        key = await _secureStorage.read(key: _keyStorageName(provider.id));
-      } catch (e) {
-        key = prefs.getString('fallback_api_key_${provider.id}');
-      }
+      final key = await _readProviderApiKey(prefs, provider.id);
       final current =
           nextSettings[provider.id] ?? ProviderSettings.defaults(provider);
       final normalized = current.maxTokens < 1
@@ -1557,14 +1776,18 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
             key: _keyStorageName(entry.key),
             value: key,
           );
+          final savedKey = await _secureStorage.read(
+            key: _keyStorageName(entry.key),
+          );
+          if (savedKey != key) {
+            throw StateError('Secure key storage could not be verified.');
+          }
         }
-      } catch (e) {
-        debugPrint('Secure storage write failed for ${entry.key}: $e');
-        if (key.isEmpty) {
-          await prefs.remove('fallback_api_key_${entry.key}');
-        } else {
-          await prefs.setString('fallback_api_key_${entry.key}', key);
-        }
+        await prefs.remove('fallback_api_key_${entry.key}');
+      } catch (_) {
+        // Never fall back to plaintext SharedPreferences for provider keys.
+        await prefs.remove('fallback_api_key_${entry.key}');
+        debugPrint('Provider key could not be saved securely and will need to be re-entered.');
       }
     }
     await prefs.setString(_settingsKey, jsonEncode(metadata));
@@ -1620,6 +1843,33 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     await prefs.setString('custom_mcp_url_v1', _customMcpUrl);
     // Auto-generate GitHub Actions workflow if Flutter project detected
     _ensureFlutterWorkflow(_agenticWorkspace);
+  }
+
+  Future<String?> _readProviderApiKey(
+    SharedPreferences prefs,
+    String providerId,
+  ) async {
+    final storageKey = _keyStorageName(providerId);
+    final legacyPrefsKey = 'fallback_api_key_$providerId';
+    try {
+      final savedKey = await _secureStorage.read(key: storageKey);
+      if (savedKey != null) {
+        await prefs.remove(legacyPrefsKey);
+        return savedKey;
+      }
+
+      // Migrate old plaintext fallback values only after secure storage is
+      // available and the protected write can be read back successfully.
+      final legacyKey = prefs.getString(legacyPrefsKey);
+      if (legacyKey == null || legacyKey.isEmpty) return null;
+      await _secureStorage.write(key: storageKey, value: legacyKey);
+      final migratedKey = await _secureStorage.read(key: storageKey);
+      if (migratedKey != legacyKey) return null;
+      await prefs.remove(legacyPrefsKey);
+      return migratedKey;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Auto-generates .github/workflows/build.yml for Flutter projects.

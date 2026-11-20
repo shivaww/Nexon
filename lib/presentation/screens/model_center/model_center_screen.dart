@@ -121,6 +121,7 @@ class _ModelCenterScreenState extends State<ModelCenterScreen> {
       final request = await client.getUrl(Uri.parse(endpoint));
       request.headers.set('Accept', 'application/json');
       if (apiKey.trim().isNotEmpty) {
+        request.followRedirects = false;
         request.headers.set('Authorization', 'Bearer ${apiKey.trim()}');
       }
 

@@ -4,15 +4,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/main.dart';
 import 'package:nexon/data/models/provider_models.dart';
 import 'package:nexon/services/llm/message_pipeline.dart';
 
 class ChatClient {
+  static const _managedBackendUrl = 'https://nexon-jyp1.onrender.com';
+
   /// Shared keep-alive HTTP client: reuses TCP/TLS connections across
   /// chat turns so each request skips a full handshake.
   static final HttpClient _sharedHttpClient = HttpClient()
@@ -35,7 +35,7 @@ class ChatClient {
   static final liveTopupCredits = ValueNotifier<int?>(null);
 
   /// Translates raw HTTP status codes into user-friendly error messages.
-  static String _friendlyLlmError(int statusCode, String body) {
+  static String _friendlyLlmError(int statusCode) {
     switch (statusCode) {
       case 401:
       case 403:
@@ -56,37 +56,18 @@ class ChatClient {
     }
   }
 
-  /// Logs a provider HTTP failure with the real body and a sanitized request
-  /// structure, but never API keys or message text.
+  /// Logs only non-content diagnostics. Provider error bodies can echo request
+  /// data or credentials, so they must never be written to device logs.
   static void _logLlmHttpError(
-    int statusCode,
-    String body, {
+    int statusCode, {
     String? providerId,
     String? model,
-    Map<String, dynamic>? payload,
   }) {
     try {
-      final messages = payload?['messages'];
-      final messageSummary = messages is List
-          ? messages.map((m) {
-              if (m is! Map) return const <String, dynamic>{};
-              final content = m['content'];
-              return <String, dynamic>{
-                'role': m['role'],
-                'content_type': content is String ? 'text' : 'multipart',
-                if (content is String) 'content_length': content.length,
-              };
-            }).toList()
-          : null;
       final summary = <String, dynamic>{
         if (providerId != null) 'provider': providerId,
         if (model != null) 'model': model,
         'status': statusCode,
-        if (messageSummary != null) 'messages': messageSummary,
-        if (payload != null) 'max_tokens': payload['max_tokens'],
-        if (payload != null) 'temperature': payload['temperature'],
-        if (payload != null) 'has_tools': payload.containsKey('tools'),
-        'error_body': body,
       };
       debugPrint('[LLM] HTTP error: ${jsonEncode(summary)}');
     } catch (_) {
@@ -124,10 +105,11 @@ class ChatClient {
       final request = await client.getUrl(uri);
       _setHeaders(request, provider, settings, settings.apiKey, stream: false);
       final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(_friendlyLlmError(response.statusCode, body));
+        await response.drain<void>();
+        throw HttpException(_friendlyLlmError(response.statusCode));
       }
+      final body = await response.transform(utf8.decoder).join();
       final decoded = jsonDecode(body);
 
       // ── OpenAI-compatible /v1/models → {"data": [...]} ──
@@ -270,11 +252,7 @@ class ChatClient {
     required List<ChatMessage> messages,
     bool studyModeEnabled = false,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
     final isManagedMode = provider.id == 'nexon';
-    final managedUrl =
-        prefs.getString('nexon_managed_backend_url') ??
-        'https://nexon-jyp1.onrender.com';
     final token =
         Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
@@ -332,10 +310,12 @@ class ChatClient {
         Exception? lastException;
         String? responseText;
 
-        for (int retry = 0; retry < 3; retry++) {
+        // A chat completion POST is not idempotent. Retrying it can resend a
+        // large conversation and start duplicate billable generations.
+        for (int retry = 0; retry < 1; retry++) {
           try {
             final baseUrl = isManagedMode
-                ? managedUrl
+                ? _managedBackendUrl
                 : _baseUrl(provider, settings);
             final urlString = baseUrl.endsWith('/v1')
                 ? '$baseUrl/chat/completions'
@@ -355,12 +335,19 @@ class ChatClient {
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
             final response = await request.close();
-            final body = await response.transform(utf8.decoder).join();
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              _logLlmHttpError(response.statusCode, body, providerId: provider.id, model: model, payload: payload);
-              throw HttpException(_friendlyLlmError(response.statusCode, body));
+              await response.drain<void>();
+              _logLlmHttpError(
+                response.statusCode,
+                providerId: provider.id,
+                model: model,
+              );
+              throw HttpException(
+                'HTTP ${response.statusCode}: ${_friendlyLlmError(response.statusCode)}',
+              );
             }
+            final body = await response.transform(utf8.decoder).join();
             final decoded = jsonDecode(body);
             if (decoded is Map<String, dynamic> &&
                 decoded.containsKey('credits_status')) {
@@ -378,12 +365,7 @@ class ChatClient {
             if (errorStr.contains('402')) {
               throw lastException ?? Exception('Payment Required (402)');
             }
-            final isRateLimit =
-                errorStr.contains('429') ||
-                errorStr.contains('500') ||
-                errorStr.contains('503');
-            if (!isRateLimit) break;
-            if (retry < 2) await Future.delayed(Duration(milliseconds: retry == 0 ? 2000 : 6000));
+            break;
           }
         }
 
@@ -393,11 +375,11 @@ class ChatClient {
         if (errorStr.contains('402')) {
           throw lastException ?? Exception('Payment Required (402)');
         }
-        final isRateLimit =
-            errorStr.contains('429') ||
-            errorStr.contains('500') ||
-            errorStr.contains('503');
-        if (!isRateLimit || i == allKeys.length - 1) {
+        final canTryAnotherKey =
+            errorStr.contains('http 401') ||
+            errorStr.contains('http 403') ||
+            errorStr.contains('http 429');
+        if (!canTryAnotherKey || i == allKeys.length - 1) {
           throw lastException ?? Exception('Unknown error');
         }
       }
@@ -416,11 +398,7 @@ class ChatClient {
     required List<ChatMessage> messages,
     bool studyModeEnabled = false,
   }) async* {
-    final prefs = await SharedPreferences.getInstance();
     final isManagedMode = provider.id == 'nexon';
-    final managedUrl =
-        prefs.getString('nexon_managed_backend_url') ??
-        'https://nexon-jyp1.onrender.com';
     final token =
         Supabase.instance.client.auth.currentSession?.accessToken ?? '';
 
@@ -477,10 +455,12 @@ class ChatClient {
         bool success = false;
         Exception? lastException;
 
-        for (int retry = 0; retry < 3; retry++) {
+        // Do not automatically replay a streaming POST after a server error;
+        // the provider may already have started a billable generation.
+        for (int retry = 0; retry < 1; retry++) {
           try {
             final baseUrl = isManagedMode
-                ? managedUrl
+                ? _managedBackendUrl
                 : _baseUrl(provider, settings);
             final urlString = baseUrl.endsWith('/v1')
                 ? '$baseUrl/chat/completions'
@@ -502,9 +482,15 @@ class ChatClient {
             response = await request.close();
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              final errorBody = await response.transform(utf8.decoder).join();
-              _logLlmHttpError(response.statusCode, errorBody, providerId: provider.id, model: model, payload: payload);
-              throw HttpException(_friendlyLlmError(response.statusCode, errorBody));
+              await response.drain<void>();
+              _logLlmHttpError(
+                response.statusCode,
+                providerId: provider.id,
+                model: model,
+              );
+              throw HttpException(
+                'HTTP ${response.statusCode}: ${_friendlyLlmError(response.statusCode)}',
+              );
             }
             success = true;
             break;
@@ -514,12 +500,7 @@ class ChatClient {
             if (errorStr.contains('402')) {
               throw lastException ?? Exception('Payment Required (402)');
             }
-            final isRateLimit =
-                errorStr.contains('429') ||
-                errorStr.contains('500') ||
-                errorStr.contains('503');
-            if (!isRateLimit) break;
-            if (retry < 2) await Future.delayed(Duration(milliseconds: retry == 0 ? 2000 : 6000));
+            break;
           }
         }
 
@@ -528,11 +509,11 @@ class ChatClient {
           if (errorStr.contains('402')) {
             throw lastException ?? Exception('Payment Required (402)');
           }
-          final isRateLimit =
-              errorStr.contains('429') ||
-              errorStr.contains('500') ||
-              errorStr.contains('503');
-          if (!isRateLimit || i == allKeys.length - 1) {
+          final canTryAnotherKey =
+              errorStr.contains('http 401') ||
+              errorStr.contains('http 403') ||
+              errorStr.contains('http 429');
+          if (!canTryAnotherKey || i == allKeys.length - 1) {
             throw lastException ?? Exception('Unknown error');
           }
           continue; // Try next key
@@ -614,6 +595,7 @@ class ChatClient {
           if (provider == 'tavily') {
             final uri = Uri.parse('https://api.tavily.com/search');
             final request = await client.postUrl(uri);
+            request.followRedirects = false;
             request.headers.contentType = ContentType.json;
 
             // Map timeRange aliases
@@ -665,7 +647,7 @@ class ChatClient {
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException('HTTP ${response.statusCode}');
             }
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['results'] is List) {
@@ -686,6 +668,7 @@ class ChatClient {
           } else if (provider == 'exa') {
             final uri = Uri.parse('https://api.exa.ai/search');
             final request = await client.postUrl(uri);
+            request.followRedirects = false;
             request.headers.set('x-api-key', currentKey);
             request.headers.contentType = ContentType.json;
             request.write(
@@ -694,7 +677,7 @@ class ChatClient {
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException('HTTP ${response.statusCode}');
             }
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['results'] is List) {
@@ -709,13 +692,14 @@ class ChatClient {
           } else if (provider == 'firecrawl') {
             final uri = Uri.parse('https://api.firecrawl.dev/v1/search');
             final request = await client.postUrl(uri);
+            request.followRedirects = false;
             request.headers.set('Authorization', 'Bearer $currentKey');
             request.headers.contentType = ContentType.json;
             request.write(jsonEncode({'query': query, 'limit': 4}));
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException('HTTP ${response.statusCode}');
             }
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['data'] is List) {
@@ -732,10 +716,11 @@ class ChatClient {
               'https://www.googleapis.com/customsearch/v1?key=$currentKey&cx=${googleCx ?? ''}&q=${Uri.encodeComponent(query)}',
             );
             final request = await client.getUrl(uri);
+            request.followRedirects = false;
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException('HTTP ${response.statusCode}');
             }
             final decoded = jsonDecode(body);
             if (decoded is Map && decoded['items'] is List) {
@@ -759,6 +744,7 @@ class ChatClient {
                     '${cp.extraParams.entries.map((e) => '&${e.key}=${Uri.encodeComponent(e.value)}').join('')}'
                   ))
                 : await client.postUrl(uri);
+            request.followRedirects = false;
             if (cp.method.toUpperCase() == 'GET') {
               if (currentKey.isNotEmpty) {
                 request.headers.set(cp.apiKeyHeader, '$cp.apiKeyPrefix$currentKey');
@@ -777,7 +763,7 @@ class ChatClient {
             final response = await request.close();
             final body = await response.transform(utf8.decoder).join();
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException('HTTP ${response.statusCode}');
             }
             final decoded = jsonDecode(body);
             List<dynamic> rawResults;
@@ -797,6 +783,7 @@ class ChatClient {
           } else if (provider == 'duckduckgo') {
             final uri = Uri.parse('https://lite.duckduckgo.com/lite/');
             final request = await client.postUrl(uri);
+            request.followRedirects = false;
             request.headers.contentType = ContentType(
               'application',
               'x-www-form-urlencoded',
@@ -838,7 +825,7 @@ class ChatClient {
             final body = await response.transform(utf8.decoder).join();
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
-              throw HttpException('HTTP ${response.statusCode}: $body');
+              throw HttpException('HTTP ${response.statusCode}');
             }
 
             final results = <String>[];
@@ -888,7 +875,7 @@ class ChatClient {
         } catch (e) {
           if (i < keys.length - 1) {
             debugPrint(
-              'Search failed with key index $i: $e. Trying fallback key.',
+              'Search request failed; trying the next configured key.',
             );
             continue;
           }
@@ -898,14 +885,14 @@ class ChatClient {
       return 'No search results found.';
     } catch (e) {
       if (provider == 'tavily') {
-        debugPrint('Tavily search failed: $e. Falling back to DuckDuckGo...');
+        debugPrint('Tavily search failed. Falling back to DuckDuckGo.');
         try {
           return await searchWeb(query, 'duckduckgo', ['']);
-        } catch (fallbackError) {
-          return 'Web search failed: $fallbackError';
+        } catch (_) {
+          return 'Web search failed. Check the configured provider and try again.';
         }
       }
-      return 'Web search failed: $e';
+      return 'Web search failed. Check the configured provider and try again.';
     } finally {
       client.close(force: true);
     }
@@ -1014,6 +1001,10 @@ class ChatClient {
     required bool stream,
     bool isManaged = false,
   }) {
+    // Provider credentials must not be replayed to redirect targets.
+    if (activeApiKey.isNotEmpty || provider.extraHeaders.isNotEmpty) {
+      request.followRedirects = false;
+    }
     request.headers.set(
       'Accept',
       stream ? 'text/event-stream' : 'application/json',

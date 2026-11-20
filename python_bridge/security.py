@@ -192,7 +192,7 @@ class SecurityManager:
         # Check blocked patterns
         for pattern, desc in self.blocked_patterns:
             if pattern.search(command):
-                logger.warning("BLOCKED command: %s (matched: %s)", command, desc)
+                logger.warning("Blocked command (matched: %s)", desc)
                 return SafetyResult(
                     allowed=False,
                     risk_level=RiskLevel.BLOCKED,
@@ -204,7 +204,7 @@ class SecurityManager:
         # Check high-risk patterns
         for pattern, desc in HIGH_RISK_PATTERNS:
             if pattern.search(command):
-                logger.info("HIGH-RISK command: %s (matched: %s)", command, desc)
+                logger.info("High-risk command (matched: %s)", desc)
                 return SafetyResult(
                     allowed=True,
                     risk_level=RiskLevel.HIGH,
