@@ -279,6 +279,16 @@ class ChatClient {
               finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
             }
           }
+          if (studyModeEnabled) {
+            final workspaceNames = message.files
+                .where((f) => f.isWorkspaceFile)
+                .map((f) => f.name)
+                .toList();
+            if (workspaceNames.isNotEmpty) {
+              finalText +=
+                  '\n\n[Attached workspace files: ${workspaceNames.join(', ')} — use workspace tools to read/search]';
+            }
+          }
           if (message.images.isNotEmpty) {
             return {
               'role': message.role.apiName,
@@ -422,6 +432,16 @@ class ChatClient {
             finalText += '\n\n';
             for (final file in inlineFiles) {
               finalText += '--- File: ${file.name} ---\n${file.content}\n\n';
+            }
+          }
+          if (studyModeEnabled) {
+            final workspaceNames = message.files
+                .where((f) => f.isWorkspaceFile)
+                .map((f) => f.name)
+                .toList();
+            if (workspaceNames.isNotEmpty) {
+              finalText +=
+                  '\n\n[Attached workspace files: ${workspaceNames.join(', ')} — use workspace tools to read/search]';
             }
           }
           if (message.images.isNotEmpty) {

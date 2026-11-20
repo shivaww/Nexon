@@ -2684,6 +2684,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       await widget.onSystemMessage(
                         'Study Mode requires the Python bridge. Start it from Settings or run the bridge manually.',
                       );
+                      return; // keep Study Mode off until the bridge is reachable
                     }
                   }
                   setState(() => _studyModeEnabled = val);
