@@ -7085,12 +7085,12 @@ jobs:
                           .whereType<_AnyMap>()
                           .map((m) => _JsonMap.from(m))
                           .toList();
+                      final existingKeys = phaseFacts.map(factDedupKey).toSet();
                       for (final fact in cachedFacts) {
                         if (existingKeys.add(factDedupKey(fact))) {
                           phaseFacts.add(fact);
                         }
                       }
-                      final existingFindingKeys = phaseFindings
                           .map((f) => '${f['text']}|${f['source']}')
                           .toSet();
                       for (final finding in cachedFindings) {
