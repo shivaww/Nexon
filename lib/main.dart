@@ -7091,6 +7091,7 @@ jobs:
                           phaseFacts.add(fact);
                         }
                       }
+                      final existingFindingKeys = phaseFindings
                           .map((f) => '${f['text']}|${f['source']}')
                           .toSet();
                       for (final finding in cachedFindings) {
