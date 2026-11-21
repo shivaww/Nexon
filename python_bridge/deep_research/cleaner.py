@@ -125,13 +125,26 @@ class TextCleaner:
             if score == 0 and orig_idx > 2 and total_len > max_chars * 0.8:
                 continue
             if total_len + len(para) > max_chars:
-                break
+                if total_len == 0:
+                    # Oversized single/top paragraph (e.g. minified SPA HTML):
+                    # slice to budget instead of returning an empty kept list.
+                    sliced = para[:max_chars]
+                    last_period = sliced.rfind(". ")
+                    if last_period > max_chars * 0.7:
+                        sliced = sliced[: last_period + 1]
+                    kept.append((orig_idx, sliced))
+                    total_len += len(sliced)
+                    break
+                # Skip oversized paragraph and try smaller matching paragraphs.
+                continue
             kept.append((orig_idx, para))
             total_len += len(para)
 
         # Restore original order
         kept.sort(key=lambda x: x[0])
         result = "\n\n".join(p for _, p in kept)
+        if not result:
+            result = text[:max_chars]
         if len(result) < len(text):
             result += "\n\n...[content filtered by relevance to query]"
         return result

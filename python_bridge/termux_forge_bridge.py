@@ -181,6 +181,7 @@ class TermuxForgeBridge:
         self._clients: set[WebSocketServerProtocol] = set()
         self._approval_queue: dict[str, dict[str, Any]] = {}
         self._INGESTED_THIS_SESSION: set[str] = set()
+        self._read_url_session: Any = None
         self._server: Any = None
         self._shutdown_event = asyncio.Event()
 
@@ -688,6 +689,8 @@ class TermuxForgeBridge:
             summary = phase.get("summary", "")
             facts = phase.get("facts", [])
             findings = phase.get("findings", [])
+            skipped_pdfs = phase.get("skipped_pdfs", [])
+            failed_fetches = phase.get("failed_fetches", [])
 
             lines.append(f"## {title}")
             if summary:
@@ -697,22 +700,42 @@ class TermuxForgeBridge:
                 for f in facts:
                     if not isinstance(f, dict):
                         continue
-                    conf = f.get("confidence", "medium").upper()
+                    conf = str(f.get("confidence") or "medium").upper()
                     metric = f.get("metric", "")
                     subject = f.get("subject", "")
                     value = f.get("value", "")
+                    date = str(f.get("date") or "").strip()
                     source = f.get("source", "")
-                    lines.append(f"- [{conf}] {subject} {metric}: {value} (Source: {source})")
+                    date_part = f", Date: {date}" if date else ""
+                    lines.append(f"- [{conf}] {subject} {metric}: {value} (Source: {source}{date_part})")
                 lines.append("")
             if findings:
                 lines.append(f"### Findings ({len(findings)})")
                 for f in findings:
                     if not isinstance(f, dict):
                         continue
-                    conf = f.get("confidence", "medium").upper()
+                    conf = str(f.get("confidence") or "medium").upper()
                     text_val = f.get("text", "")
                     source = f.get("source", "")
                     lines.append(f"- [{conf}] {text_val} (Source: {source})")
+                lines.append("")
+            if skipped_pdfs:
+                lines.append(f"### Skipped PDFs ({len(skipped_pdfs)})")
+                for item in skipped_pdfs:
+                    if not isinstance(item, dict):
+                        continue
+                    u = item.get("url", "")
+                    reason = item.get("reason", "PDF excluded")
+                    lines.append(f"- {u} ({reason})")
+                lines.append("")
+            if failed_fetches:
+                lines.append(f"### Failed Fetches ({len(failed_fetches)})")
+                for item in failed_fetches:
+                    if not isinstance(item, dict):
+                        continue
+                    u = item.get("url", "")
+                    err = item.get("error", "Fetch failed")
+                    lines.append(f"- {u} ({err})")
                 lines.append("")
         return "\n".join(lines)
 
@@ -895,100 +918,145 @@ class TermuxForgeBridge:
         try:
             import aiohttp
 
-            class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
-                """Reject private DNS answers at the point aiohttp connects."""
+            session = await self._get_read_url_session()
 
-                def __init__(self) -> None:
-                    self._resolver = aiohttp.resolver.DefaultResolver()
+            async def fetch_once(start_url: str) -> tuple[dict, int]:
+                current_url = start_url
+                for redirect_count in range(11):
+                    async with session.get(
+                        current_url,
+                        allow_redirects=False,
+                    ) as resp:
+                        if resp.status in {301, 302, 303, 307, 308}:
+                            location = resp.headers.get("Location")
+                            if not location:
+                                return await self._process_read_url_response(
+                                    resp, current_url, query
+                                ), resp.status
+                            if redirect_count == 10:
+                                return {"error": "Fetch failed: too many redirects.", "url": current_url}, resp.status
+                            next_url = urljoin(current_url, location)
+                            next_valid, next_error = validate_target(next_url)
+                            if not next_valid:
+                                return {"error": next_error, "url": current_url}, resp.status
+                            current_url = next_url
+                            continue
+                        return await self._process_read_url_response(
+                            resp, current_url, query
+                        ), resp.status
+                return {"error": "Fetch failed: too many redirects.", "url": current_url}, 0
 
-                async def resolve(self, host, port=0, family=socket.AF_INET):
-                    addresses = await self._resolver.resolve(host, port, family)
-                    for result in addresses:
-                        address_text = result["host"].split("%", 1)[0]
-                        if not ipaddress.ip_address(address_text).is_global:
-                            raise OSError("URL resolved to a non-public address")
-                    return addresses
-
-                async def close(self) -> None:
-                    await self._resolver.close()
-
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"',
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "Upgrade-Insecure-Requests": "1",
-            }
-            connector = aiohttp.TCPConnector(
-                resolver=PublicOnlyResolver(),
-                use_dns_cache=False,
-                limit=10,
-            )
-            timeout = aiohttp.ClientTimeout(total=45)
-            async with aiohttp.ClientSession(
-                headers=headers,
-                connector=connector,
-                timeout=timeout,
-            ) as session:
-                async def fetch_once(start_url: str) -> tuple[dict, int]:
-                    current_url = start_url
-                    for redirect_count in range(11):
-                        async with session.get(
-                            current_url,
-                            allow_redirects=False,
-                        ) as resp:
-                            if resp.status in {301, 302, 303, 307, 308}:
-                                location = resp.headers.get("Location")
-                                if not location:
-                                    return await self._process_read_url_response(
-                                        resp, current_url, query
-                                    ), resp.status
-                                if redirect_count == 10:
-                                    return {"error": "Fetch failed: too many redirects.", "url": current_url}, resp.status
-                                next_url = urljoin(current_url, location)
-                                next_valid, next_error = validate_target(next_url)
-                                if not next_valid:
-                                    return {"error": next_error, "url": current_url}, resp.status
-                                current_url = next_url
-                                continue
-                            return await self._process_read_url_response(
-                                resp, current_url, query
-                            ), resp.status
-                    return {"error": "Fetch failed: too many redirects.", "url": current_url}, 0
-
-                result, status = await fetch_once(target_url)
-                if status >= 500:
-                    import asyncio
-                    from urllib.parse import urlsplit as _urlsplit
-                    logger.info(
-                        "read_url: retrying host=%s after HTTP %d",
-                        _urlsplit(target_url).hostname or "unknown",
-                        status,
-                    )
-                    await asyncio.sleep(1.5)
-                    result, _ = await fetch_once(target_url)
-                return result
+            result, status = await fetch_once(target_url)
+            if status >= 500:
+                from urllib.parse import urlsplit as _urlsplit
+                logger.info(
+                    "read_url: retrying host=%s after HTTP %d",
+                    _urlsplit(target_url).hostname or "unknown",
+                    status,
+                )
+                await asyncio.sleep(1.5)
+                result, _ = await fetch_once(target_url)
+            return result
         except Exception as e:
             from urllib.parse import urlsplit as _urlsplit
             try:
                 failed_host = _urlsplit(target_url).hostname or "unknown"
             except ValueError:
                 failed_host = "unknown"
+            err_type = type(e).__name__
+            err_msg = str(e).strip().splitlines()[0][:180] if str(e).strip() else ""
             logger.error(
-                "read_url: fetch failed host=%s error_type=%s",
+                "read_url: fetch failed host=%s error_type=%s detail=%s",
                 failed_host,
-                type(e).__name__,
+                err_type,
+                err_msg,
             )
-            return {"error": "Fetch failed: secure connection could not be established.", "url": target_url}
+            if isinstance(e, asyncio.TimeoutError):
+                friendly = "Fetch failed: request timed out (35s limit)."
+            elif err_type in {"ClientSSLError", "SSLError", "ClientConnectorCertificateError"}:
+                friendly = f"Fetch failed: SSL/TLS error ({err_type})."
+            elif "non-public address" in err_msg.lower():
+                friendly = f"Fetch failed: DNS blocked ({err_msg})."
+            elif err_msg:
+                friendly = f"Fetch failed: {err_type} — {err_msg}"
+            else:
+                friendly = f"Fetch failed: {err_type}."
+            return {"error": friendly, "url": target_url, "error_type": err_type}
+
+    @staticmethod
+    def _is_public_address(address_text: str) -> bool:
+        """Allow global IPs, IPv4-mapped public IPv6, and RFC 6052 NAT64 public IPv4."""
+        addr = ipaddress.ip_address(address_text)
+        if addr.is_global:
+            return True
+        if isinstance(addr, ipaddress.IPv6Address):
+            if addr.ipv4_mapped is not None:
+                return addr.ipv4_mapped.is_global
+            # Well-known NAT64 prefix 64:ff9b::/96 used on mobile IPv6-only networks.
+            nat64_net = ipaddress.IPv6Network("64:ff9b::/96")
+            if addr in nat64_net:
+                embedded_v4 = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+                return embedded_v4.is_global
+        return False
+
+    async def _get_read_url_session(self):
+        """Return a shared aiohttp ClientSession with SSRF-safe DNS resolution."""
+        import aiohttp
+
+        if self._read_url_session is not None and not self._read_url_session.closed:
+            return self._read_url_session
+
+        is_public = self._is_public_address
+
+        class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
+            """Reject private DNS answers at the point aiohttp connects."""
+
+            def __init__(self) -> None:
+                self._resolver = aiohttp.resolver.DefaultResolver()
+
+            async def resolve(self, host, port=0, family=socket.AF_UNSPEC):
+                addresses = await self._resolver.resolve(host, port, family)
+                public_addresses = []
+                for result in addresses:
+                    address_text = result["host"].split("%", 1)[0]
+                    if is_public(address_text):
+                        public_addresses.append(result)
+                if not public_addresses:
+                    raise OSError("URL resolved to a non-public address")
+                return public_addresses
+
+            async def close(self) -> None:
+                await self._resolver.close()
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+        }
+        connector = aiohttp.TCPConnector(
+            resolver=PublicOnlyResolver(),
+            use_dns_cache=False,
+            limit=10,
+        )
+        # 35s per attempt keeps 2 attempts + 1.5s retry well under Dart's 90s+ timeout.
+        timeout = aiohttp.ClientTimeout(total=35)
+        self._read_url_session = aiohttp.ClientSession(
+            headers=headers,
+            connector=connector,
+            timeout=timeout,
+        )
+        return self._read_url_session
 
     async def _process_read_url_response(self, resp, target_url: str, query: str) -> dict:
         """Process HTTP response for read_url (extracted to allow SSL retry logic)."""
@@ -2030,50 +2098,69 @@ class TermuxForgeBridge:
             
         try:
             body = await request.text()
-            # 1. Try parsing <command> XML fallback
             import re
             request_id = "http-req"
-            cmd_match = re.search(r'<command>(.*?)</command>', body, re.DOTALL)
-            if cmd_match:
-                command = cmd_match.group(1).strip()
-                ws_match = re.search(r'<workspace_dir>(.*?)</workspace_dir>', body, re.DOTALL)
-                cwd_match = re.search(r'<cwd>(.*?)</cwd>', body, re.DOTALL)
-                
-                workspace_dir_val = ws_match.group(1).strip() if ws_match else ""
-                cwd_val = cwd_match.group(1).strip() if cwd_match else ""
-                
-                params = {"command": command}
-                if workspace_dir_val:
-                    params["workspace_dir"] = workspace_dir_val
-                if cwd_val:
-                    params["cwd"] = cwd_val
-                elif workspace_dir_val:
-                    params["cwd"] = workspace_dir_val
-                    
-                method = "run_command"
-            else:
+            data = None
+            # 1. Parse JSON-RPC FIRST so scraped text containing <command>...</command>
+            # inside JSON payloads can never hijack the method into run_command.
+            if body.lstrip().startswith("{"):
                 try:
-                    data = json.loads(body)
+                    parsed_json = json.loads(body)
+                    if not isinstance(parsed_json, dict):
+                        raise json.JSONDecodeError("Expected JSON object", body, 0)
+                    data = parsed_json
                 except json.JSONDecodeError:
                     return web.json_response({
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {"code": -32700, "message": "Invalid request format"},
                     }, status=400)
-                    
+
+            if data is not None:
                 request_id = data.get("id", "http-req")
                 method = data.get("method")
                 params = data.get("params", {})
-                
+            else:
+                # 2. Legacy <command> XML fallback for non-JSON requests only
+                cmd_match = re.search(r'<command>(.*?)</command>', body, re.DOTALL)
+                if cmd_match:
+                    command = cmd_match.group(1).strip()
+                    ws_match = re.search(r'<workspace_dir>(.*?)</workspace_dir>', body, re.DOTALL)
+                    cwd_match = re.search(r'<cwd>(.*?)</cwd>', body, re.DOTALL)
+
+                    workspace_dir_val = ws_match.group(1).strip() if ws_match else ""
+                    cwd_val = cwd_match.group(1).strip() if cwd_match else ""
+
+                    params = {"command": command}
+                    if workspace_dir_val:
+                        params["workspace_dir"] = workspace_dir_val
+                    if cwd_val:
+                        params["cwd"] = cwd_val
+                    elif workspace_dir_val:
+                        params["cwd"] = workspace_dir_val
+
+                    method = "run_command"
+                else:
+                    return web.json_response({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": "Invalid request format"},
+                    }, status=400)
+
             if not method:
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": None,
                     "error": {"code": -32600, "message": "Method is required"},
                 }, status=400)
-                
-            # Make paths absolute
-            params = self.resolve_params_paths(params)
+
+            # Make paths absolute — skip deep_research/web methods so arbitrary
+            # evidence fields named path/file/dir/target/command/args stay untouched.
+            if not (
+                str(method).startswith("deep_research.")
+                or method in ("read_url", "web_search")
+            ):
+                params = self.resolve_params_paths(params)
             
             # Dispatch as internal JSON-RPC
             rpc_req = JsonRpcRequest(method=method, params=params, id=request_id, jsonrpc="2.0")
@@ -2237,6 +2324,10 @@ class TermuxForgeBridge:
 
         # Shutdown native tools subprocess
         await get_native_tools_manager().dispose()
+
+        # Close shared read_url aiohttp session
+        if self._read_url_session is not None and not self._read_url_session.closed:
+            await self._read_url_session.close()
 
         # Stop HTTP server
         if hasattr(self, '_http_runner'):

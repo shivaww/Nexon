@@ -19,7 +19,7 @@ void main() {
       expect(cleaned[2].role, MessageRole.assistant);
     });
 
-    test('drops empty assistant placeholders left by stopped streams', () {
+    test('drops empty assistant placeholders and merges adjacent user turns', () {
       const messages = [
         ChatMessage(role: MessageRole.user, text: 'first'),
         ChatMessage(role: MessageRole.assistant, text: ''),
@@ -28,11 +28,12 @@ void main() {
 
       final cleaned = MessagePipeline.sanitizeForProvider(messages);
 
-      expect(cleaned.map((m) => m.text).toList(), ['first', 'second']);
-      expect(cleaned.every((m) => m.role == MessageRole.user), isTrue);
+      expect(cleaned.length, 1);
+      expect(cleaned.first.role, MessageRole.user);
+      expect(cleaned.first.text, 'first\n\nsecond');
     });
 
-    test('drops failed assistant messages from later history', () {
+    test('drops failed assistant messages and merges resulting adjacent user turns', () {
       const messages = [
         ChatMessage(role: MessageRole.user, text: 'question'),
         ChatMessage(
@@ -45,12 +46,12 @@ void main() {
 
       final cleaned = MessagePipeline.sanitizeForProvider(messages);
 
-      expect(cleaned.length, 2);
+      expect(cleaned.length, 1);
       expect(cleaned.any((m) => m.isError), isFalse);
-      expect(cleaned.last.text, 'retry');
+      expect(cleaned.first.text, 'question\n\nretry');
     });
 
-    test('converts mid-conversation tool result system messages to user', () {
+    test('converts mid-conversation tool result system messages to user and merges adjacent user turns', () {
       const messages = [
         ChatMessage(role: MessageRole.system, text: 'system prompt'),
         ChatMessage(role: MessageRole.user, text: 'run a command'),
@@ -61,10 +62,10 @@ void main() {
 
       final cleaned = MessagePipeline.sanitizeForProvider(messages);
 
-      expect(cleaned.length, 5);
+      expect(cleaned.length, 4);
       expect(cleaned[0].role, MessageRole.system);
       expect(cleaned[3].role, MessageRole.user);
-      expect(cleaned[3].text, contains('Tool Result [sh]'));
+      expect(cleaned[3].text, 'Tool Result [sh]: done\n\ncontinue');
       expect(
         cleaned.where((m) => m.role == MessageRole.system).length,
         1,
@@ -92,15 +93,12 @@ void main() {
       expect(
         roleText,
         [
-          'user:turn 1',
-          'user:turn 2',
-          'user:turn 3',
+          'user:turn 1\n\nturn 2\n\nturn 3',
           'assistant:ok',
           'user:Tool Result [read]: data',
         ],
       );
     });
-
     test('is provider-agnostic for the same accumulated input', () {
       const providers = ['openrouter', 'mistral', 'anthropic'];
       const messages = [

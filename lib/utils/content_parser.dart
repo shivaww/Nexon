@@ -114,34 +114,80 @@ class ContentBlock {
 
 List<ContentBlock> parseContentBlocks(String text) {
   final blocks = <ContentBlock>[];
-  final parts = text.split('```');
+  final lines = text.split('\n');
+  final openFenceRe = RegExp(r'^(`{3,})(.*)$');
 
-  for (var i = 0; i < parts.length; i++) {
-    final part = parts[i];
-    if (i % 2 == 0) {
-      if (part.isNotEmpty) {
-        blocks.add(ContentBlock(isCode: false, content: part));
+  bool isValidLanguageIdentifier(String lang) {
+    if (lang.isEmpty) return true;
+    final invalidChars = RegExp(r"[\s\(\)\{\}\[\]\=\*\/\\;,'\.]");
+    return !invalidChars.hasMatch(lang) && lang.length <= 20;
+  }
+
+  final textBuf = <String>[];
+  final codeBuf = <String>[];
+  int? openFenceLen;
+  String codeLang = '';
+
+  void flushText() {
+    if (textBuf.isEmpty) return;
+    final joined = textBuf.join('\n');
+    if (joined.isNotEmpty) {
+      blocks.add(ContentBlock(isCode: false, content: joined));
+    }
+    textBuf.clear();
+  }
+
+  for (final line in lines) {
+    final trimmed = line.trimRight();
+    if (openFenceLen == null) {
+      final m = openFenceRe.firstMatch(trimmed);
+      if (m != null) {
+        final ticks = m.group(1)!;
+        final rest = m.group(2)!.trim();
+        flushText();
+        openFenceLen = ticks.length;
+        if (isValidLanguageIdentifier(rest)) {
+          codeLang = rest;
+        } else {
+          codeLang = '';
+          if (rest.isNotEmpty) codeBuf.add(rest);
+        }
+        continue;
       }
+      textBuf.add(line);
     } else {
-      final lines = part.split('\n');
-      final firstLine = lines.first.trim();
-
-      bool isValidLanguageIdentifier(String lang) {
-        if (lang.isEmpty) return true;
-        final invalidChars = RegExp(r"[\s\(\)\{\}\[\]\=\*\/\\;,'\.]");
-        return !invalidChars.hasMatch(lang) && lang.length <= 20;
-      }
-
-      if (isValidLanguageIdentifier(firstLine)) {
-        final codeContent = lines.skip(1).join('\n');
+      final closeTrimmed = trimmed.trim();
+      final isClosingFence = closeTrimmed.length >= openFenceLen &&
+          RegExp(r'^`+$').hasMatch(closeTrimmed);
+      if (isClosingFence) {
         blocks.add(
-          ContentBlock(isCode: true, content: codeContent, language: firstLine),
+          ContentBlock(
+            isCode: true,
+            content: codeBuf.join('\n'),
+            language: codeLang,
+          ),
         );
+        codeBuf.clear();
+        codeLang = '';
+        openFenceLen = null;
       } else {
-        blocks.add(ContentBlock(isCode: true, content: part, language: ''));
+        codeBuf.add(line);
       }
     }
   }
+
+  if (openFenceLen != null) {
+    blocks.add(
+      ContentBlock(
+        isCode: true,
+        content: codeBuf.join('\n'),
+        language: codeLang,
+      ),
+    );
+  } else {
+    flushText();
+  }
+
   return blocks;
 }
 

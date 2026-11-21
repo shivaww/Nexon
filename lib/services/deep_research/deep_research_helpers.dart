@@ -4,20 +4,82 @@ import 'dart:convert';
 class DeepResearchHelpers {
   DeepResearchHelpers._();
 
-  /// Extract first JSON object from model output (strips fences / prose).
+  /// Strip `<think>`, `<reasoning>`, and `<thought>` blocks (closed or unclosed).
+  static String stripReasoningTags(String raw) {
+    var text = raw.replaceAll(
+      RegExp(
+        r'<(think|reasoning|thought)\b[^>]*>[\s\S]*?</\1>',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    // If a reasoning model truncated inside an unclosed thinking block, strip it.
+    text = text.replaceAll(
+      RegExp(
+        r'<(think|reasoning|thought)\b[^>]*>[\s\S]*$',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    return text.trim();
+  }
+
+  /// Extract a valid JSON object from model output (strips reasoning blocks,
+  /// code fences, and prose; uses balanced-brace scanning instead of greedy regex).
   static Map<String, dynamic>? parseJsonObject(String raw) {
     if (raw.trim().isEmpty) return null;
-    var clean = raw
-        .replaceAll(RegExp(r'```json', caseSensitive: false), '')
+    final stripped = stripReasoningTags(raw)
+        .replaceAll(RegExp(r'```(?:json)?', caseSensitive: false), '')
         .replaceAll('```', '')
         .trim();
-    final match = RegExp(r'\{[\s\S]*\}').firstMatch(clean);
-    if (match == null) return null;
+    if (stripped.isEmpty) return null;
+
+    // Fast path: entire response is valid JSON.
     try {
-      final decoded = jsonDecode(match.group(0)!);
-      if (decoded is Map<String, dynamic>) return decoded;
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      final direct = jsonDecode(stripped);
+      if (direct is Map<String, dynamic>) return direct;
+      if (direct is Map) return Map<String, dynamic>.from(direct);
     } catch (_) {}
+
+    // Balanced-brace scan: try each top-level `{...}` candidate in order.
+    int i = 0;
+    while (i < stripped.length) {
+      final start = stripped.indexOf('{', i);
+      if (start == -1) break;
+      int depth = 0;
+      bool inStr = false;
+      bool esc = false;
+      int end = -1;
+      for (int j = start; j < stripped.length; j++) {
+        final c = stripped[j];
+        if (inStr) {
+          if (esc) {
+            esc = false;
+          } else if (c == '\\') {
+            esc = true;
+          } else if (c == '"') {
+            inStr = false;
+          }
+        } else if (c == '"') {
+          inStr = true;
+        } else if (c == '{') {
+          depth++;
+        } else if (c == '}') {
+          depth--;
+          if (depth == 0) {
+            end = j + 1;
+            break;
+          }
+        }
+      }
+      if (end == -1) break;
+      try {
+        final decoded = jsonDecode(stripped.substring(start, end));
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+      i = start + 1;
+    }
     return null;
   }
 

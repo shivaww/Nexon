@@ -151,6 +151,14 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   }
 
   @override
+  void didUpdateWidget(covariant ResearchPlanWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stateMap['status'] != widget.stateMap['status']) {
+      _editedStateMap = null;
+    }
+  }
+
+  @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
@@ -314,9 +322,16 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                         FilledButton.icon(
                           onPressed: widget.isSending
                               ? null
-                              : () => widget.onStartResearch!(
-                                    _editedStateMap ?? widget.stateMap,
-                                  ),
+                              : () {
+                                  final payload =
+                                      _editedStateMap ?? widget.stateMap;
+                                  if (_editedStateMap != null) {
+                                    setState(() {
+                                      _editedStateMap = null;
+                                    });
+                                  }
+                                  widget.onStartResearch!(payload);
+                                },
                           icon: Icon(
                             status == 'running'
                                 ? Icons.play_arrow

@@ -42,24 +42,45 @@ class MessagePipeline {
       // leading system message; a system message after user/assistant turns
       // is rejected as HTTP 400. Serialize these as user content on the wire
       // while keeping the UI role unchanged.
-      if (message.role == MessageRole.system && i > 0) {
+      final normalized = (message.role == MessageRole.system && i > 0)
+          ? ChatMessage(
+              role: MessageRole.user,
+              text: message.text,
+              isError: message.isError,
+              reasoning: message.reasoning,
+              images: message.images,
+              videos: message.videos,
+              files: message.files,
+              tokensPerSec: message.tokensPerSec,
+              tokenUsage: message.tokenUsage,
+            )
+          : message;
+
+      // Strict providers (Anthropic, Gemini, Mistral, DeepSeek, Groq, vLLM)
+      // reject consecutive user turns with HTTP 400. Merge adjacent user
+      // messages into one turn while preserving all attachments.
+      if (normalized.role == MessageRole.user &&
+          cleaned.isNotEmpty &&
+          cleaned.last.role == MessageRole.user) {
+        final prev = cleaned.removeLast();
+        final combinedText = prev.text.trim().isEmpty
+            ? normalized.text
+            : (normalized.text.trim().isEmpty
+                  ? prev.text
+                  : '${prev.text}\n\n${normalized.text}');
         cleaned.add(
           ChatMessage(
             role: MessageRole.user,
-            text: message.text,
-            isError: message.isError,
-            reasoning: message.reasoning,
-            images: message.images,
-            videos: message.videos,
-            files: message.files,
-            tokensPerSec: message.tokensPerSec,
-            tokenUsage: message.tokenUsage,
+            text: combinedText,
+            images: [...prev.images, ...normalized.images],
+            videos: [...prev.videos, ...normalized.videos],
+            files: [...prev.files, ...normalized.files],
           ),
         );
         continue;
       }
 
-      cleaned.add(message);
+      cleaned.add(normalized);
     }
 
     return cleaned;

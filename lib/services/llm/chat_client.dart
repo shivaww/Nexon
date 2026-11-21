@@ -344,7 +344,12 @@ class ChatClient {
 
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
-            final response = await request.close();
+            final response = await request.close().timeout(
+              const Duration(seconds: 90),
+              onTimeout: () => throw TimeoutException(
+                'LLM request timed out after 90s waiting for response.',
+              ),
+            );
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
               await response.drain<void>();
@@ -354,10 +359,18 @@ class ChatClient {
                 model: model,
               );
               throw HttpException(
-                'HTTP ${response.statusCode}: ${_friendlyLlmError(response.statusCode)}',
+                'HTTP ${response.statusCode}:${_friendlyLlmError(response.statusCode)}',
               );
             }
-            final body = await response.transform(utf8.decoder).join();
+            final body = await response
+                .transform(utf8.decoder)
+                .join()
+                .timeout(
+                  const Duration(seconds: 90),
+                  onTimeout: () => throw TimeoutException(
+                    'LLM response body timed out after 90s.',
+                  ),
+                );
             final decoded = jsonDecode(body);
             if (decoded is Map<String, dynamic> &&
                 decoded.containsKey('credits_status')) {
@@ -499,7 +512,12 @@ class ChatClient {
 
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
-            response = await request.close();
+            response = await request.close().timeout(
+              const Duration(seconds: 90),
+              onTimeout: () => throw TimeoutException(
+                'LLM stream timed out after 90s waiting for headers.',
+              ),
+            );
 
             if (response.statusCode < 200 || response.statusCode >= 300) {
               await response.drain<void>();
@@ -542,7 +560,18 @@ class ChatClient {
         // If we reach here, the response was successful
         final lines = response
             .transform(utf8.decoder)
-            .transform(const LineSplitter());
+            .transform(const LineSplitter())
+            .timeout(
+              const Duration(seconds: 90),
+              onTimeout: (sink) {
+                sink.addError(
+                  TimeoutException(
+                    'LLM stream stalled for 90s without receiving data.',
+                  ),
+                );
+                sink.close();
+              },
+            );
 
         await for (final line in lines) {
           final trimmedLine = line.trim();
@@ -1128,8 +1157,9 @@ class ChatClient {
       final first = choices.first;
       if (first is Map) {
         final message = first['message'];
-        if (message is Map && message['content'] != null) {
+        if (message is Map) {
           final content = message['content'];
+          if (content == null) return '';
           if (content is String) return content;
           return jsonEncode(content);
         }

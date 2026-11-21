@@ -112,10 +112,12 @@ export 'package:nexon/screens/kaggle_setup_screen.dart';
 /// Helper class for Text-To-Speech audio playback of model outputs.
 import 'package:nexon/services/tts_service.dart';
 export 'package:nexon/services/tts_service.dart';
-
 export 'package:nexon/widgets/glass_widgets.dart';
 export 'package:nexon/widgets/liquid_glass_widgets.dart';
 
+typedef _JsonMap = Map<String, dynamic>;
+typedef _StrMap = Map<String, String>;
+typedef _AnyMap = Map<dynamic, dynamic>;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -1160,32 +1162,23 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       ),
     ];
 
-    try {
-      final responseText = await _chatClient.sendChat(
-        provider: provider,
-        settings: settings,
-        model: model,
-        messages: summarizerMessages,
-        studyModeEnabled: _studyModeEnabled,
+    final nonReasoningSettings = settings.copyWith(reasoningEnabled: false);
+    final responseText = await _retryLlmCall(
+      provider: provider,
+      settings: nonReasoningSettings,
+      model: model,
+      messages: summarizerMessages,
+      maxRetries: 2,
+    );
+    final parsed = DeepResearchHelpers.parseJsonObject(responseText);
+    if (parsed == null) {
+      throw const FormatException(
+        'Summarizer returned empty or unparseable JSON.',
       );
-      final cleanResp = responseText
-          .replaceAll(RegExp(r'```json'), '')
-          .replaceAll('```', '')
-          .trim();
-      final jsonMatch = RegExp(r'\{[\s\S]*\}').firstMatch(cleanResp);
-      if (jsonMatch != null) {
-        final parsed = jsonDecode(jsonMatch.group(0)!) as Map<String, dynamic>;
-        // Parse evidence with per-source attribution instead of tagging all
-        // records with the first source URL.
-        return _normalizeBatchEvidence(parsed, sources.keys.toList());
-      }
-    } catch (e) {
-      debugPrint('Batch summarization failed: $e');
     }
-    return {
-      'facts': <Map<String, dynamic>>[],
-      'findings': <Map<String, dynamic>>[],
-    };
+    // Parse evidence with per-source attribution instead of tagging all
+    // records with the first source URL.
+    return _normalizeBatchEvidence(parsed, sources.keys.toList());
   }
 
   Future<Map<String, dynamic>> _exportDeepResearchForWriter(
@@ -5414,7 +5407,15 @@ jobs:
         .replaceAll(RegExp(r'[^a-z0-9\s-]'), '')
         .replaceAll(RegExp(r'[\s-]+'), '_');
     final normalizedSlug = slug.replaceAll(RegExp(r'^_+|_+$'), '');
-    return 'research_${normalizedSlug.isEmpty ? 'report' : normalizedSlug}.md';
+    final now = DateTime.now();
+    final ts =
+        '${now.year}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}'
+        '${now.minute.toString().padLeft(2, '0')}'
+        '${now.second.toString().padLeft(2, '0')}';
+    return 'research_${normalizedSlug.isEmpty ? 'report' : normalizedSlug}_$ts.md';
   }
 
   String _stripSvgVisuals(String markdown) {
@@ -5669,24 +5670,37 @@ jobs:
     int messageIndex, [
     Map<String, dynamic>? editedStateMap,
   ]) {
-    final activeSession = _sessions.firstWhere((s) => s.id == _activeSessionId);
-    final sessionIndex = _sessions.indexOf(activeSession);
+    final sessionIndex = _sessions.indexWhere((s) => s.id == _activeSessionId);
     if (sessionIndex == -1) return;
+    final activeSession = _sessions[sessionIndex];
+    final sessionId = activeSession.id;
+    if (messageIndex < 0 || messageIndex >= activeSession.messages.length) {
+      return;
+    }
 
     final message = activeSession.messages[messageIndex];
     final stateFence = findFenceWithKeys(message.text, ['research_state']);
     if (stateFence == null) return;
 
+    if (!_searchSettings.enabled) {
+      _appendSystemMessage(
+        'Deep Research requires Web Search to be enabled. Enable it in Settings → Features → Web Search.',
+      );
+      return;
+    }
+
     try {
-      final stateMap = editedStateMap ??
+      final rawState = editedStateMap ??
           (stateFence['json'] as Map<String, dynamic>)['research_state']
               as Map<String, dynamic>;
+      final stateMap = Map<String, dynamic>.from(rawState);
       stateMap['status'] = 'running';
 
-      if (!_searchSettings.enabled) {
-        setState(() {
-          _sendingSessionIds.add(_sessions[sessionIndex].id);
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+      setState(() {
+        _sendingSessionIds.add(sessionId);
+        final sIdx = _sessions.indexWhere((s) => s.id == sessionId);
+        if (sIdx != -1 && messageIndex < _sessions[sIdx].messages.length) {
+          final msgs = List<ChatMessage>.from(_sessions[sIdx].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
             text: message.text.replaceRange(
@@ -5696,34 +5710,12 @@ jobs:
             ),
             reasoning: message.reasoning,
           );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(messages: msgs);
-        });
-        _appendSystemMessage(
-          'Deep Research requires Web Search to be enabled. Enable it in Settings → Features → Web Search.',
-        );
-        _sendingSessionIds.remove(_sessions[sessionIndex].id);
-        return;
-      }
-
-      setState(() {
-        _sendingSessionIds.add(_sessions[sessionIndex].id);
-        final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-        msgs[messageIndex] = ChatMessage(
-          role: MessageRole.assistant,
-          text: message.text.replaceRange(
-            stateFence['start'] as int,
-            stateFence['end'] as int,
-            researchStateFence(stateMap),
-          ),
-          reasoning: message.reasoning,
-        );
-        _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
-          messages: msgs,
-        );
+          _sessions[sIdx] = _sessions[sIdx].copyWith(messages: msgs);
+        }
       });
 
       _runResearchLoop(
-        sessionIndex: sessionIndex,
+        sessionId: sessionId,
         messageIndex: messageIndex,
         stateMap: stateMap,
         provider: _provider,
@@ -5736,22 +5728,177 @@ jobs:
   }
 
   void _publishResearchState(
-    int sessionIndex,
+    String sessionId,
     int messageIndex,
     Map<String, dynamic> stateMap,
   ) {
     if (!mounted) return;
+    final sIdx = _sessions.indexWhere((s) => s.id == sessionId);
+    if (sIdx == -1 ||
+        messageIndex < 0 ||
+        messageIndex >= _sessions[sIdx].messages.length) {
+      return;
+    }
     setState(() {
-      final messages = List<ChatMessage>.from(_sessions[sessionIndex].messages);
+      final idx = _sessions.indexWhere((s) => s.id == sessionId);
+      if (idx == -1 || messageIndex >= _sessions[idx].messages.length) return;
+      final messages = List<ChatMessage>.from(_sessions[idx].messages);
       messages[messageIndex] = ChatMessage(
         role: MessageRole.assistant,
         text: _updateResearchStateInText(messages[messageIndex].text, stateMap),
         reasoning: messages[messageIndex].reasoning,
       );
-      _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+      _sessions[idx] = _sessions[idx].copyWith(
         messages: messages,
       );
     });
+  }
+
+  /// Consume a research LLM stream while registering the subscription in
+  /// `_activeSubscriptions[sessionId]` so pressing Stop cancels immediately.
+  Future<void> _consumeResearchStream({
+    required String sessionId,
+    required Stream<String> stream,
+    required void Function(String chunk) onChunk,
+  }) async {
+    final completer = Completer<void>();
+    final subscription = stream.listen(
+      onChunk,
+      onError: (Object error, StackTrace stackTrace) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+      },
+      cancelOnError: true,
+    );
+    _activeSubscriptions[sessionId] = subscription;
+    _activeCompleters[sessionId] = completer;
+    try {
+      await completer.future;
+    } finally {
+      if (identical(_activeSubscriptions[sessionId], subscription)) {
+        _activeSubscriptions.remove(sessionId);
+      }
+      if (identical(_activeCompleters[sessionId], completer)) {
+        _activeCompleters.remove(sessionId);
+      }
+      await subscription.cancel();
+    }
+  }
+
+  /// Cap `stepMessages` total character length so long Phase loops never
+  /// overflow the model context window with HTTP 400. Always preserves
+  /// `stepMessages[0]` (system) and `stepMessages[1]` (phase brief).
+  List<ChatMessage> _budgetResearchMessages(
+    List<ChatMessage> messages, {
+    int maxChars = 60000,
+  }) {
+    final compacted = _compactHistoryForApi(messages, messages.length);
+    if (compacted.length <= 2) return compacted;
+    int total = 0;
+    for (final m in compacted) {
+      total += m.text.length;
+    }
+    if (total <= maxChars) return compacted;
+
+    final head = compacted.sublist(0, 2);
+    int used = head[0].text.length + head[1].text.length;
+    final tail = <ChatMessage>[];
+    for (int idx = compacted.length - 1; idx >= 2; idx--) {
+      final msg = compacted[idx];
+      final len = msg.text.length;
+      if (tail.isNotEmpty && used + len > maxChars) {
+        break;
+      }
+      tail.add(msg);
+      used += len;
+    }
+    return [
+      ...head,
+      const ChatMessage(
+        role: MessageRole.user,
+        text:
+            '[Earlier search/fetch turns in this phase were trimmed to stay within the context window. Continue with the latest results below.]',
+      ),
+      ...tail.reversed,
+    ];
+  }
+
+  void _appendPhaseToCrossPhaseContext(
+    StringBuffer buffer, {
+    required int phaseNumber,
+    required String phaseTitle,
+    required List<_JsonMap> facts,
+    required List<_JsonMap> findings,
+  }) {
+    if (facts.isEmpty && findings.isEmpty) return;
+    final entitySet = <String>{};
+    for (final f in facts) {
+      final subj = (f['subject'] ?? '').toString().trim();
+      final val = (f['value'] ?? '').toString().trim();
+      if (subj.isNotEmpty && subj.length < 60) entitySet.add(subj);
+      if (val.isNotEmpty && val.length < 50 && entitySet.length < 25) {
+        entitySet.add(val);
+      }
+    }
+    const stopWords = {
+      'this', 'that', 'these', 'those', 'there', 'their', 'they', 'when',
+      'where', 'which', 'while', 'with', 'from', 'have', 'been', 'were',
+      'also', 'more', 'most', 'some', 'such', 'than', 'then', 'into',
+      'over', 'under', 'about', 'after', 'before', 'between', 'during',
+      'however', 'because', 'according', 'based', 'using', 'shows',
+    };
+    for (final f in findings) {
+      if (entitySet.length >= 25) break;
+      final text = (f['text'] ?? '').toString();
+      final words = text.split(RegExp(r'\s+'));
+      for (int wi = 0; wi < words.length && entitySet.length < 25; wi++) {
+        final clean = words[wi].replaceAll(RegExp(r'[^\w\-\.]'), '');
+        if (clean.length <= 3 || clean.length >= 40) continue;
+        if (stopWords.contains(clean.toLowerCase())) continue;
+        final isProperOrCode = clean.contains('-') ||
+            (clean.contains('.') && RegExp(r'[A-Za-z]\.[A-Za-z0-9]').hasMatch(clean)) ||
+            (wi > 0 && RegExp(r'^[A-Z][a-zA-Z0-9]').hasMatch(clean));
+        if (isProperOrCode) {
+          entitySet.add(clean);
+        }
+      }
+    }
+    final sourceUrls = <String>{};
+    for (final f in [...facts, ...findings]) {
+      final s = (f['source'] ?? '').toString().trim();
+      if (s.isNotEmpty) sourceUrls.add(s);
+    }
+    buffer.writeln('━━ Phase $phaseNumber:$phaseTitle ━━');
+    if (entitySet.isNotEmpty) {
+      buffer.writeln('Discovered entities: ${entitySet.take(25).join(', ')}');
+    }
+    if (facts.isNotEmpty) {
+      buffer.writeln('Key facts:');
+      for (final f in facts.take(15)) {
+        buffer.writeln(
+          '  - ${f['subject']}${f['metric']}: ${f['value']} (date:${f['date'] ?? 'n/a'})',
+        );
+      }
+    }
+    if (findings.isNotEmpty) {
+      buffer.writeln('Key findings:');
+      for (final f in findings.take(8)) {
+        buffer.writeln('  - ${f['text']}');
+      }
+    }
+    if (sourceUrls.isNotEmpty) {
+      buffer.writeln('Sources found (use read_url on these if needed):');
+      for (final u in sourceUrls.take(8)) {
+        buffer.writeln('  -$u');
+      }
+    }
+    buffer.writeln('');
   }
 
   // Bound state persisted into the research_state JSON fence; all limits are UTF-8 bytes.
@@ -5840,7 +5987,7 @@ jobs:
   // exclusively by the user-configured _writerContextBudget setting.
 
   Future<void> _runResearchLoop({
-    required int sessionIndex,
+    required String sessionId,
     required int messageIndex,
     required Map<String, dynamic> stateMap,
     required ProviderDefinition provider,
@@ -5855,9 +6002,22 @@ jobs:
     final String runId = 'run_${DateTime.now().millisecondsSinceEpoch}';
 
     try {
-      await _resetDeepResearch();
+      final existingStepsPreview = DeepResearchHelpers.normalizeSteps(
+        stateMap['steps'] as List?,
+      );
+      final bool isResuming = DeepResearchHelpers.hasUsablePlan(stateMap) &&
+          existingStepsPreview.any(
+            (s) =>
+                s['status'] == 'completed' ||
+                s['status'] == 'completed_with_issues',
+          );
+      if (!isResuming) {
+        await _resetDeepResearch();
+      }
 
-      final activeSession = _sessions[sessionIndex];
+      final initialIdx = _sessions.indexWhere((s) => s.id == sessionId);
+      if (initialIdx == -1) return;
+      final activeSession = _sessions[initialIdx];
       // Guard against RangeError if the plan message index is ever 0 or the
       // session was trimmed — an empty prompt is recoverable, a crash is not.
       final int promptIndex = messageIndex - 1;
@@ -5868,17 +6028,17 @@ jobs:
 
       // ── STAGE 1: PLANNING ──
       // Reuse an existing usable plan (UI-edited / resume) instead of re-calling the planner.
-      final List<Map<String, dynamic>> steps;
+      final List<_JsonMap> steps;
       if (DeepResearchHelpers.hasUsablePlan(stateMap)) {
         steps = DeepResearchHelpers.normalizeSteps(stateMap['steps'] as List?);
         stateMap['steps'] = steps;
         stateMap['status'] = 'running';
         stateMap.remove('regenerate_plan');
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
+        _publishResearchState(sessionId, messageIndex, stateMap);
       } else {
         stateMap['status'] = 'planning';
         stateMap['plan_start_ms'] = DateTime.now().millisecondsSinceEpoch;
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
+        _publishResearchState(sessionId, messageIndex, stateMap);
 
         final List<ChatMessage> plannerMessages = [
           const ChatMessage(
@@ -5908,25 +6068,28 @@ jobs:
           studyModeEnabled: _studyModeEnabled,
         );
 
-        await for (final chunk in plannerStream) {
-          if (chunk.startsWith('[REASONING]')) {
-            plannerReasoning += chunk.substring(11);
-          } else {
-            var textChunk = chunk;
-            if (textChunk.contains('<think>') ||
-                textChunk.contains('<reasoning>') ||
-                textChunk.contains('<thought>')) {
-              textChunk = textChunk.replaceAll(
-                RegExp(
-                  r'<think>|<reasoning>|<thought>|</think>|</reasoning>|</thought>',
-                ),
-                '',
-              );
+        await _consumeResearchStream(
+          sessionId: sessionId,
+          stream: plannerStream,
+          onChunk: (chunk) {
+            if (chunk.startsWith('[REASONING]')) {
+              plannerReasoning += chunk.substring(11);
+            } else {
+              var textChunk = chunk;
+              if (textChunk.contains('<think>') ||
+                  textChunk.contains('<reasoning>') ||
+                  textChunk.contains('<thought>')) {
+                textChunk = textChunk.replaceAll(
+                  RegExp(
+                    r'<think>|<reasoning>|<thought>|</think>|</reasoning>|</thought>',
+                  ),
+                  '',
+                );
+              }
+              planText += textChunk;
             }
-            planText += textChunk;
-          }
-        }
-
+          },
+        );
         final plannedSteps = <Map<String, dynamic>>[];
         final planFence = findFenceWithKeys(planText, ['research_plan']);
         final rawPlan = planFence == null
@@ -5999,7 +6162,7 @@ jobs:
         stateMap['steps'] = steps;
         stateMap['status'] = 'running';
         stateMap.remove('regenerate_plan');
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
+        _publishResearchState(sessionId, messageIndex, stateMap);
       }
 
       // ── STAGE 2: MULTI-AGENT EXECUTION ──
@@ -6009,15 +6172,62 @@ jobs:
       int cumulativeFacts = 0;
       int cumulativeFindings = 0;
 
-      DateTime getGlobalElapsed() {
-        return DateTime.now();
-      }
-
-      final List<Map<String, dynamic>> phaseFacts = [];
-      final List<Map<String, dynamic>> phaseFindings = [];
-      final List<Map<String, dynamic>> phaseSkippedPdfs = [];
-      final List<Map<String, dynamic>> phaseFailedFetches = [];
+      final List<_JsonMap> phaseFacts = [];
+      final List<_JsonMap> phaseFindings = [];
+      final List<_JsonMap> phaseSkippedPdfs = [];
+      final List<_JsonMap> phaseFailedFetches = [];
       final StringBuffer crossPhaseContext = StringBuffer();
+
+      // On Resume, repopulate crossPhaseContext and runFetchedUrls from temp.json
+      // so later phases build on already-persisted evidence.
+      if (isResuming) {
+        try {
+          final existingTempRaw = await _deepResearchBridge.exportTemp();
+          final decodedTemp = jsonDecode(existingTempRaw);
+          if (decodedTemp is List) {
+            int restoredPhaseNum = 0;
+            for (final item in decodedTemp) {
+              if (item is! Map) continue;
+              restoredPhaseNum++;
+              final List<_JsonMap> rFacts = [];
+              for (final f in (item['facts'] as List? ?? const [])) {
+                if (f is Map) rFacts.add(_JsonMap.from(f));
+              }
+              final List<_JsonMap> rFindings = [];
+              for (final f in (item['findings'] as List? ?? const [])) {
+                if (f is Map) rFindings.add(_JsonMap.from(f));
+              }
+              cumulativeFacts += rFacts.length;
+              cumulativeFindings += rFindings.length;
+              for (final rec in [...rFacts, ...rFindings]) {
+                final src = (rec['source'] ?? '').toString().trim();
+                if (src.isNotEmpty) {
+                  final norm = _normalizeQueryOrUrl(src);
+                  runFetchedUrls.add(norm);
+                  runUrlSummaries.putIfAbsent(
+                    norm,
+                    () => {
+                      'facts': <_JsonMap>[],
+                      'findings': <_JsonMap>[],
+                      'isPdf': false,
+                      'skipped': false,
+                    },
+                  );
+                }
+              }
+              _appendPhaseToCrossPhaseContext(
+                crossPhaseContext,
+                phaseNumber: restoredPhaseNum,
+                phaseTitle: (item['phase_title'] ?? 'Previous Phase').toString(),
+                facts: rFacts,
+                findings: rFindings,
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint('Resume temp.json rehydration skipped: $e');
+        }
+      }
 
       for (int i = 0; i < steps.length; i++) {
         final stageId = steps[i]['id'] as String;
@@ -6031,8 +6241,9 @@ jobs:
         phaseFailedFetches.clear();
 
         // Skip already-completed phases when resuming a usable plan.
-        if (steps[i]['status'] == 'completed' ||
-            steps[i]['status'] == 'completed_with_issues') {
+        final stepStatus = steps[i]['status'];
+        if (stepStatus == 'completed' ||
+            stepStatus == 'completed_with_issues') {
           continue;
         }
 
@@ -6040,13 +6251,11 @@ jobs:
           steps[i]['status'] = 'failed';
           steps[i]['error'] =
               'Research run exceeded global time budget of ${globalTimeBudget.inMinutes} minutes.';
-          _publishResearchState(sessionIndex, messageIndex, stateMap);
+          _publishResearchState(sessionId, messageIndex, stateMap);
           continue;
         }
-
         steps[i]['status'] = 'running';
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
-
+        _publishResearchState(sessionId, messageIndex, stateMap);
         // IMPROVEMENT: Per-phase timeout (4 minutes max per phase)
         final phaseStartTime = DateTime.now();
         const phaseTimeout = Duration(minutes: 4);
@@ -6091,7 +6300,7 @@ jobs:
                 }
                 stateMap['steps'][idx]['events'] = evts;
               }
-              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              _publishResearchState(sessionId, messageIndex, stateMap);
               return eventId;
             };
 
@@ -6136,7 +6345,7 @@ jobs:
                   stateMap['steps'][idx]['events'] = evts;
                 }
               }
-              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              _publishResearchState(sessionId, messageIndex, stateMap);
             };
 
         final void Function(
@@ -6167,7 +6376,7 @@ jobs:
                   stateMap['steps'][idx]['events'] = evts;
                 }
               }
-              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              _publishResearchState(sessionId, messageIndex, stateMap);
             };
 
         final handoffBrief = (steps[i]['handoff_brief'] ?? '')
@@ -6211,7 +6420,7 @@ jobs:
         int webSearchCount = 0;
         int readUrlCount = 0;
         int consecutiveMalformedTags = 0;
-        final Map<String, String> stepSearchCache = {};
+        final Set<String> phaseFailedUrls = {};
         String stepContent = '';
         int transientRetries = 0;
 
@@ -6226,11 +6435,11 @@ jobs:
           if (phaseStartTime.add(phaseTimeout).isBefore(DateTime.now())) {
             stepDone = true;
             stepFailure =
-                'Phase exceeded ${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
+                'Phase exceeded${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
             break;
           }
           if (!mounted) return;
-          if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
+          if (!_sendingSessionIds.contains(sessionId)) {
             stepDone = true;
             stepFailed = true;
             stepFailure = 'Research cancelled by user.';
@@ -6249,62 +6458,79 @@ jobs:
               provider: provider,
               settings: settings,
               model: model,
-              messages: _compactHistoryForApi(
-                stepMessages,
-                stepMessages.length,
-              ),
+              messages: _budgetResearchMessages(stepMessages),
               studyModeEnabled: _studyModeEnabled,
             );
 
-            await for (final chunk in stream) {
-            if (chunk.startsWith('[REASONING]')) {
-              reasoningText += chunk.substring(11);
-              researchStreamCharCount += chunk.length - 11;
-            } else {
-                var textChunk = tagHold + chunk;
-                tagHold = '';
-                final held = _splitPartialTag(textChunk, isThinking);
-                textChunk = held.$1;
-                tagHold = held.$2;
-                if (!isThinking &&
-                    (textChunk.contains('<think>') ||
-                        textChunk.contains('<reasoning>') ||
-                        textChunk.contains('<thought>'))) {
-                  final tag = textChunk.contains('<think>')
-                      ? '<think>'
-                      : textChunk.contains('<thought>')
-                      ? '<thought>'
-                      : '<reasoning>';
-                  final parts = textChunk.split(tag);
-                  responseText += parts[0];
-                  isThinking = true;
-                  textChunk = parts.length > 1
-                      ? parts.sublist(1).join(tag)
-                      : '';
-                }
-
-                if (isThinking &&
-                    (textChunk.contains('</think>') ||
-                        textChunk.contains('</reasoning>') ||
-                        textChunk.contains('</thought>'))) {
-                  final tag = textChunk.contains('</think>')
-                      ? '</think>'
-                      : textChunk.contains('</thought>')
-                      ? '</thought>'
-                      : '</reasoning>';
-                  final parts = textChunk.split(tag);
-                  reasoningText += parts[0];
-                  isThinking = false;
-                  textChunk = parts.length > 1
-                      ? parts.sublist(1).join(tag)
-                      : '';
-                  responseText += textChunk;
-                } else if (isThinking) {
-                  reasoningText += textChunk;
+            await _consumeResearchStream(
+              sessionId: sessionId,
+              stream: stream,
+              onChunk: (chunk) {
+                if (chunk.startsWith('[REASONING]')) {
+                  reasoningText += chunk.substring(11);
+                  researchStreamCharCount += chunk.length - 11;
                 } else {
-                  responseText += textChunk;
+                  var textChunk = tagHold + chunk;
+                  tagHold = '';
+                  final held = _splitPartialTag(textChunk, isThinking);
+                  textChunk = held.$1;
+                  tagHold = held.$2;
+                  if (!isThinking &&
+                      (textChunk.contains('<think>') ||
+                          textChunk.contains('<reasoning>') ||
+                          textChunk.contains('<thought>'))) {
+                    final tag = textChunk.contains('<think>')
+                        ? '<think>'
+                        : textChunk.contains('<thought>')
+                        ? '<thought>'
+                        : '<reasoning>';
+                    final parts = textChunk.split(tag);
+                    responseText += parts[0];
+                    isThinking = true;
+                    textChunk = parts.length > 1
+                        ? parts.sublist(1).join(tag)
+                        : '';
+                  }
+
+                  if (isThinking &&
+                      (textChunk.contains('</think>') ||
+                          textChunk.contains('</reasoning>') ||
+                          textChunk.contains('</thought>'))) {
+                    final tag = textChunk.contains('</think>')
+                        ? '</think>'
+                        : textChunk.contains('</thought>')
+                        ? '</thought>'
+                        : '</reasoning>';
+                    final parts = textChunk.split(tag);
+                    reasoningText += parts[0];
+                    isThinking = false;
+                    textChunk = parts.length > 1
+                        ? parts.sublist(1).join(tag)
+                        : '';
+                    responseText += textChunk;
+                  } else if (isThinking) {
+                    reasoningText += textChunk;
+                  } else {
+                    responseText += textChunk;
+                  }
                 }
+              },
+            );
+            // Flush any trailing partial tag buffer so characters aren't lost.
+            if (tagHold.isNotEmpty) {
+              if (isThinking) {
+                reasoningText += tagHold;
+              } else {
+                responseText += tagHold;
               }
+              tagHold = '';
+            }
+
+            if (!_sendingSessionIds.contains(sessionId)) {
+              stepDone = true;
+              stepFailed = true;
+              stepFailure = 'Research cancelled by user.';
+              break;
             }
 
             stepMessages.add(
@@ -6325,7 +6551,7 @@ jobs:
               steps[i]['reasoning'] = joinedReasoning.length > 6000
                   ? joinedReasoning.substring(joinedReasoning.length - 6000)
                   : joinedReasoning;
-              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              _publishResearchState(sessionId, messageIndex, stateMap);
             }
 
             final unrecognizedErrors = <Map<String, dynamic>>[];
@@ -6388,83 +6614,18 @@ jobs:
               consecutiveMalformedTags = 0;
             }
 
-            if (stepCompleteRequested) {
-              if (phaseFacts.isEmpty && phaseFindings.isEmpty && webSearchCount == 0) {
-                stepMessages.add(
-                  const ChatMessage(
-                    role: MessageRole.user,
-                    text: 'You emitted step_complete without any searches or evidence. The grounding rule is non-negotiable: you must search and read at least one source before completing a phase. Emit a web_search call now.',
-                  ),
-                );
-                continue;
-              }
-              // Handoff chain: the finishing phase writes the next phase's
-              // search directives so phase N+1 never searches blind.
-              if (i + 1 < steps.length) {
-                final scIdx = responseText.indexOf('"step_complete"');
-                final braceStart = scIdx == -1
-                    ? -1
-                    : responseText.lastIndexOf('{', scIdx);
-                if (braceStart != -1) {
-                  int depth = 0;
-                  bool inStr = false;
-                  bool esc = false;
-                  int objEnd = -1;
-                  for (int ci = braceStart; ci < responseText.length; ci++) {
-                    final c = responseText[ci];
-                    if (inStr) {
-                      if (esc) {
-                        esc = false;
-                      } else if (c == '\\') {
-                        esc = true;
-                      } else if (c == '"') {
-                        inStr = false;
-                      }
-                    } else if (c == '"') {
-                      inStr = true;
-                    } else if (c == '{') {
-                      depth++;
-                    } else if (c == '}') {
-                      depth--;
-                      if (depth == 0) {
-                        objEnd = ci + 1;
-                        break;
-                      }
-                    }
-                  }
-                  if (objEnd != -1) {
-                    final obj = DeepResearchHelpers.parseJsonObject(
-                      responseText.substring(braceStart, objEnd),
-                    );
-                    final a = obj?['a'];
-                    final brief = a is Map
-                        ? (a['next_brief'] ?? '').toString().trim()
-                        : '';
-                    if (brief.isNotEmpty) {
-                      steps[i + 1]['handoff_brief'] = brief;
-                    }
-                  }
-                }
-              }
-              final contentClean = responseText
-                  .replaceAll(
-                    RegExp(
-                      r'```json\s*\n\s*\{\s*"t"\s*:\s*"step_complete"\s*(,\s*"a"\s*:\s*\{[\s\S]*?\})?\s*\}\s*\n```',
-                      caseSensitive: false,
-                    ),
-                    '',
-                  )
-                  .trim();
-              stepContent = stepContent.isEmpty
-                  ? contentClean
-                  : '$stepContent\n\n$contentClean';
-              stepDone = true;
-            } else if (searchCalls.isNotEmpty) {
+            // Execute web_search and/or read_url FIRST so co-emitted tool calls
+            // are never dropped when step_complete is present in the same turn.
+            final List<String> turnToolOutputs = [];
+
+            if (searchCalls.isNotEmpty) {
               final List<Future<String>> searchFutures = [];
               final List<String> eventIds = [];
               final List<Stopwatch> stopwatches = [];
               final List<String> queries = [];
-              final List<Map<String, String>> searchAttrsList = [];
+              final List<_StrMap> searchAttrsList = [];
+              final List<bool> alreadyFinished = [];
+              final List<String> normQueries = [];
 
               for (final call in searchCalls) {
                 final a = call['a'] is Map<String, dynamic>
@@ -6497,6 +6658,7 @@ jobs:
                 };
                 for (final cq in callQueries) {
                   queries.add(cq);
+                  normQueries.add(_normalizeQueryOrUrl(cq));
                   searchAttrsList.add(attrs);
                   final eventWatch = Stopwatch()..start();
                   stopwatches.add(eventWatch);
@@ -6506,6 +6668,7 @@ jobs:
                     query: cq,
                   );
                   eventIds.add(eventId);
+                  alreadyFinished.add(false);
                 }
                 final trailEntry = jsonEncode({'t': 'web_search', 'a': a});
                 stepContent = stepContent.isEmpty
@@ -6514,33 +6677,33 @@ jobs:
               }
 
               steps[i]['content'] = stepContent;
-              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              _publishResearchState(sessionId, messageIndex, stateMap);
 
-              bool searchCapHit = false;
               for (var k = 0; k < queries.length; k++) {
                 final query = queries[k];
                 final attrs = searchAttrsList[k];
-                final normQuery = _normalizeQueryOrUrl(query);
+                final normQuery = normQueries[k];
 
                 if (executedQueries.contains(normQuery)) {
-                  searchFutures.add(Future.value(
-                    'This exact query was already executed earlier in this research run. '
-                    'Refer to the previous search results instead of repeating this search. '
-                    'If you need different information, reformulate your query with different terms.',
-                  ));
+                  searchFutures.add(
+                    Future.value(
+                      'This exact query was already executed earlier in this research run. '
+                      'Refer to the previous search results instead of repeating this search. '
+                      'If you need different information, reformulate your query with different terms.',
+                    ),
+                  );
                   finishResearchEvent(
                     eventIds[k],
                     status: 'done',
                     stopwatch: stopwatches[k],
                     details: {'query': query, 'deduplicated': true},
                   );
+                  alreadyFinished[k] = true;
                   continue;
                 }
-                executedQueries.add(normQuery);
 
                 if (webSearchCount >= 20) {
-                  searchCapHit = true;
-                  final limitMsg =
+                  const limitMsg =
                       'Search limit reached for this phase (20/20 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
                   searchFutures.add(Future.value('Error: $limitMsg'));
                   finishResearchEvent(
@@ -6549,120 +6712,116 @@ jobs:
                     stopwatch: stopwatches[k],
                     error: 'Web search limit exceeded.',
                   );
+                  alreadyFinished[k] = true;
                   continue;
                 }
 
+                executedQueries.add(normQuery);
                 webSearchCount++;
-                if (stepSearchCache.containsKey(normQuery)) {
-                  searchFutures.add(
-                    Future.value(
-                      'Web search already attempted in this phase.\n\n${stepSearchCache[normQuery]}',
-                    ),
-                  );
-                } else {
-                  searchFutures.add(() async {
-                    try {
-                      final res = await _chatClient
-                          .searchWeb(
-                            query,
-                            _searchSettings.provider,
-                            [
-                              _searchSettings.apiKey,
-                              ..._searchSettings.fallbackApiKeys,
-                            ],
-                            googleCx: _searchSettings.googleCx,
-                            topic: attrs['topic'],
-                            timeRange:
-                                attrs['time_range'] ?? attrs['time-range'],
-                            startDate:
-                                attrs['start_date'] ?? attrs['start-date'],
-                            endDate: attrs['end_date'] ?? attrs['end-date'],
-                            searchDepth:
-                                attrs['search_depth'] ??
-                                attrs['search-depth'] ??
-                                'basic',
-                            customProviders: _searchSettings.customProviders,
-                          )
-                          .timeout(const Duration(seconds: 60));
-                      stepSearchCache[normQuery] = res;
-                      return res;
-                    } catch (e) {
-                      return 'Web search failed: $e';
-                    }
-                  }());
-                }
+                searchFutures.add(() async {
+                  try {
+                    final res = await _chatClient
+                        .searchWeb(
+                          query,
+                          _searchSettings.provider,
+                          [
+                            _searchSettings.apiKey,
+                            ..._searchSettings.fallbackApiKeys,
+                          ],
+                          googleCx: _searchSettings.googleCx,
+                          topic: attrs['topic'],
+                          timeRange:
+                              attrs['time_range'] ?? attrs['time-range'],
+                          startDate:
+                              attrs['start_date'] ?? attrs['start-date'],
+                          endDate: attrs['end_date'] ?? attrs['end-date'],
+                          searchDepth:
+                              attrs['search_depth'] ??
+                              attrs['search-depth'] ??
+                              'basic',
+                          customProviders: _searchSettings.customProviders,
+                        )
+                        .timeout(const Duration(seconds: 60));
+                    return res;
+                  } catch (e) {
+                    executedQueries.remove(normQuery);
+                    return 'Web search failed: $e';
+                  }
+                }());
               }
 
               final searchResults = await Future.wait(searchFutures);
-              final List<String> allUrls = [];
               final StringBuffer combinedResults = StringBuffer();
+              final mdLinkRe = RegExp(r'\[([^\]\n]+)\]\((https?://[^\s)\]]+)\)');
+              final plainUrlRe = RegExp(r"(https?://[^\s)\]<>\x22']+)");
 
               for (var k = 0; k < queries.length; k++) {
                 final query = queries[k];
                 final eventId = eventIds[k];
                 final eventWatch = stopwatches[k];
                 final searchResultRaw = searchResults[k];
-                final bool isCapError = searchResultRaw.startsWith(
-                  'Error: Web search cap',
-                );
-                final bool isDup = searchResultRaw.startsWith(
-                  'Web search already attempted',
-                );
 
                 String searchResult = searchResultRaw;
                 if (searchResult.length > 4000) {
                   searchResult =
                       searchResult.substring(0, 4000) + '\n\n...[truncated]';
                 }
-                final searchError =
-                    (searchResult.startsWith('Web search failed:') ||
-                        isCapError)
-                    ? searchResult
-                    : null;
-                final resultMatches = RegExp(
-                  r'(?:^|\n)[-*\d.]+\s*\[?([^\]\n]+?)\]?\s*[(:-]\s*(https?://[^\s)\]]+)',
-                  multiLine: true,
-                ).allMatches(searchResult);
+                final bool isSearchErr =
+                    searchResult.startsWith('Web search failed:') ||
+                    searchResult.startsWith('Search failed:') ||
+                    searchResult.startsWith('Error:');
+                final String? searchError = isSearchErr ? searchResult : null;
+                if (isSearchErr && !alreadyFinished[k]) {
+                  executedQueries.remove(normQueries[k]);
+                }
 
-                if (!isCapError) {
+                final parsedItems = <_StrMap>[];
+                final seenResultUrls = <String>{};
+                for (final m in mdLinkRe.allMatches(searchResult)) {
+                  final u = (m.group(2) ?? '').trim();
+                  if (u.isNotEmpty && seenResultUrls.add(u)) {
+                    parsedItems.add({
+                      'title': (m.group(1) ?? '').trim(),
+                      'url': u,
+                      'snippet': '',
+                    });
+                  }
+                }
+                if (parsedItems.isEmpty) {
+                  for (final m in plainUrlRe.allMatches(searchResult)) {
+                    final u = (m.group(1) ?? '')
+                        .replaceAll(RegExp(r'[.,;:]+$'), '')
+                        .trim();
+                    if (u.isNotEmpty && seenResultUrls.add(u)) {
+                      parsedItems.add({'title': u, 'url': u, 'snippet': ''});
+                    }
+                  }
+                }
+
+                if (!alreadyFinished[k]) {
                   finishResearchEvent(
                     eventId,
                     status: searchError == null ? 'done' : 'error',
-                    stopwatch: isDup ? Stopwatch() : eventWatch,
+                    stopwatch: eventWatch,
                     details: {
-                      'result_count': resultMatches.length,
-                      if (isDup) 'already_attempted': true,
-                      'result_payload': _compactSearchPayload(
-                        resultMatches.map(
-                          (match) => {
-                            'title': match.group(1) ?? '',
-                            'url': match.group(2) ?? '',
-                            'snippet': '',
-                          },
-                        ),
-                      ),
+                      'result_count': parsedItems.length,
+                      'result_payload': _compactSearchPayload(parsedItems),
                     },
                     error: searchError,
                   );
                 }
 
-                final List<String> urls = resultMatches
-                    .map((match) => match.group(2)?.trim() ?? '')
-                    .where((url) => url.isNotEmpty)
-                    .toList();
-                allUrls.addAll(urls);
                 combinedResults.writeln(
                   "Search results for '$query':\n$searchResult\n",
                 );
               }
 
-              stepMessages.add(
-                ChatMessage(
-                  role: MessageRole.user,
-                  text: combinedResults.toString().trim(),
-                ),
-              );
-            } else if (readUrlCalls.isNotEmpty) {
+              if (combinedResults.isNotEmpty) {
+                turnToolOutputs.add(combinedResults.toString().trim());
+              }
+            }
+
+            if (readUrlCalls.isNotEmpty) {
               final availableRam = await _getSystemAvailableRamBytes();
               final bool lowMemory = availableRam < 300 * 1024 * 1024;
               final int activeFetchConcurrency = lowMemory
@@ -6672,10 +6831,12 @@ jobs:
               final List<String> eventIds = [];
               final List<Stopwatch> stopwatches = [];
               final List<String> urls = [];
-              // Pre-classify each URL and reserve read_url slots synchronously so
-              // N parallel tags cannot race past the 5/phase cap. PDF heuristics
-              // and cache hits do not consume the fetch budget.
+              final List<String> targetUrls = [];
+              final List<String> normUrls = [];
               final List<bool> overLimit = [];
+              final List<bool> duplicateInBatch = [];
+              final List<bool> prevFailedInPhase = [];
+              final Set<String> batchSeenNormUrls = {};
               const int readUrlLimit = 5;
 
               bool looksLikePdfUrl(String u) {
@@ -6689,7 +6850,15 @@ jobs:
                             .toString()
                         : '')
                     .trim();
+                var targetPreview = url;
+                if (targetPreview.isNotEmpty && !targetPreview.startsWith('http')) {
+                  targetPreview = 'https://$targetPreview';
+                }
+                final normPreview = _normalizeQueryOrUrl(targetPreview);
+
                 urls.add(url);
+                targetUrls.add(targetPreview);
+                normUrls.add(normPreview);
                 final eventWatch = Stopwatch()..start();
                 stopwatches.add(eventWatch);
                 final eventId = beginResearchEvent(
@@ -6703,16 +6872,22 @@ jobs:
                     ? trailEntry
                     : '$stepContent\n\n$trailEntry';
 
-                var targetPreview = url.trim();
-                if (!targetPreview.startsWith('http')) {
-                  targetPreview = 'https://$targetPreview';
-                }
-                final normPreview = _normalizeQueryOrUrl(url);
-                final isPdfPreview = looksLikePdfUrl(targetPreview);
+                final isPdfPreview =
+                    targetPreview.isNotEmpty && looksLikePdfUrl(targetPreview);
                 final isCacheHit = runFetchedUrls.contains(normPreview);
+                final isBatchDup = normPreview.isNotEmpty &&
+                    !batchSeenNormUrls.add(normPreview);
+                final isPrevFailed = phaseFailedUrls.contains(normPreview);
 
-                if (isPdfPreview || isCacheHit) {
-                  // No budget slot consumed for skips / re-reads.
+                duplicateInBatch.add(isBatchDup);
+                prevFailedInPhase.add(isPrevFailed);
+
+                if (targetPreview.isEmpty ||
+                    isPdfPreview ||
+                    isCacheHit ||
+                    isBatchDup ||
+                    isPrevFailed) {
+                  // No budget slot consumed for invalid/skips/re-reads/dups.
                   overLimit.add(false);
                 } else if (readUrlCount >= readUrlLimit) {
                   overLimit.add(true);
@@ -6723,7 +6898,7 @@ jobs:
                 }
               }
               steps[i]['content'] = stepContent;
-              _publishResearchState(sessionIndex, messageIndex, stateMap);
+              _publishResearchState(sessionId, messageIndex, stateMap);
 
               final List<String> urlResults = List.filled(urls.length, '');
               final fetchSemaphore = SimpleSemaphore(activeFetchConcurrency);
@@ -6733,21 +6908,84 @@ jobs:
               String factDedupKey(Map item) =>
                   '${item['metric']}|${item['subject']}|${item['value']}';
 
-              // Batch summarization: collect fetched texts, summarize in ONE LLM call
+              String formatUrlDigest(
+                List<dynamic> urlFacts,
+                List<dynamic> urlFindings,
+              ) {
+                if (urlFacts.isEmpty && urlFindings.isEmpty) {
+                  return 'Summarized: 0 relevant facts or findings extracted from this page.';
+                }
+                final buf = StringBuffer(
+                  'Extracted ${urlFacts.length} facts and ${urlFindings.length} findings:',
+                );
+                for (final f in urlFacts.take(8)) {
+                  if (f is Map) {
+                    final dateStr = (f['date'] ?? '').toString().trim();
+                    final datePart = dateStr.isNotEmpty ? ' ($dateStr)' : '';
+                    buf.writeln(
+                      '\n- [FACT] ${f['subject']} ${f['metric']}: ${f['value']}$datePart',
+                    );
+                  }
+                }
+                for (final f in urlFindings.take(5)) {
+                  if (f is Map) {
+                    buf.writeln('\n- [FINDING] ${f['text']}');
+                  }
+                }
+                return buf.toString();
+              }
+
+              // Batch summarization: track by index so events can never collide
               final Map<String, String> fetchedTexts = {};
-              final Map<String, String> fetchedEventIds = {};
-              final Map<String, Stopwatch> fetchedStopwatches = {};
+              final Map<int, String> fetchedTargetByIdx = {};
 
               await Future.wait(
                 Iterable<int>.generate(urls.length).map((idx) async {
                   final url = urls[idx];
+                  final targetUrl = targetUrls[idx];
+                  final normUrl = normUrls[idx];
                   final eventId = eventIds[idx];
                   final eventWatch = stopwatches[idx];
-                  var targetUrl = url.trim();
-                  if (!targetUrl.startsWith('http')) {
-                    targetUrl = 'https://$targetUrl';
+
+                  if (targetUrl.isEmpty) {
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      error: 'Empty URL provided.',
+                    );
+                    urlResults[idx] = 'Error: Empty URL provided.';
+                    return;
                   }
-                  final normUrl = _normalizeQueryOrUrl(url);
+
+                  if (duplicateInBatch[idx]) {
+                    finishResearchEvent(
+                      eventId,
+                      status: 'done',
+                      stopwatch: eventWatch,
+                      details: {
+                        'url': targetUrl,
+                        'already_attempted': true,
+                        'result_payload': {'summary': 'Duplicate URL in same batch'},
+                      },
+                    );
+                    urlResults[idx] =
+                        'Duplicate URL in the same batch (see first result for this URL).';
+                    return;
+                  }
+
+                  if (prevFailedInPhase[idx]) {
+                    finishResearchEvent(
+                      eventId,
+                      status: 'error',
+                      stopwatch: eventWatch,
+                      details: {'url': targetUrl, 'already_attempted': true},
+                      error: 'URL already failed earlier in this phase.',
+                    );
+                    urlResults[idx] =
+                        'Skipped: this URL already failed earlier in this phase. Choose a different source.';
+                    return;
+                  }
 
                   // Global time budget: cancel remaining fetches if exceeded.
                   if (fetchTimeBudgetExceeded ||
@@ -6790,20 +7028,24 @@ jobs:
                     });
                     runFetchedUrls.add(normUrl);
                     runUrlSummaries[normUrl] = {
-                      'facts': [],
-                      'findings': [],
+                      'facts': <_JsonMap>[],
+                      'findings': <_JsonMap>[],
                       'isPdf': true,
                       'skipped': true,
                     };
 
-                    await _updateDeepResearchPhase(
-                      stageId: stageId,
-                      phaseTitle: phaseTitle,
-                      facts: phaseFacts,
-                      findings: phaseFindings,
-                      skippedPdfs: phaseSkippedPdfs,
-                      failedFetches: phaseFailedFetches,
-                    );
+                    try {
+                      await _updateDeepResearchPhase(
+                        stageId: stageId,
+                        phaseTitle: phaseTitle,
+                        facts: phaseFacts,
+                        findings: phaseFindings,
+                        skippedPdfs: phaseSkippedPdfs,
+                        failedFetches: phaseFailedFetches,
+                      );
+                    } catch (e) {
+                      debugPrint('Intermediate PDF skip persistence failed: $e');
+                    }
 
                     finishResearchEvent(
                       eventId,
@@ -6820,26 +7062,34 @@ jobs:
                   }
 
                   if (runFetchedUrls.contains(normUrl)) {
-                    final cached = runUrlSummaries[normUrl]!;
+                    final cached = runUrlSummaries[normUrl] ??
+                        const {
+                          'facts': <dynamic>[],
+                          'findings': <dynamic>[],
+                          'isPdf': false,
+                          'skipped': false,
+                        };
+                    var cachedFacts = <_JsonMap>[];
+                    var cachedFindings = <_JsonMap>[];
                     if (cached['skipped'] == true) {
                       phaseSkippedPdfs.add({
                         'url': targetUrl,
                         'reason': 'PDF files are excluded (cache hit)',
                       });
                     } else {
-                      final cachedFacts = List<Map<String, dynamic>>.from(
-                        cached['facts'] as List? ?? const <dynamic>[],
-                      );
-                      final cachedFindings = List<Map<String, dynamic>>.from(
-                        cached['findings'] as List? ?? const <dynamic>[],
-                      );
-                      final existingKeys = phaseFacts.map(factDedupKey).toSet();
+                      cachedFacts = (cached['facts'] as List? ?? const [])
+                          .whereType<_AnyMap>()
+                          .map((m) => _JsonMap.from(m))
+                          .toList();
+                      cachedFindings = (cached['findings'] as List? ?? const [])
+                          .whereType<_AnyMap>()
+                          .map((m) => _JsonMap.from(m))
+                          .toList();
                       for (final fact in cachedFacts) {
                         if (existingKeys.add(factDedupKey(fact))) {
                           phaseFacts.add(fact);
                         }
                       }
-                      // Findings: avoid exact text+source dupes on re-fetch.
                       final existingFindingKeys = phaseFindings
                           .map((f) => '${f['text']}|${f['source']}')
                           .toSet();
@@ -6851,14 +7101,18 @@ jobs:
                       }
                     }
 
-                    await _updateDeepResearchPhase(
-                      stageId: stageId,
-                      phaseTitle: phaseTitle,
-                      facts: phaseFacts,
-                      findings: phaseFindings,
-                      skippedPdfs: phaseSkippedPdfs,
-                      failedFetches: phaseFailedFetches,
-                    );
+                    try {
+                      await _updateDeepResearchPhase(
+                        stageId: stageId,
+                        phaseTitle: phaseTitle,
+                        facts: phaseFacts,
+                        findings: phaseFindings,
+                        skippedPdfs: phaseSkippedPdfs,
+                        failedFetches: phaseFailedFetches,
+                      );
+                    } catch (e) {
+                      debugPrint('Intermediate cache-hit persistence failed: $e');
+                    }
 
                     finishResearchEvent(
                       eventId,
@@ -6870,26 +7124,23 @@ jobs:
                             ? 'skipped_pdf'
                             : 'html',
                         'already_attempted': true,
-                        'facts_count': cached['facts']?.length ?? 0,
-                        'findings_count': cached['findings']?.length ?? 0,
+                        'facts_count': cachedFacts.length,
+                        'findings_count': cachedFindings.length,
                         'result_payload': {
                           'summary': 'Already read & summarized (cache hit)',
                         },
                       },
                     );
-                    urlResults[idx] = 'Already read & summarized (cache hit).';
+                    urlResults[idx] = cached['skipped'] == true
+                        ? 'Skipped PDF URL (cache hit).'
+                        : 'Already read earlier (cache hit). ${formatUrlDigest(cachedFacts, cachedFindings)}';
                     return;
                   }
 
                   String text = '';
-                  bool isPdfResponse = false;
                   bool fetchFailed = false;
 
-                  // The bridge owns network retrieval, URL policy, and cleaning.
-                  // Keeping this result on the server side avoids a second, divergent
-                  // fetch implementation in Flutter.
                   try {
-                    // Re-check budget immediately before the network call.
                     if (startTime
                         .add(globalTimeBudget)
                         .isBefore(DateTime.now())) {
@@ -6926,7 +7177,6 @@ jobs:
                         query: relevanceQuery,
                       );
                     });
-                    // Bridge skipped_pdf is the source of truth for PDF exclusion.
                     if (fetched['status'] == 'skipped_pdf') {
                       final reason =
                           fetched['reason']?.toString() ??
@@ -6937,19 +7187,23 @@ jobs:
                       });
                       runFetchedUrls.add(normUrl);
                       runUrlSummaries[normUrl] = {
-                        'facts': [],
-                        'findings': [],
+                        'facts': <_JsonMap>[],
+                        'findings': <_JsonMap>[],
                         'isPdf': true,
                         'skipped': true,
                       };
-                      await _updateDeepResearchPhase(
-                        stageId: stageId,
-                        phaseTitle: phaseTitle,
-                        facts: phaseFacts,
-                        findings: phaseFindings,
-                        skippedPdfs: phaseSkippedPdfs,
-                        failedFetches: phaseFailedFetches,
-                      );
+                      try {
+                        await _updateDeepResearchPhase(
+                          stageId: stageId,
+                          phaseTitle: phaseTitle,
+                          facts: phaseFacts,
+                          findings: phaseFindings,
+                          skippedPdfs: phaseSkippedPdfs,
+                          failedFetches: phaseFailedFetches,
+                        );
+                      } catch (e) {
+                        debugPrint('Intermediate skipped_pdf persistence failed: $e');
+                      }
                       finishResearchEvent(
                         eventId,
                         status: 'done',
@@ -6974,6 +7228,7 @@ jobs:
                     }
                   } catch (e) {
                     fetchFailed = true;
+                    phaseFailedUrls.add(normUrl);
                     final errStr = 'Fetch failed: $e';
                     phaseFailedFetches.add({'url': targetUrl, 'error': errStr});
                     finishResearchEvent(
@@ -7010,10 +7265,8 @@ jobs:
                     details: {'url': targetUrl, 'parse_format': 'html'},
                   );
 
-                  // Store fetched text for batch summarization
                   fetchedTexts[targetUrl] = text;
-                  fetchedEventIds[targetUrl] = eventId;
-                  fetchedStopwatches[targetUrl] = eventWatch;
+                  fetchedTargetByIdx[idx] = targetUrl;
                   urlResults[idx] = 'Fetched: ${text.length} chars';
                 }),
               );
@@ -7036,19 +7289,17 @@ jobs:
 
                   // Deduplicate facts (metric|subject|value)
                   final existingKeys = phaseFacts.map(factDedupKey).toSet();
-                  for (final fact
-                      in facts.whereType<Map<String, dynamic>>()) {
+                  for (final fact in facts.whereType<_JsonMap>()) {
                     if (existingKeys.add(factDedupKey(fact))) {
                       phaseFacts.add(fact);
                     }
                   }
-                  // Deduplicate findings (text|source)
+                  // Deduplicate findings (text + source)
                   final existingFindingKeys = phaseFindings
-                      .map((f) => '${f['text']}|${f['source']}')
+                      .map((f) => '${f['text']}\u007C${f['source']}')
                       .toSet();
-                  for (final finding
-                      in findings.whereType<Map<String, dynamic>>()) {
-                    final key = '${finding['text']}|${finding['source']}';
+                  for (final finding in findings.whereType<_JsonMap>()) {
+                    final key = '${finding['text']}\u007C${finding['source']}';
                     if (existingFindingKeys.add(key)) {
                       phaseFindings.add(finding);
                     }
@@ -7072,12 +7323,10 @@ jobs:
                     final normUrl = _normalizeQueryOrUrl(url);
                     runFetchedUrls.add(normUrl);
                     final urlFacts = facts
-                        .where(
-                            (f) => f['source']?.toString() == url)
+                        .where((f) => f is Map && f['source']?.toString() == url)
                         .toList();
                     final urlFindings = findings
-                        .where(
-                            (f) => f['source']?.toString() == url)
+                        .where((f) => f is Map && f['source']?.toString() == url)
                         .toList();
                     runUrlSummaries[normUrl] = {
                       'facts': urlFacts,
@@ -7087,37 +7336,43 @@ jobs:
                     };
                   }
 
-                  await _updateDeepResearchPhase(
-                    stageId: stageId,
-                    phaseTitle: phaseTitle,
-                    facts: phaseFacts,
-                    findings: phaseFindings,
-                    skippedPdfs: phaseSkippedPdfs,
-                    failedFetches: phaseFailedFetches,
-                  );
+                  try {
+                    await _updateDeepResearchPhase(
+                      stageId: stageId,
+                      phaseTitle: phaseTitle,
+                      facts: phaseFacts,
+                      findings: phaseFindings,
+                      skippedPdfs: phaseSkippedPdfs,
+                      failedFetches: phaseFailedFetches,
+                    );
+                  } catch (e) {
+                    debugPrint('Intermediate batch-summary persistence failed: $e');
+                  }
 
-                  for (final entry in fetchedEventIds.entries) {
-                    final url = entry.key;
-                    final eventId = entry.value;
-                    final eventWatch = fetchedStopwatches[url]!;
-                    final urlFacts = facts
-                        .where(
-                            (f) => f['source']?.toString() == url)
-                        .length;
-                    final urlFindings = findings
-                        .where(
-                            (f) => f['source']?.toString() == url)
-                        .length;
+                  for (final entry in fetchedTargetByIdx.entries) {
+                    final idx = entry.key;
+                    final url = entry.value;
+                    final urlFactsList = facts
+                        .where((f) => f is Map && f['source']?.toString() == url)
+                        .toList();
+                    final urlFindingsList = findings
+                        .where((f) => f is Map && f['source']?.toString() == url)
+                        .toList();
+                    urlResults[idx] = formatUrlDigest(
+                      urlFactsList,
+                      urlFindingsList,
+                    );
                     finishResearchEvent(
-                      eventId,
+                      eventIds[idx],
                       status: 'done',
-                      stopwatch: eventWatch,
+                      stopwatch: stopwatches[idx],
                       details: {
                         'url': url,
                         'parse_format': 'html',
-                        'facts_count': urlFacts,
-                        'findings_count': urlFindings,
-                        'new_chunks_added': urlFacts + urlFindings,
+                        'facts_count': urlFactsList.length,
+                        'findings_count': urlFindingsList.length,
+                        'new_chunks_added':
+                            urlFactsList.length + urlFindingsList.length,
                         'result_payload': {
                           'summary': 'Batch summarized',
                         },
@@ -7126,19 +7381,17 @@ jobs:
                   }
                 } catch (e) {
                   final errStr = 'Batch summarization failed: $e';
-                  for (final entry in fetchedEventIds.entries) {
+                  for (final entry in fetchedTargetByIdx.entries) {
+                    final idx = entry.key;
+                    final url = entry.value;
                     finishResearchEvent(
-                      entry.value,
+                      eventIds[idx],
                       status: 'error',
-                      stopwatch: fetchedStopwatches[entry.key]!,
-                      details: {'url': entry.key, 'parse_format': 'html'},
+                      stopwatch: stopwatches[idx],
+                      details: {'url': url, 'parse_format': 'html'},
                       error: errStr,
                     );
-                  }
-                  for (var k = 0; k < urls.length; k++) {
-                    if (fetchedTexts.containsKey(urls[k])) {
-                      urlResults[k] = errStr;
-                    }
+                    urlResults[idx] = errStr;
                   }
                 }
               }
@@ -7152,20 +7405,72 @@ jobs:
                 combinedResults.writeln();
               }
 
+              if (combinedResults.isNotEmpty) {
+                turnToolOutputs.add(combinedResults.toString().trim());
+              }
+            }
+
+            if (turnToolOutputs.isNotEmpty) {
               stepMessages.add(
                 ChatMessage(
                   role: MessageRole.user,
-                  text: combinedResults.toString().trim(),
+                  text: turnToolOutputs.join('\n\n'),
                 ),
               );
-            } else {
+            }
+
+            if (stepCompleteRequested) {
+              final bool noEvidenceOrAttempt =
+                  phaseFacts.isEmpty &&
+                  phaseFindings.isEmpty &&
+                  phaseFailedFetches.isEmpty &&
+                  phaseSkippedPdfs.isEmpty;
+              if (noEvidenceOrAttempt && loopCount < 10) {
+                stepMessages.add(
+                  ChatMessage(
+                    role: MessageRole.user,
+                    text: webSearchCount == 0
+                        ? 'You emitted step_complete without any searches or evidence. The grounding rule is non-negotiable: you must search and read at least one source before completing a phase. Emit a web_search call now.'
+                        : 'You emitted step_complete without reading any source or extracting evidence. Emit a read_url call on a relevant URL from your search results before completing this phase.',
+                  ),
+                );
+                continue;
+              }
+              // Handoff chain: read next_brief directly from parsed nativeCalls.
+              if (i + 1 < steps.length) {
+                final stepCompleteCall = nativeCalls.firstWhere(
+                  (c) => c['t'] == 'step_complete',
+                  orElse: () => const <String, dynamic>{},
+                );
+                final a = stepCompleteCall['a'];
+                final brief = a is Map
+                    ? (a['next_brief'] ?? '').toString().trim()
+                    : '';
+                if (brief.isNotEmpty) {
+                  steps[i + 1]['handoff_brief'] = brief;
+                }
+              }
+              final contentClean = responseText
+                  .replaceAll(
+                    RegExp(
+                      r'`{3,}\s*json\s*\n[\s\S]*?"step_complete"[\s\S]*?\n`{3,}',
+                      caseSensitive: false,
+                    ),
+                    '',
+                  )
+                  .trim();
+              stepContent = stepContent.isEmpty
+                  ? contentClean
+                  : '$stepContent\n\n$contentClean';
+              stepDone = true;
+            } else if (searchCalls.isEmpty && readUrlCalls.isEmpty) {
               // No tool call this turn. If the phase still has zero evidence,
-              // the model is trying to bail out with prose — push it back to
-              // work instead of striking the phase off as complete.
+              // push the model back to work instead of marking it complete.
               if (phaseFacts.isEmpty &&
                   phaseFindings.isEmpty &&
-                  webSearchCount == 0 &&
-                  readUrlCount == 0) {
+                  phaseFailedFetches.isEmpty &&
+                  phaseSkippedPdfs.isEmpty &&
+                  loopCount < 10) {
                 stepMessages.add(
                   const ChatMessage(
                     role: MessageRole.user,
@@ -7182,6 +7487,7 @@ jobs:
             }
 
             if (!stepDone &&
+                _sendingSessionIds.contains(sessionId) &&
                 (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
               final stepReflectMessages = [
                 const ChatMessage(
@@ -7198,34 +7504,28 @@ jobs:
                 ),
               ];
               try {
-                final reflectResp = await _chatClient.sendChat(
+                final nonReasoningSettings = settings.copyWith(
+                  reasoningEnabled: false,
+                );
+                final reflectResp = await _retryLlmCall(
                   provider: provider,
-                  settings: settings,
+                  settings: nonReasoningSettings,
                   model: model,
                   messages: _compactHistoryForApi(
                     stepReflectMessages,
                     stepReflectMessages.length,
                   ),
-                  studyModeEnabled: _studyModeEnabled,
+                  maxRetries: 2,
                 );
-                // Use regex fallback for robust JSON extraction
-                final cleanReflectResp = reflectResp
-                    .replaceAll(RegExp(r"```json"), '')
-                    .replaceAll('```', '')
-                    .trim();
-                final reflectJsonMatch =
-                    RegExp(r'\{[\s\S]*\}').firstMatch(cleanReflectResp);
-                if (reflectJsonMatch != null) {
-                  final reflectJson =
-                      jsonDecode(reflectJsonMatch.group(0)!) as Map<String, dynamic>;
+                final reflectJson = DeepResearchHelpers.parseJsonObject(
+                  reflectResp,
+                );
+                if (reflectJson != null) {
                   if (reflectJson['should_continue'] == false) {
                     stepDone = true;
                   } else {
-                    // Extract gaps and append as guidance for next search
                     final gaps = reflectJson['gaps'];
                     if (gaps is List && gaps.isNotEmpty) {
-                      // Drop gaps duplicating already-executed queries so the
-                      // researcher never gets an "already executed" stub.
                       final gapText = gaps
                           .whereType<String>()
                           .where(
@@ -7240,24 +7540,26 @@ jobs:
                         stepMessages.add(
                           ChatMessage(
                             role: MessageRole.user,
-                            text: 'Reflection identified gaps. Focus next searches on:\n$gapText',
+                            text:
+                                'Reflection identified gaps. Focus next searches on:\n$gapText',
                           ),
                         );
                       }
                     }
                   }
                 } else {
-                  debugPrint('Reflection JSON parse failed: $cleanReflectResp');
+                  debugPrint('Reflection JSON parse failed: $reflectResp');
                 }
-                } catch (e) {
-                  debugPrint('Reflection error: $e');
-                  stepMessages.add(
-                    const ChatMessage(
-                      role: MessageRole.user,
-                      text: 'Reflection analysis failed. Continue searching for more evidence or emit step_complete if you have enough.',
-                    ),
-                  );
-                }
+              } catch (e) {
+                debugPrint('Reflection error: $e');
+                stepMessages.add(
+                  const ChatMessage(
+                    role: MessageRole.user,
+                    text:
+                        'Reflection analysis failed. Continue searching for more evidence or emit step_complete if you have enough.',
+                  ),
+                );
+              }
             }
           } catch (e) {
             // Transient provider/network faults (rate limit, timeout, socket
@@ -7335,58 +7637,22 @@ jobs:
           stepFailure = 'Could not persist this phase to temp.json: $e';
         }
 
-        steps[i]['status'] = phaseStatus;
+        steps[i]['status'] = stepFailed ? 'failed' : phaseStatus;
         if (stepFailed) {
           steps[i]['error'] = stepFailure;
         }
         steps[i]['content'] = stepContent;
 
-        if (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty) {
-          final entitySet = <String>{};
-          for (final f in phaseFacts) {
-            final subj = (f['subject'] ?? '').toString().trim();
-            final val = (f['value'] ?? '').toString().trim();
-            if (subj.isNotEmpty) entitySet.add(subj);
-            if (val.isNotEmpty && val.length < 60) entitySet.add(val);
-          }
-          for (final f in phaseFindings) {
-            final text = (f['text'] ?? '').toString();
-            final words = text.split(RegExp(r'\s+'));
-            for (final w in words) {
-              final clean = w.replaceAll(RegExp(r'[^\w\-\.]'), '');
-              if (clean.length > 3 && clean.length < 40 &&
-                  (clean.contains('-') || clean.contains('.') || clean[0].toUpperCase() == clean[0])) {
-                entitySet.add(clean);
-              }
-            }
-          }
-          final sourceUrls = <String>{};
-          for (final f in [...phaseFacts, ...phaseFindings]) {
-            final s = (f['source'] ?? '').toString().trim();
-            if (s.isNotEmpty) sourceUrls.add(s);
-          }
-          crossPhaseContext.writeln('━━ Phase ${i + 1}: $phaseTitle ━━');
-          crossPhaseContext.writeln('Discovered entities: ${entitySet.join(', ')}');
-          crossPhaseContext.writeln('Key facts:');
-          for (final f in phaseFacts.take(15)) {
-            crossPhaseContext.writeln('  - ${f['subject']} ${f['metric']}: ${f['value']} (date: ${f['date'] ?? 'n/a'})');
-          }
-          crossPhaseContext.writeln('Key findings:');
-          for (final f in phaseFindings.take(8)) {
-            crossPhaseContext.writeln('  - ${f['text']}');
-          }
-          if (sourceUrls.isNotEmpty) {
-            crossPhaseContext.writeln('Sources found (use read_url on these if needed):');
-            for (final u in sourceUrls.take(8)) {
-              crossPhaseContext.writeln('  - $u');
-            }
-          }
-          crossPhaseContext.writeln('');
-        }
+        _appendPhaseToCrossPhaseContext(
+          crossPhaseContext,
+          phaseNumber: i + 1,
+          phaseTitle: phaseTitle,
+          facts: phaseFacts,
+          findings: phaseFindings,
+        );
 
-        _publishResearchState(sessionIndex, messageIndex, stateMap);
+        _publishResearchState(sessionId, messageIndex, stateMap);
         await _saveSessions();
-
         // IMPROVEMENT: Incremental checkpoint after each phase for crash recovery
         try {
           await _deepResearchBridge.saveCheckpoint(
@@ -7447,7 +7713,7 @@ jobs:
       }
 
       stateMap['status'] = 'generating_report';
-      _publishResearchState(sessionIndex, messageIndex, stateMap);
+      _publishResearchState(sessionId, messageIndex, stateMap);
 
       String tempJsonContent = '[]';
       // Raw temp.json is the source of truth for verified URLs (budget export
@@ -7478,13 +7744,13 @@ jobs:
           // Never discard successfully persisted phase summaries just because
           // a budget export was unexpectedly empty.
           tempJsonContent = rawTempJson;
+          compactText = '';
           executionIssues.add({
             'step': 'Writer input export',
             'status': 'warning',
             'error':
                 'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
           });
-        } else if (!rawHasPhases) {
           writerInputFailure =
               'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
         }
@@ -7594,7 +7860,8 @@ jobs:
 
       while (!finalReportDone && writerFailure == null && writerRetries < 3) {
         if (!mounted) return;
-        if (!_sendingSessionIds.contains(_sessions[sessionIndex].id)) {
+        if (!_sendingSessionIds.contains(sessionId)) {
+          writerFailure = 'Research cancelled by user.';
           break;
         }
         try {
@@ -7614,50 +7881,67 @@ jobs:
           );
 
           var tagHold = '';
-          await for (final chunk in stream) {
-            if (chunk.startsWith('[REASONING]')) {
-              reasoningText += chunk.substring(11);
-            } else {
-              var textChunk = tagHold + chunk;
-              tagHold = '';
-              final held = _splitPartialTag(textChunk, isThinking);
-              textChunk = held.$1;
-              tagHold = held.$2;
-              if (!isThinking &&
-                  (textChunk.contains('<think>') ||
-                      textChunk.contains('<reasoning>') ||
-                      textChunk.contains('<thought>'))) {
-                final tag = textChunk.contains('<think>')
-                    ? '<think>'
-                    : textChunk.contains('<thought>')
-                    ? '<thought>'
-                    : '<reasoning>';
-                final parts = textChunk.split(tag);
-                responseText += parts[0];
-                isThinking = true;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-              }
-
-              if (isThinking &&
-                  (textChunk.contains('</think>') ||
-                      textChunk.contains('</reasoning>') ||
-                      textChunk.contains('</thought>'))) {
-                final tag = textChunk.contains('</think>')
-                    ? '</think>'
-                    : textChunk.contains('</thought>')
-                    ? '</thought>'
-                    : '</reasoning>';
-                final parts = textChunk.split(tag);
-                reasoningText += parts[0];
-                isThinking = false;
-                textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
-                responseText += textChunk;
-              } else if (isThinking) {
-                reasoningText += textChunk;
+          await _consumeResearchStream(
+            sessionId: sessionId,
+            stream: stream,
+            onChunk: (chunk) {
+              if (chunk.startsWith('[REASONING]')) {
+                reasoningText += chunk.substring(11);
               } else {
-                responseText += textChunk;
+                var textChunk = tagHold + chunk;
+                tagHold = '';
+                final held = _splitPartialTag(textChunk, isThinking);
+                textChunk = held.$1;
+                tagHold = held.$2;
+                if (!isThinking &&
+                    (textChunk.contains('<think>') ||
+                        textChunk.contains('<reasoning>') ||
+                        textChunk.contains('<thought>'))) {
+                  final tag = textChunk.contains('<think>')
+                      ? '<think>'
+                      : textChunk.contains('<thought>')
+                      ? '<thought>'
+                      : '<reasoning>';
+                  final parts = textChunk.split(tag);
+                  responseText += parts[0];
+                  isThinking = true;
+                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                }
+
+                if (isThinking &&
+                    (textChunk.contains('</think>') ||
+                        textChunk.contains('</reasoning>') ||
+                        textChunk.contains('</thought>'))) {
+                  final tag = textChunk.contains('</think>')
+                      ? '</think>'
+                      : textChunk.contains('</thought>')
+                      ? '</thought>'
+                      : '</reasoning>';
+                  final parts = textChunk.split(tag);
+                  reasoningText += parts[0];
+                  isThinking = false;
+                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                  responseText += textChunk;
+                } else if (isThinking) {
+                  reasoningText += textChunk;
+                } else {
+                  responseText += textChunk;
+                }
               }
+            },
+          );
+          if (tagHold.isNotEmpty) {
+            if (isThinking) {
+              reasoningText += tagHold;
+            } else {
+              responseText += tagHold;
             }
+            tagHold = '';
+          }
+
+          if (!_sendingSessionIds.contains(sessionId)) {
+            writerFailure = 'Research cancelled by user.';
+            break;
           }
 
           finalReportText = responseText;
@@ -7680,6 +7964,7 @@ jobs:
       if (!finalReportDone && writerFailure == null) {
         writerFailure = 'Writer stopped before producing a report.';
       }
+      bool reportSaved = false;
       if (writerFailure == null) {
         finalReportText = _unwrapMarkdownArtifact(
           _stripSvgVisuals(finalReportText),
@@ -7696,10 +7981,15 @@ jobs:
           }
           stateMap['final_report'] = finalReportText;
           try {
+            final titleIdx = _sessions.indexWhere((s) => s.id == sessionId);
+            final sessionTitle = titleIdx != -1
+                ? _sessions[titleIdx].title
+                : 'research';
             stateMap['report_path'] = await _persistResearchReport(
-              _getResearchFileName(_sessions[sessionIndex].title),
+              _getResearchFileName(sessionTitle),
               finalReportText,
             );
+            reportSaved = true;
           } catch (e) {
             stateMap['report_save_error'] =
                 'Could not save the Markdown report: $e';
@@ -7712,29 +8002,36 @@ jobs:
       }
       stateMap['plan_end_ms'] = DateTime.now().millisecondsSinceEpoch;
 
-      // Clean up temp.json after successful report generation to free storage
-      if (writerFailure == null) {
+      // Only clean up temp.json after both report generation AND disk save succeed.
+      if (writerFailure == null && reportSaved) {
         try {
           await _deepResearchBridge.reset(keepCheckpoint: false);
           debugPrint('Deep Research: temp.json cleaned up after successful report.');
         } catch (e) {
-          debugPrint('Deep Research: temp.json cleanup failed: $e');
+          debugPrint('Deep Research: temp.json cleanup failed:$e');
         }
       }
 
       if (mounted) {
         setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          _sendingSessionIds.remove(_sessions[sessionIndex].id);
+          _sendingSessionIds.remove(sessionId);
+          final sIdx = _sessions.indexWhere((s) => s.id == sessionId);
+          if (sIdx == -1 ||
+              messageIndex < 0 ||
+              messageIndex >= _sessions[sIdx].messages.length) {
+            return;
+          }
+          final msgs = List<ChatMessage>.from(_sessions[sIdx].messages);
 
           String text = _updateResearchStateInText(
             msgs[messageIndex].text,
             stateMap,
           );
           if (writerFailure == null) {
-            text += "\n\n```markdown\n$finalReportText\n```";
+            final fence = finalReportText.contains('````') ? '`````' : '````';
+            text += '\n\n${fence}markdown\n$finalReportText\n$fence';
           } else {
-            text += "\n\n⚠️ Writer agent failed: $writerFailure";
+            text += '\n\n⚠️ Writer agent failed: $writerFailure';
           }
 
           msgs[messageIndex] = ChatMessage(
@@ -7744,11 +8041,13 @@ jobs:
                 ? finalReasoningText
                 : msgs[messageIndex].reasoning,
           );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          _sessions[sIdx] = _sessions[sIdx].copyWith(
             messages: msgs,
           );
         });
         await _saveSessions();
+      } else {
+        _sendingSessionIds.remove(sessionId);
       }
     } catch (globalError) {
       debugPrint("Global Deep Research Loop error: $globalError");
@@ -7757,8 +8056,14 @@ jobs:
       stateMap['plan_end_ms'] = DateTime.now().millisecondsSinceEpoch;
       if (mounted) {
         setState(() {
-          final msgs = List<ChatMessage>.from(_sessions[sessionIndex].messages);
-          _sendingSessionIds.remove(_sessions[sessionIndex].id);
+          _sendingSessionIds.remove(sessionId);
+          final sIdx = _sessions.indexWhere((s) => s.id == sessionId);
+          if (sIdx == -1 ||
+              messageIndex < 0 ||
+              messageIndex >= _sessions[sIdx].messages.length) {
+            return;
+          }
+          final msgs = List<ChatMessage>.from(_sessions[sIdx].messages);
           msgs[messageIndex] = ChatMessage(
             role: MessageRole.assistant,
             text:
@@ -7766,11 +8071,13 @@ jobs:
                 '\n\n⚠️ Deep Research stopped before completion. Reason: $globalError',
             reasoning: msgs[messageIndex].reasoning,
           );
-          _sessions[sessionIndex] = _sessions[sessionIndex].copyWith(
+          _sessions[sIdx] = _sessions[sIdx].copyWith(
             messages: msgs,
           );
         });
         await _saveSessions();
+      } else {
+        _sendingSessionIds.remove(sessionId);
       }
     }
   }

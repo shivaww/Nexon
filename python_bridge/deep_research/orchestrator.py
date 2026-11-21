@@ -41,12 +41,47 @@ class DeepResearchOrchestrator:
 
     async def reset_run(self, keep_checkpoint: bool = False) -> dict[str, str]:
         """Clear temp.json and in-memory caches for a new research run."""
-        self.run_ingested_urls.clear()
-        await self._write_temp([])
-        if not keep_checkpoint:
-            await self._write_checkpoint(RunCheckpoint().to_dict())
+        async with self._lock:
+            self.run_ingested_urls.clear()
+            self._atomic_write_unlocked(self.temp_path, [])
+            if not keep_checkpoint:
+                self._atomic_write_unlocked(
+                    self.checkpoint_path, RunCheckpoint().to_dict()
+                )
         logger.info("Deep Research run reset (keep_checkpoint=%s).", keep_checkpoint)
         return {"status": "ok"}
+
+    @classmethod
+    def _fact_dedup_key(cls, fact: dict[str, Any]) -> tuple[str, str, str, str]:
+        norm = cls._normalize_url(str(fact.get("source") or ""))
+        metric = str(fact.get("metric") or "").strip().lower()
+        subject = str(fact.get("subject") or "").strip().lower()
+        value = str(fact.get("value") or "").strip().lower()
+        return (norm, metric, subject, value)
+
+    @classmethod
+    def _finding_dedup_key(cls, finding: dict[str, Any]) -> tuple[str, str]:
+        norm = cls._normalize_url(str(finding.get("source") or ""))
+        text = " ".join(str(finding.get("text") or "").strip().lower().split())
+        return (norm, text)
+
+    @classmethod
+    def _dedup_url_items(
+        cls, existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for item in list(existing) + list(incoming):
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "")
+            key = cls._normalize_url(url) or url.strip().lower()
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            merged.append(item)
+        return merged
 
     async def update_phase(
         self,
@@ -59,70 +94,81 @@ class DeepResearchOrchestrator:
         failed_fetches: list[dict[str, str]] | None = None,
         status: str = "running",
     ) -> dict[str, str]:
-        """Update or insert a phase record in temp.json.
+        """Update or insert a phase record in temp.json atomically."""
+        async with self._lock:
+            payload = self._read_temp()
 
-        Tracks ingested source URLs to prevent duplicate evidence from the
-        same URL contributing to multiple phases.
-        """
-        payload = self._read_temp()
+            phase_idx = -1
+            for idx, phase in enumerate(payload):
+                if phase.get("stage_id") == stage_id:
+                    phase_idx = idx
+                    break
 
-        phase_idx = -1
-        for idx, phase in enumerate(payload):
-            if phase.get("stage_id") == stage_id:
-                phase_idx = idx
-                break
+            existing = payload[phase_idx] if phase_idx != -1 else {}
+            existing_facts = [
+                f for f in (existing.get("facts") or []) if isinstance(f, dict)
+            ]
+            existing_findings = [
+                f for f in (existing.get("findings") or []) if isinstance(f, dict)
+            ]
 
-        # Deduplicate facts by (source URL, stage_id): skip if this URL was
-        # already ingested in THIS phase (prevents same source duplicating
-        # within a phase), but allow it in different phases.
-        seen_this_phase: set[str] = set()
-        deduped_facts: list[dict[str, str]] = []
-        deduped_findings: list[dict[str, str]] = []
-        for fact in facts or []:
-            source = str(fact.get("source") or "")
-            norm = self._normalize_url(source)
-            key = f"{norm}::{stage_id}"
-            if norm and key in seen_this_phase:
-                continue
-            if norm:
-                seen_this_phase.add(key)
-            deduped_facts.append(fact)
-        for finding in findings or []:
-            source = str(finding.get("source") or "")
-            norm = self._normalize_url(source)
-            key = f"{norm}::{stage_id}"
-            if norm and key in seen_this_phase:
-                continue
-            if norm:
-                seen_this_phase.add(key)
-            deduped_findings.append(finding)
+            # Deduplicate facts and findings independently by content+source
+            # (never sharing a bare-URL set across facts and findings), and
+            # deduplicate against existing records so cumulative calls never duplicate.
+            seen_facts: set[tuple[str, str, str, str]] = set()
+            merged_facts: list[dict[str, Any]] = []
+            for fact in existing_facts + [
+                f for f in (facts or []) if isinstance(f, dict)
+            ]:
+                key = self._fact_dedup_key(fact)
+                if key in seen_facts:
+                    continue
+                seen_facts.add(key)
+                norm = self._normalize_url(str(fact.get("source") or ""))
+                if norm:
+                    self.run_ingested_urls.add(norm)
+                merged_facts.append(fact)
 
-        new_phase = {
-            "stage_id": stage_id,
-            "phase_title": phase_title,
-            "summary": summary or "",
-            "facts": deduped_facts,
-            "findings": deduped_findings,
-            "skipped_pdfs": skipped_pdfs or [],
-            "failed_fetches": failed_fetches or [],
-            "status": status or "running",
-        }
+            seen_findings: set[tuple[str, str]] = set()
+            merged_findings: list[dict[str, Any]] = []
+            for finding in existing_findings + [
+                f for f in (findings or []) if isinstance(f, dict)
+            ]:
+                key = self._finding_dedup_key(finding)
+                if key in seen_findings:
+                    continue
+                seen_findings.add(key)
+                norm = self._normalize_url(str(finding.get("source") or ""))
+                if norm:
+                    self.run_ingested_urls.add(norm)
+                merged_findings.append(finding)
 
-        if phase_idx != -1:
-            existing = payload[phase_idx]
-            merged_facts = list(existing.get("facts") or []) + deduped_facts
-            merged_findings = list(existing.get("findings") or []) + deduped_findings
             merged_facts = self._cap_evidence(merged_facts, 20)
             merged_findings = self._cap_evidence(merged_findings, 30)
-            new_phase["facts"] = merged_facts
-            new_phase["findings"] = merged_findings
-            if not summary:
-                new_phase["summary"] = existing.get("summary") or ""
-            payload[phase_idx] = new_phase
-        else:
-            payload.append(new_phase)
+            merged_skipped_pdfs = self._dedup_url_items(
+                existing.get("skipped_pdfs") or [], skipped_pdfs or []
+            )
+            merged_failed_fetches = self._dedup_url_items(
+                existing.get("failed_fetches") or [], failed_fetches or []
+            )
 
-        await self._write_temp(payload)
+            new_phase = {
+                "stage_id": stage_id,
+                "phase_title": phase_title or existing.get("phase_title") or "",
+                "summary": summary or existing.get("summary") or "",
+                "facts": merged_facts,
+                "findings": merged_findings,
+                "skipped_pdfs": merged_skipped_pdfs,
+                "failed_fetches": merged_failed_fetches,
+                "status": status or existing.get("status") or "running",
+            }
+
+            if phase_idx != -1:
+                payload[phase_idx] = new_phase
+            else:
+                payload.append(new_phase)
+
+            self._atomic_write_unlocked(self.temp_path, payload)
         logger.info("Updated phase record for %s in temp.json.", stage_id)
         return {"status": "ok"}
 
@@ -271,14 +317,21 @@ class DeepResearchOrchestrator:
                 }
             )
 
-        def estimate_tokens(obj: Any) -> int:
-            text = json.dumps(obj, ensure_ascii=True)
-            # ~4 chars per token heuristic (more stable than word*1.3)
-            return max(1, (len(text) + 3) // 4) if text else 0
+        def chars_to_tokens(char_count: int) -> int:
+            return max(1, (char_count + 3) // 4) if char_count > 0 else 0
+
+        def serialized_len(obj: Any) -> int:
+            return len(json.dumps(obj, ensure_ascii=True, indent=2))
+
+        def record_delta_chars(record: dict[str, Any]) -> int:
+            # Indent-2 serialized record nested 3 levels deep inside a phase list.
+            dumped = json.dumps(record, ensure_ascii=True, indent=2)
+            line_count = dumped.count("\n") + 1
+            return len(dumped) + (line_count * 6) + 2
 
         # Start with metadata + primary records (facts if prefer_facts, else findings)
         accepted: list[dict[str, Any]] = []
-        used = 0
+        used_chars = 2  # "[]"
         truncated_facts = 0
         truncated_findings = 0
 
@@ -297,66 +350,62 @@ class DeepResearchOrchestrator:
                 "status": phase["status"],
             }
             accepted.append(base)
-            used = estimate_tokens(accepted)
+            used_chars += serialized_len(base) + 4
 
-            # Add primary records greedily; full recompute after each add.
+            # Add primary records greedily using incremental char accounting.
             kept_primary: list[dict] = []
             for record in phase[primary_key]:
-                kept_primary.append(record)
-                base[primary_key] = kept_primary
-                used = estimate_tokens(accepted)
-                if used > max_evidence_tokens:
-                    kept_primary.pop()
-                    base[primary_key] = list(kept_primary)
-                    used = estimate_tokens(accepted)
+                delta = record_delta_chars(record)
+                if chars_to_tokens(used_chars + delta) > max_evidence_tokens:
                     if prefer_facts:
                         truncated_facts += 1
                     else:
                         truncated_findings += 1
+                    continue
+                kept_primary.append(record)
+                used_chars += delta
             base[primary_key] = kept_primary
 
-        # Round-robin secondary records across phases; full recompute after each add.
+        # Round-robin secondary records across phases using incremental char accounting.
         max_rounds = max((len(p[secondary_key]) for p in working), default=0)
         for round_i in range(max_rounds):
             for p_idx, phase in enumerate(working):
                 if round_i >= len(phase[secondary_key]):
                     continue
                 record = phase[secondary_key][round_i]
-                accepted[p_idx][secondary_key].append(record)
-                used = estimate_tokens(accepted)
-                if used > max_evidence_tokens:
-                    accepted[p_idx][secondary_key].pop()
-                    used = estimate_tokens(accepted)
+                delta = record_delta_chars(record)
+                if chars_to_tokens(used_chars + delta) > max_evidence_tokens:
                     if prefer_facts:
                         truncated_findings += 1
                     else:
                         truncated_facts += 1
+                    continue
+                accepted[p_idx][secondary_key].append(record)
+                used_chars += delta
 
-        # If still over budget (headers alone can overshoot), drop facts too.
-        used = estimate_tokens(accepted)
-        if used > max_evidence_tokens:
-            # Drop lowest-priority facts from the end of each phase, round-robin.
-            while used > max_evidence_tokens:
+        # Verify against exact indent=2 serialization and trim if still over budget.
+        used_chars = serialized_len(accepted)
+        if chars_to_tokens(used_chars) > max_evidence_tokens:
+            while chars_to_tokens(used_chars) > max_evidence_tokens:
                 dropped_any = False
                 for p in reversed(accepted):
                     facts_list = p.get("facts") or []
                     if facts_list:
-                        facts_list.pop()
+                        popped = facts_list.pop()
                         truncated_facts += 1
                         dropped_any = True
-                        used = estimate_tokens(accepted)
-                        if used <= max_evidence_tokens:
+                        used_chars = max(0, used_chars - record_delta_chars(popped))
+                        if chars_to_tokens(used_chars) <= max_evidence_tokens:
                             break
                 if not dropped_any:
-                    # Last resort: strip findings then summaries.
                     for p in reversed(accepted):
                         findings_list = p.get("findings") or []
                         if findings_list:
-                            findings_list.pop()
+                            popped = findings_list.pop()
                             truncated_findings += 1
-                            used = estimate_tokens(accepted)
                             dropped_any = True
-                            if used <= max_evidence_tokens:
+                            used_chars = max(0, used_chars - record_delta_chars(popped))
+                            if chars_to_tokens(used_chars) <= max_evidence_tokens:
                                 break
                     if not dropped_any:
                         break
@@ -374,15 +423,16 @@ class DeepResearchOrchestrator:
         elif non_empty:
             truncated_phases = max(0, len(phases) - len(non_empty))
 
-        # Final safety: if still over, shrink non_empty further.
-        while non_empty and estimate_tokens(non_empty) > max_evidence_tokens and len(non_empty) > 1:
+        # Final safety against exact indent=2 output.
+        content = json.dumps(non_empty, ensure_ascii=True, indent=2)
+        while non_empty and chars_to_tokens(len(content)) > max_evidence_tokens and len(non_empty) > 1:
             non_empty.pop()
             truncated_phases += 1
+            content = json.dumps(non_empty, ensure_ascii=True, indent=2)
 
-        content = json.dumps(non_empty, ensure_ascii=True, indent=2)
         return {
             "content": content,
-            "token_estimate": estimate_tokens(non_empty),
+            "token_estimate": chars_to_tokens(len(content)),
             "truncated_facts": truncated_facts,
             "truncated_findings": truncated_findings,
             "truncated_phases": truncated_phases,
@@ -416,15 +466,18 @@ class DeepResearchOrchestrator:
     async def _write_checkpoint(self, payload: dict[str, Any]) -> None:
         await self._atomic_write(self.checkpoint_path, payload)
 
+    def _atomic_write_unlocked(self, path: Path, payload: Any) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_file = path.with_suffix(path.suffix + ".tmp")
+            temp_file.write_text(
+                json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
+            )
+            temp_file.replace(path)
+        except Exception as e:
+            logger.error("Failed to write %s: %s", path, e)
+            raise
+
     async def _atomic_write(self, path: Path, payload: Any) -> None:
         async with self._lock:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                temp_file = path.with_suffix(path.suffix + ".tmp")
-                temp_file.write_text(
-                    json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8"
-                )
-                temp_file.replace(path)
-            except Exception as e:
-                logger.error("Failed to write %s: %s", path, e)
-                raise
+            self._atomic_write_unlocked(path, payload)
