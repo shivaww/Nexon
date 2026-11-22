@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -46,6 +47,7 @@ class ChatSurface extends StatelessWidget {
     this.onStop,
     this.onOpenSource,
     this.onOpenLiveVoice,
+    this.onRegenerate,
     this.activeFeaturePills = const [],
     super.key,
   });
@@ -86,6 +88,7 @@ class ChatSurface extends StatelessWidget {
   final int? activeBranchIndex;
   final ValueChanged<int>? onBranchChanged;
   final List<Widget> activeFeaturePills;
+  final ValueChanged<int>? onRegenerate;
 
   @override
   Widget build(BuildContext context) {
@@ -107,321 +110,385 @@ class ChatSurface extends StatelessWidget {
           colors: [Color(0xFFFBF6EC), Color(0xFFF5EFE4), Color(0xFFEFE5D5)],
         ),
       ),
-      child: Stack(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Positioned.fill(
-            child: ListView.builder(
-              controller: scrollController,
-              padding: const EdgeInsets.fromLTRB(18, 84, 18, 90),
-              itemCount: messages.length + (isSending ? 1 : 0),
-              itemBuilder: (context, int index) {
-                if (index == messages.length) {
-                  // No generic "Thinking" placeholder — the assistant bubble's
-                  // own StreamingCursor already signals that a reply is being
-                  // generated. This row now appears only when there is real
-                  // live tool progress worth reporting (e.g. a search running).
-                  if (toolStatus.isEmpty) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Color(0xFF7B4E2E),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            toolStatus,
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              color: Color(0xFF6C5946),
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                if (_isPairedResult(messages, index)) {
-                  return const SizedBox.shrink();
-                }
-                AvatarAnimationState state = AvatarAnimationState.idle;
-                if (isSending && index == messages.length - 1) {
-                  final msg = messages[index];
-                  final nativeTool = detectNativeToolCall(msg.text);
-                  if (nativeTool == 'web_search' ||
-                      nativeTool == 'search_web') {
-                    state = AvatarAnimationState.searching;
-                  } else if (nativeTool != null) {
-                    state = AvatarAnimationState.mcp;
-                  } else if ((msg.reasoning?.isNotEmpty ?? false) &&
-                      msg.text.isEmpty) {
-                    state = AvatarAnimationState.reasoning;
-                  } else {
-                    state = AvatarAnimationState.typing;
-                  }
-                }
-                final isUser = messages[index].role == MessageRole.user;
-                // One assistant turn = one run of consecutive non-user
-                // messages. Earlier rounds fold their thinking and quiet
-                // tool rows into the turn's last visible bubble, keeping
-                // one Thought Process block per user message.
-                int runStart = index;
-                bool foldThoughtIntoLater = false;
-                List<ChatMessage> mergedPrior = const [];
-                List<String?> mergedPriorResults = const [];
-                if (!isUser) {
-                  while (runStart - 1 >= 0 &&
-                      messages[runStart - 1].role != MessageRole.user) {
-                    runStart--;
-                  }
-                  int runEnd = index;
-                  while (runEnd + 1 < messages.length &&
-                      messages[runEnd + 1].role != MessageRole.user) {
-                    runEnd++;
-                  }
-                  int displayIndex = runEnd;
-                  while (displayIndex > runStart &&
-                      _isPairedResult(messages, displayIndex)) {
-                    displayIndex--;
-                  }
-                  foldThoughtIntoLater = index != displayIndex;
-                  if (!foldThoughtIntoLater) {
-                    final prior = <ChatMessage>[];
-                    final priorResults = <String?>[];
-                    for (int k = runStart; k < displayIndex; k++) {
-                      if (_isPairedResult(messages, k)) continue;
-                      prior.add(messages[k]);
-                      priorResults.add(
-                        k + 1 < messages.length &&
-                                _isPairedResult(messages, k + 1)
-                            ? messages[k + 1].text
-                            : null,
-                      );
-                    }
-                    mergedPrior = prior;
-                    mergedPriorResults = priorResults;
-                  }
-                }
-                int groupPrev = index - 1;
-                while (groupPrev >= 0 && _isPairedResult(messages, groupPrev)) {
-                  groupPrev--;
-                }
-                final isFirstOfGroup = isUser
-                    ? (groupPrev < 0 ||
-                        messages[groupPrev].role != messages[index].role)
-                    : (runStart <= 0 ||
-                        messages[runStart - 1].role != messages[index].role);
-                List<int> branchIndicesForVersions = [];
-                int currentVersionIndex = 0;
-
-                if (isUser && branches != null && branches!.isNotEmpty) {
-                  final activeMsgs = messages;
-                  final prefix = activeMsgs.sublist(0, index);
-                  final seenTexts = <String>{};
-
-                  for (int b = 0; b < branches!.length; b++) {
-                    final branchMsgs = branches![b];
-                    if (branchMsgs.length > index) {
-                      bool matches = true;
-                      for (int j = 0; j < index; j++) {
-                        if (branchMsgs[j].text != prefix[j].text ||
-                            branchMsgs[j].role != prefix[j].role) {
-                          matches = false;
-                          break;
-                        }
-                      }
-                      if (matches) {
-                        final msgText = branchMsgs[index].text;
-                        if (!seenTexts.contains(msgText)) {
-                          seenTexts.add(msgText);
-                          branchIndicesForVersions.add(b);
-                        }
-                      }
-                    }
-                  }
-
-                  currentVersionIndex = branchIndicesForVersions.indexWhere(
-                    (bIdx) =>
-                        branches![bIdx][index].text == messages[index].text,
-                  );
-                  if (currentVersionIndex == -1) currentVersionIndex = 0;
-                }
-
-                return MessageBubble(
-                  message: messages[index],
-                  index: index,
-                  mergedPrior: mergedPrior,
-                  mergedPriorResults: mergedPriorResults,
-                  foldThoughtIntoLater: foldThoughtIntoLater,
-                  isFirstOfGroup: isFirstOfGroup,
-                  isLastMessage: index == _lastVisibleIndex(messages),
-                  pairedResultText: (index + 1 < messages.length &&
-                          _isPairedResult(messages, index + 1))
-                      ? messages[index + 1].text
-                      : null,
-                  reasoningEnabled: settings.reasoningEnabled,
-                  animationState: state,
-                  agenticWorkspace: agenticWorkspace,
-                  fileName: fileName,
-                  onOpenSource: onOpenSource,
-                  isSending: isSending,
-                  isLiveTurn:
-                      isSending && !isUser && index > lastUserIndex,
-                  onEditUserMessage: () => onEditUserMessage(index),
-                  onStartResearch: ([editedStateMap]) =>
-                      onStartResearch(index, editedStateMap),
-                  versionsCount: branchIndicesForVersions.length,
-                  currentVersionIndex: currentVersionIndex,
-                  onVersionChanged: branchIndicesForVersions.isEmpty
-                      ? null
-                      : (int vIdx) {
-                          onBranchChanged?.call(branchIndicesForVersions[vIdx]);
-                        },
-                );
-              },
-            ),
-          ),
-          if (todoListVisible && activeTodos.isNotEmpty)
-            Positioned(
-              top: 84,
-              right: 0,
-              bottom: 0,
-              width: 280,
-              child: TodoListPanel(
-                todos: activeTodos,
-                onClose: onCloseTodoList,
-              ),
-            ),
-          if (messages.isEmpty && deepResearchEnabled)
-            Center(
-              child: LiquidGlassSurface(
-                margin: const EdgeInsets.symmetric(horizontal: 24),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 24,
-                ),
-                borderRadius: BorderRadius.circular(20),
-                backgroundColor: const Color(
-                  0xFFFFF9F2,
-                ).withValues(alpha: 0.85),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFFBF6EC),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.psychology,
-                        color: Color(0xFF7B4E2E),
-                        size: 32,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Deep Research Mode Active',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2D241C),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Please select a model which is good at reasoning and make sure you are using at least 32k context model.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF6C5946),
-                        height: 1.4,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: ClipRect(
-              child: LiquidGlassSurface(
-                borderRadius: const BorderRadius.vertical(
-                  bottom: Radius.circular(20),
-                ),
-                margin: EdgeInsets.zero,
-                padding: const EdgeInsets.only(bottom: 2),
-                child: SafeArea(
-                  bottom: false,
-                  child: ChatHeader(
-                    provider: provider,
-                    settings: settings,
-                    model: model,
-                    onOpenProvider: onOpenProvider,
-                    onOpenModel: onOpenModel,
-                    onOpenLiveVoice: onOpenLiveVoice,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          if (agenticEnabled && activeTodos.isNotEmpty)
-            Positioned(
-              top: 0,
-              right: 76,
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: LiquidGlassIconButton(
-                    icon: Icons.checklist_rounded,
-                    size: 40,
-                    tooltip: todoListVisible
-                        ? 'Close todo list'
-                        : 'Open todo list',
-                    iconColor: todoListVisible
-                        ? const Color(0xFF059669)
-                        : const Color(0xFF5C3D26),
-                    onPressed: () => onToggleTodoList?.call(),
-                  ),
-                ),
-              ),
-            ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+          Expanded(
+            child: Stack(
               children: [
-                Composer(
-                  controller: messageController,
-                  isSending: isSending,
-                  onSend: onSend,
-                  onStop: onStop,
-                  onPlusPressed: onPlusPressed,
-                  onOpenLiveVoice: onOpenLiveVoice,
-                  attachedImages: attachedImages,
-                  onRemoveImage: onRemoveImage,
-                  attachedFiles: attachedFiles,
-                  onRemoveFile: onRemoveFile,
-                  deepResearchEnabled: deepResearchEnabled,
-                  isEditing: isEditing,
-                  onCancelEdit: onCancelEdit,
-                  activeFeaturePills: activeFeaturePills,
+                Positioned.fill(
+                  child: ListView.builder(
+                    controller: scrollController,
+                    padding: const EdgeInsets.fromLTRB(18, 84, 18, 16),
+                    itemCount: messages.length + (isSending ? 1 : 0),
+                    itemBuilder: (context, int index) {
+                      if (index == messages.length) {
+                        // No generic "Thinking" placeholder — the assistant bubble's
+                        // own StreamingCursor already signals that a reply is being
+                        // generated. This row now appears only when there is real
+                        // live tool progress worth reporting (e.g. a search running).
+                        if (toolStatus.isEmpty) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF7B4E2E),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  toolStatus,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: Color(0xFF6C5946),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+                      if (_isPairedResult(messages, index)) {
+                        return const SizedBox.shrink();
+                      }
+                      AvatarAnimationState state = AvatarAnimationState.idle;
+                      if (isSending && index == messages.length - 1) {
+                        final msg = messages[index];
+                        final nativeTool = detectNativeToolCall(msg.text);
+                        if (nativeTool == 'web_search' ||
+                            nativeTool == 'search_web') {
+                          state = AvatarAnimationState.searching;
+                        } else if (nativeTool != null) {
+                          state = AvatarAnimationState.mcp;
+                        } else if ((msg.reasoning?.isNotEmpty ?? false) &&
+                            msg.text.isEmpty) {
+                          state = AvatarAnimationState.reasoning;
+                        } else {
+                          state = AvatarAnimationState.typing;
+                        }
+                      }
+                      final isUser = messages[index].role == MessageRole.user;
+                      // One assistant turn = one run of consecutive non-user
+                      // messages. Earlier rounds fold their thinking and quiet
+                      // tool rows into the turn's last visible bubble, keeping
+                      // one Thought Process block per user message.
+                      int runStart = index;
+                      bool foldThoughtIntoLater = false;
+                      List<ChatMessage> mergedPrior = const [];
+                      List<String?> mergedPriorResults = const [];
+                      if (!isUser) {
+                        while (runStart - 1 >= 0 &&
+                            messages[runStart - 1].role != MessageRole.user) {
+                          runStart--;
+                        }
+                        int runEnd = index;
+                        while (runEnd + 1 < messages.length &&
+                            messages[runEnd + 1].role != MessageRole.user) {
+                          runEnd++;
+                        }
+                        int displayIndex = runEnd;
+                        while (displayIndex > runStart &&
+                            _isPairedResult(messages, displayIndex)) {
+                          displayIndex--;
+                        }
+                        foldThoughtIntoLater = index != displayIndex;
+                        if (!foldThoughtIntoLater) {
+                          final prior = <ChatMessage>[];
+                          final priorResults = <String?>[];
+                          for (int k = runStart; k < displayIndex; k++) {
+                            if (_isPairedResult(messages, k)) continue;
+                            prior.add(messages[k]);
+                            priorResults.add(
+                              k + 1 < messages.length &&
+                                      _isPairedResult(messages, k + 1)
+                                  ? messages[k + 1].text
+                                  : null,
+                            );
+                          }
+                          mergedPrior = prior;
+                          mergedPriorResults = priorResults;
+                        }
+                      }
+                      int groupPrev = index - 1;
+                      while (groupPrev >= 0 &&
+                          _isPairedResult(messages, groupPrev)) {
+                        groupPrev--;
+                      }
+                      final isFirstOfGroup = isUser
+                          ? (groupPrev < 0 ||
+                                messages[groupPrev].role !=
+                                    messages[index].role)
+                          : (runStart <= 0 ||
+                                messages[runStart - 1].role !=
+                                    messages[index].role);
+                      List<int> branchIndicesForVersions = [];
+                      int currentVersionIndex = 0;
+
+                      if (isUser && branches != null && branches!.isNotEmpty) {
+                        final activeMsgs = messages;
+                        final prefix = activeMsgs.sublist(0, index);
+                        final seenTexts = <String>{};
+
+                        for (int b = 0; b < branches!.length; b++) {
+                          final branchMsgs = branches![b];
+                          if (branchMsgs.length > index) {
+                            bool matches = true;
+                            for (int j = 0; j < index; j++) {
+                              if (branchMsgs[j].text != prefix[j].text ||
+                                  branchMsgs[j].role != prefix[j].role) {
+                                matches = false;
+                                break;
+                              }
+                            }
+                            if (matches) {
+                              final msgText = branchMsgs[index].text;
+                              if (!seenTexts.contains(msgText)) {
+                                seenTexts.add(msgText);
+                                branchIndicesForVersions.add(b);
+                              }
+                            }
+                          }
+                        }
+
+                        currentVersionIndex = branchIndicesForVersions
+                            .indexWhere(
+                              (bIdx) =>
+                                  branches![bIdx][index].text ==
+                                  messages[index].text,
+                            );
+                        if (currentVersionIndex == -1) currentVersionIndex = 0;
+                      }
+
+                      return MessageBubble(
+                        key: ValueKey<int>(index),
+                        message: messages[index],
+                        index: index,
+                        mergedPrior: mergedPrior,
+                        mergedPriorResults: mergedPriorResults,
+                        foldThoughtIntoLater: foldThoughtIntoLater,
+                        isFirstOfGroup: isFirstOfGroup,
+                        isLastMessage: index == _lastVisibleIndex(messages),
+                        pairedResultText:
+                            (index + 1 < messages.length &&
+                                _isPairedResult(messages, index + 1))
+                            ? messages[index + 1].text
+                            : null,
+                        reasoningEnabled: settings.reasoningEnabled,
+                        animationState: state,
+                        agenticWorkspace: agenticWorkspace,
+                        fileName: fileName,
+                        onOpenSource: onOpenSource,
+                        isSending: isSending,
+                        isLiveTurn:
+                            isSending && !isUser && index > lastUserIndex,
+                        onEditUserMessage: () => onEditUserMessage(index),
+                        onRegenerate: onRegenerate == null
+                            ? null
+                            : () => onRegenerate!(index),
+                        animateIn: index >= messages.length - 2,
+                        onStartResearch: ([editedStateMap]) =>
+                            onStartResearch(index, editedStateMap),
+                        versionsCount: branchIndicesForVersions.length,
+                        currentVersionIndex: currentVersionIndex,
+                        onVersionChanged: branchIndicesForVersions.isEmpty
+                            ? null
+                            : (int vIdx) {
+                                onBranchChanged?.call(
+                                  branchIndicesForVersions[vIdx],
+                                );
+                              },
+                      );
+                    },
+                  ),
+                ),
+                if (todoListVisible && activeTodos.isNotEmpty)
+                  Positioned(
+                    top: 84,
+                    right: 0,
+                    bottom: 0,
+                    width: 280,
+                    child: TodoListPanel(
+                      todos: activeTodos,
+                      onClose: onCloseTodoList,
+                    ),
+                  ),
+                if (messages.isEmpty && deepResearchEnabled)
+                  Center(
+                    child: LiquidGlassSurface(
+                      margin: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 24,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      backgroundColor: const Color(0xFFFFF9F2)
+                          .withValues(alpha: 0.85),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFFBF6EC),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.psychology,
+                              color: Color(0xFF7B4E2E),
+                              size: 32,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Deep Research Mode Active',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D241C),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Please select a model which is good at reasoning and make sure you are using at least 32k context model.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF6C5946),
+                              height: 1.4,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: ClipRect(
+                    child: LiquidGlassSurface(
+                      borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(20),
+                      ),
+                      margin: EdgeInsets.zero,
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: SafeArea(
+                        bottom: false,
+                        child: ChatHeader(
+                          provider: provider,
+                          settings: settings,
+                          model: model,
+                          onOpenProvider: onOpenProvider,
+                          onOpenModel: onOpenModel,
+                          onOpenLiveVoice: onOpenLiveVoice,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (agenticEnabled && activeTodos.isNotEmpty)
+                  Positioned(
+                    top: 0,
+                    right: 76,
+                    child: SafeArea(
+                      bottom: false,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: LiquidGlassIconButton(
+                          icon: Icons.checklist_rounded,
+                          size: 40,
+                          tooltip: todoListVisible
+                              ? 'Close todo list'
+                              : 'Open todo list',
+                          iconColor: todoListVisible
+                              ? const Color(0xFF059669)
+                              : const Color(0xFF5C3D26),
+                          onPressed: () => onToggleTodoList?.call(),
+                        ),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 12,
+                  child: Center(
+                    child: ListenableBuilder(
+                      listenable: scrollController,
+                      builder: (context, _) {
+                        final c = scrollController;
+                        final show =
+                            c.hasClients &&
+                            c.position.hasContentDimensions &&
+                            c.position.maxScrollExtent - c.position.pixels >
+                                160;
+                        return IgnorePointer(
+                          ignoring: !show,
+                          child: AnimatedOpacity(
+                            opacity: show ? 1 : 0,
+                            duration: const Duration(milliseconds: 180),
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                LiquidGlassIconButton(
+                                  icon: Icons.arrow_downward_rounded,
+                                  size: 40,
+                                  tooltip: 'Jump to latest',
+                                  iconColor: const Color(0xFF5C3D26),
+                                  onPressed: () {
+                                    if (!c.hasClients) return;
+                                    c.animateTo(
+                                      c.position.maxScrollExtent,
+                                      duration: const Duration(
+                                        milliseconds: 280,
+                                      ),
+                                      curve: Curves.easeOutCubic,
+                                    );
+                                  },
+                                ),
+                                if (isSending)
+                                  const Positioned(
+                                    top: 2,
+                                    right: 2,
+                                    child: _PulseDot(),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
                 ),
               ],
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Composer(
+              controller: messageController,
+              isSending: isSending,
+              onSend: onSend,
+              onStop: onStop,
+              onPlusPressed: onPlusPressed,
+              onOpenLiveVoice: onOpenLiveVoice,
+              attachedImages: attachedImages,
+              onRemoveImage: onRemoveImage,
+              attachedFiles: attachedFiles,
+              onRemoveFile: onRemoveFile,
+              deepResearchEnabled: deepResearchEnabled,
+              isEditing: isEditing,
+              onCancelEdit: onCancelEdit,
+              activeFeaturePills: activeFeaturePills,
             ),
           ),
         ],
@@ -452,4 +519,40 @@ int _lastVisibleIndex(List<ChatMessage> msgs) {
     i--;
   }
   return i;
+}
+
+class _PulseDot extends StatefulWidget {
+  const _PulseDot();
+
+  @override
+  State<_PulseDot> createState() => _PulseDotState();
+}
+
+class _PulseDotState extends State<_PulseDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.35, end: 1).animate(_c),
+      child: Container(
+        width: 9,
+        height: 9,
+        decoration: const BoxDecoration(
+          color: Color(0xFF7B4E2E),
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
 }

@@ -5,8 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:nexon/main.dart';
 
-class ChatHistoryPanel extends StatelessWidget {
-  const ChatHistoryPanel({
+class _ChatHistoryBody extends StatelessWidget {
+  const _ChatHistoryBody({
+    required this.query,
+    required this.searchController,
+    required this.onQueryChanged,
+    required this.modesOf,
     required this.sessions,
     required this.activeSessionId,
     required this.onSessionTap,
@@ -30,11 +34,19 @@ class ChatHistoryPanel extends StatelessWidget {
   final int visibleLimit;
   final bool isLoadingMore;
   final VoidCallback onLoadMore;
+  final String query;
+  final TextEditingController searchController;
+  final ValueChanged<String> onQueryChanged;
+  final _ChatModes Function(ChatSession) modesOf;
 
   @override
   Widget build(BuildContext context) {
     // Sort pinned chats to the top
-    final sortedSessions = List<ChatSession>.from(sessions)
+    final q = query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? sessions
+        : sessions.where((s) => _sessionMatches(s, q)).toList();
+    final sortedSessions = List<ChatSession>.from(filtered)
       ..sort((a, b) {
         if (a.isPinned && !b.isPinned) return -1;
         if (!a.isPinned && b.isPinned) return 1;
@@ -95,6 +107,7 @@ class ChatHistoryPanel extends StatelessWidget {
       for (final session in items) {
         final selected = session.id == activeSessionId;
         final messageCount = session.messages.length;
+        final modes = modesOf(session);
         listItems.add(
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 4.0),
@@ -132,14 +145,28 @@ class ChatHistoryPanel extends StatelessWidget {
                     ),
                   ],
                 ),
-                title: Text(
-                  session.title,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                    color: const Color(0xFF33291F),
-                    fontSize: 13,
-                  ),
+                title: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        session.title,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: selected
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                          color: const Color(0xFF33291F),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (modes.study)
+                      _modeBadge(Icons.school_outlined, 'Study mode'),
+                    if (modes.research)
+                      _modeBadge(Icons.travel_explore_rounded, 'Deep research'),
+                    if (modes.agentic)
+                      _modeBadge(Icons.terminal_rounded, 'Agentic'),
+                  ],
                 ),
                 subtitle: Text(
                   '$messageCount message${messageCount == 1 ? '' : 's'}',
@@ -162,6 +189,19 @@ class ChatHistoryPanel extends StatelessWidget {
           ),
         );
       }
+    }
+
+    if (q.isNotEmpty && displayedSessions.isEmpty) {
+      listItems.add(
+        const Padding(
+          padding: EdgeInsets.fromLTRB(14, 24, 14, 8),
+          child: Text(
+            'No chats match your search',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFF8C7A6B), fontSize: 13),
+          ),
+        ),
+      );
     }
 
     listItems.add(
@@ -188,9 +228,7 @@ class ChatHistoryPanel extends StatelessWidget {
                 )
               : const Icon(Icons.history, size: 18, color: Color(0xFF7B4E2E)),
           label: Text(
-            isLoadingMore
-                ? 'Loading…'
-                : 'Load earlier chats',
+            isLoadingMore ? 'Loading…' : 'Load earlier chats',
             style: const TextStyle(
               color: Color(0xFF7B4E2E),
               fontWeight: FontWeight.bold,
@@ -227,6 +265,53 @@ class ChatHistoryPanel extends StatelessWidget {
                   icon: const Icon(Icons.add_comment_outlined),
                 ),
               ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+            child: TextField(
+              controller: searchController,
+              onChanged: onQueryChanged,
+              textInputAction: TextInputAction.search,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF33291F)),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: 'Search chats',
+                hintStyle: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF8C7A6B),
+                ),
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  size: 18,
+                  color: Color(0xFF8C7A6B),
+                ),
+                suffixIcon: query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close_rounded, size: 16),
+                        color: const Color(0xFF8C7A6B),
+                        onPressed: () {
+                          searchController.clear();
+                          onQueryChanged('');
+                        },
+                      ),
+                filled: true,
+                fillColor: const Color(0xFFFFFDF8),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE5DDD3)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFE5DDD3)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFFD8B98D)),
+                ),
+              ),
             ),
           ),
           const Divider(color: Color(0xFFDCCBB8), height: 1),
@@ -334,6 +419,136 @@ class ChatHistoryPanel extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ChatModes {
+  const _ChatModes({
+    this.study = false,
+    this.research = false,
+    this.agentic = false,
+  });
+  final bool study;
+  final bool research;
+  final bool agentic;
+}
+
+Widget _modeBadge(IconData icon, String tip) => Padding(
+  padding: const EdgeInsets.only(left: 6),
+  child: Tooltip(
+    message: tip,
+    child: Icon(icon, size: 13, color: const Color(0xFF9A8672)),
+  ),
+);
+
+bool _hasText(String t, String q) =>
+    (t.length > 800 ? t.substring(0, 800) : t).toLowerCase().contains(q);
+
+bool _sessionMatches(ChatSession s, String q) {
+  if (s.title.toLowerCase().contains(q)) return true;
+  final msgs = s.messages;
+  if (msgs.isEmpty) return false;
+  for (final m in msgs) {
+    if (m.role == MessageRole.user) {
+      if (_hasText(m.text, q)) return true;
+      break;
+    }
+  }
+  return _hasText(msgs.last.text, q);
+}
+
+class ChatHistoryPanel extends StatefulWidget {
+  const ChatHistoryPanel({
+    required this.sessions,
+    required this.activeSessionId,
+    required this.onSessionTap,
+    required this.onSessionDelete,
+    required this.onSessionRename,
+    required this.onSessionPinToggle,
+    required this.onNewChat,
+    required this.visibleLimit,
+    required this.isLoadingMore,
+    required this.onLoadMore,
+    super.key,
+  });
+
+  final List<ChatSession> sessions;
+  final String? activeSessionId;
+  final ValueChanged<String> onSessionTap;
+  final ValueChanged<String> onSessionDelete;
+  final void Function(String sessionId, String newTitle) onSessionRename;
+  final ValueChanged<String> onSessionPinToggle;
+  final VoidCallback onNewChat;
+  final int visibleLimit;
+  final bool isLoadingMore;
+  final VoidCallback onLoadMore;
+
+  @override
+  State<ChatHistoryPanel> createState() => _ChatHistoryPanelState();
+}
+
+class _ChatHistoryPanelState extends State<ChatHistoryPanel> {
+  final TextEditingController _search = TextEditingController();
+  final Map<String, (int, bool, bool)> _modeCache = {};
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  _ChatModes _modesOf(ChatSession s) {
+    final n = s.messages.length;
+    final hit = _modeCache[s.id];
+    if (hit != null && hit.$1 == n) {
+      return _ChatModes(
+        study: s.studyModeEnabled,
+        research: hit.$2,
+        agentic: hit.$3,
+      );
+    }
+    var research = false;
+    var agentic = false;
+    for (final m in s.messages) {
+      if (m.role == MessageRole.user || m.role == MessageRole.system) continue;
+      final t = m.text;
+      if (!research &&
+          (t.contains('"research_plan"') || t.contains('"research_state"'))) {
+        research = true;
+      }
+      if (!agentic && t.contains('```') && findNativeToolFence(t) != null) {
+        agentic = true;
+      }
+      if (research && agentic) break;
+    }
+    _modeCache[s.id] = (n, research, agentic);
+    return _ChatModes(
+      study: s.studyModeEnabled,
+      research: research,
+      agentic: agentic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final w = widget;
+    return _ChatHistoryBody(
+      sessions: w.sessions,
+      activeSessionId: w.activeSessionId,
+      onSessionTap: w.onSessionTap,
+      onSessionDelete: w.onSessionDelete,
+      onSessionRename: w.onSessionRename,
+      onSessionPinToggle: w.onSessionPinToggle,
+      onNewChat: w.onNewChat,
+      visibleLimit: w.visibleLimit,
+      isLoadingMore: w.isLoadingMore,
+      onLoadMore: w.onLoadMore,
+      query: _query,
+      searchController: _search,
+      onQueryChanged: (v) => setState(() => _query = v),
+      modesOf: _modesOf,
     );
   }
 }

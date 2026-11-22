@@ -2498,6 +2498,7 @@ jobs:
   Future<void> _sendMessage({
     String? promptText,
     String? userTextOverride,
+    int? regenerateFrom,
   }) async {
     final prompt = (promptText ?? userTextOverride ?? _messageController.text)
         .trim();
@@ -2554,18 +2555,28 @@ jobs:
       return;
     }
 
-    final isEditing = _editingMessageIndex != null;
-    final editIndex = _editingMessageIndex;
+    final isEditing = regenerateFrom != null || _editingMessageIndex != null;
+    final editIndex = regenerateFrom ?? _editingMessageIndex;
 
-    if (targetSessionId == _activeSessionId) {
+    if (targetSessionId == _activeSessionId && regenerateFrom == null) {
       _messageController.clear();
     }
 
+    final regenSource =
+        regenerateFrom != null &&
+            regenerateFrom >= 0 &&
+            regenerateFrom < session.messages.length
+        ? session.messages[regenerateFrom]
+        : null;
     final userMessage = ChatMessage(
       role: MessageRole.user,
       text: prompt,
-      images: List<String>.from(session.attachedImagesBase64),
-      files: List<AttachedFile>.from(session.attachedFiles),
+      images: regenSource != null
+          ? List<String>.from(regenSource.images)
+          : List<String>.from(session.attachedImagesBase64),
+      files: regenSource != null
+          ? List<AttachedFile>.from(regenSource.files)
+          : List<AttachedFile>.from(session.attachedFiles),
     );
 
     String updatedTitle = session.title;
@@ -2610,8 +2621,12 @@ jobs:
           branches: updatedBranches,
           activeBranchIndex: newActiveBranchIndex,
           title: updatedTitle,
-          attachedImagesBase64: const [],
-          attachedFiles: const [],
+          attachedImagesBase64: regenerateFrom != null
+              ? session.attachedImagesBase64
+              : const [],
+          attachedFiles: regenerateFrom != null
+              ? session.attachedFiles
+              : const [],
         );
       }
     });
@@ -8980,6 +8995,22 @@ jobs:
     });
   }
 
+  void _regenerateResponse(int index) {
+    final sid = _activeSessionId;
+    if (sid == null || _sendingSessionIds.contains(sid)) return;
+    final si = _sessions.indexWhere((s) => s.id == sid);
+    if (si == -1) return;
+    final msgs = _sessions[si].messages;
+    var u = (index < msgs.length ? index : msgs.length) - 1;
+    while (u >= 0 && msgs[u].role != MessageRole.user) {
+      u--;
+    }
+    if (u < 0) return;
+    final source = msgs[u];
+    if (source.text.trim().startsWith('/')) return;
+    _sendMessage(promptText: source.text, regenerateFrom: u);
+  }
+
   void _cancelEditMessage() {
     setState(() {
       _editingMessageIndex = null;
@@ -9137,6 +9168,7 @@ jobs:
                 attachedFiles: activeSession.attachedFiles,
                 onRemoveFile: _removeFile,
                 onEditUserMessage: _editUserMessage,
+                onRegenerate: _regenerateResponse,
                 isEditing: _editingMessageIndex != null,
                 onCancelEdit: _cancelEditMessage,
                 branches: activeSession.branches,

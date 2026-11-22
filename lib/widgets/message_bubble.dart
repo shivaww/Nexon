@@ -43,6 +43,8 @@ class MessageBubble extends StatelessWidget {
     this.mergedPrior = const [],
     this.mergedPriorResults = const [],
     this.foldThoughtIntoLater = false,
+    this.onRegenerate,
+    this.animateIn = false,
     super.key,
   });
 
@@ -72,6 +74,12 @@ class MessageBubble extends StatelessWidget {
   final List<String?> mergedPriorResults;
   final bool foldThoughtIntoLater;
   final bool isSending;
+  final VoidCallback? onRegenerate;
+  final bool animateIn;
+
+  // Messages whose entrance animation already ran. Keeps recycled list items
+  // from replaying it when they scroll back into view.
+  static final Expando<bool> _played = Expando<bool>('bubbleAnim');
 
   @override
   Widget build(BuildContext context) {
@@ -94,11 +102,15 @@ class MessageBubble extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    final fresh = animateIn && _played[message] == null;
+    _played[message] = true;
+
     return TweenAnimationBuilder<double>(
       duration: Duration(milliseconds: 240 + (index % 5) * 24),
       curve: Curves.easeOutCubic,
-      tween: Tween(begin: 0, end: 1),
+      tween: Tween(begin: fresh ? 0.0 : 1.0, end: 1.0),
       builder: (context, value, child) {
+        if (value >= 1) return child!;
         return Opacity(
           opacity: value,
           child: Transform.translate(
@@ -588,22 +600,17 @@ class MessageBubble extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _GhostAction(
-                      icon: Icons.content_copy_rounded,
-                      tooltip: 'Copy text',
-                      onTap: () {
-                        Clipboard.setData(ClipboardData(text: message.text));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Message copied to clipboard'),
-                            duration: Duration(seconds: 1),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      },
-                    ),
+                    _CopyAction(text: message.text),
                     const SizedBox(width: 12),
                     _SpeakAction(message: message),
+                    if (onRegenerate != null && isLastMessage) ...[
+                      const SizedBox(width: 12),
+                      _GhostAction(
+                        icon: Icons.refresh_rounded,
+                        tooltip: 'Regenerate',
+                        onTap: onRegenerate!,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1350,11 +1357,13 @@ class _GhostAction extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.color,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -1365,9 +1374,43 @@ class _GhostAction extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.all(4),
-          child: Icon(icon, size: 15, color: const Color(0xFF8B7355)),
+          child: Icon(icon, size: 15, color: color ?? const Color(0xFF8B7355)),
         ),
       ),
+    );
+  }
+}
+
+/// Copy button that flips to a green check for 1.5s instead of a SnackBar.
+class _CopyAction extends StatefulWidget {
+  const _CopyAction({required this.text});
+
+  final String text;
+
+  @override
+  State<_CopyAction> createState() => _CopyActionState();
+}
+
+class _CopyActionState extends State<_CopyAction> {
+  bool _copied = false;
+  int _tapId = 0;
+
+  void _onTap() {
+    Clipboard.setData(ClipboardData(text: widget.text));
+    final id = ++_tapId;
+    setState(() => _copied = true);
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted && id == _tapId) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GhostAction(
+      icon: _copied ? Icons.check_rounded : Icons.content_copy_rounded,
+      tooltip: _copied ? 'Copied' : 'Copy text',
+      color: _copied ? const Color(0xFF16A34A) : null,
+      onTap: _onTap,
     );
   }
 }
