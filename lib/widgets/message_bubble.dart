@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -43,6 +44,8 @@ class MessageBubble extends StatelessWidget {
     this.mergedPrior = const [],
     this.mergedPriorResults = const [],
     this.foldThoughtIntoLater = false,
+    this.animateEntry = false,
+    this.onRegenerate,
     super.key,
   });
 
@@ -72,6 +75,8 @@ class MessageBubble extends StatelessWidget {
   final List<String?> mergedPriorResults;
   final bool foldThoughtIntoLater;
   final bool isSending;
+  final bool animateEntry;
+  final VoidCallback? onRegenerate;
 
   @override
   Widget build(BuildContext context) {
@@ -94,524 +99,528 @@ class MessageBubble extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return TweenAnimationBuilder<double>(
-      duration: Duration(milliseconds: 240 + (index % 5) * 24),
-      curve: Curves.easeOutCubic,
-      tween: Tween(begin: 0, end: 1),
-      builder: (context, value, child) {
-        return Opacity(
-          opacity: value,
-          child: Transform.translate(
-            offset: Offset(0, (1 - value) * 12),
-            child: child,
-          ),
-        );
-      },
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          // User messages: a plain tap opens the same action sheet as a
-          // long-press, so copy/edit is one tap away.
-          onTap: isUser ? () => _showMessageActions(context, true) : null,
-          onLongPress: () => _showMessageActions(context, isUser),
-          child: Column(
+    final content = Container(
+      margin: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // User messages: a plain tap opens the same action sheet as a
+        // long-press, so copy/edit is one tap away.
+        onTap: isUser ? () => _showMessageActions(context, true) : null,
+        onLongPress: () => _showMessageActions(context, isUser),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!isToolOutput && isFirstOfGroup) ...[
-              Row(
-                children: [
-                  if (isUser) ...[
-                    Container(
-                      width: 24,
-                      height: 24,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFF8B5E3C), Color(0xFF6B3F22)],
+          children: [_buildMessageContent(context, isToolOutput, isUser)],
+        ),
+      ),
+    );
+
+    return animateEntry
+        ? TweenAnimationBuilder<double>(
+            duration: Duration(milliseconds: 240 + (index % 5) * 24),
+            curve: Curves.easeOutCubic,
+            tween: Tween(begin: 0, end: 1),
+            builder: (context, value, child) {
+              return Opacity(
+                opacity: value,
+                child: Transform.translate(
+                  offset: Offset(0, (1 - value) * 12),
+                  child: child,
+                ),
+              );
+            },
+            child: content,
+          )
+        : content;
+  }
+
+  Widget _buildMessageContent(
+    BuildContext context,
+    bool isToolOutput,
+    bool isUser,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!isToolOutput && isFirstOfGroup) ...[
+          Row(
+            children: [
+              if (isUser) ...[
+                Container(
+                  width: 24,
+                  height: 24,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF8B5E3C), Color(0xFF6B3F22)],
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.person_rounded,
+                    size: 14,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'You',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    letterSpacing: 0.1,
+                    color: Color(0xFF7B4E2E),
+                  ),
+                ),
+                if (versionsCount > 1) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5EFE4),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFFDCCBB8),
+                        width: 0.5,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: currentVersionIndex > 0
+                              ? () => onVersionChanged?.call(
+                                  currentVersionIndex - 1,
+                                )
+                              : null,
+                          child: Icon(
+                            Icons.chevron_left,
+                            size: 14,
+                            color: currentVersionIndex > 0
+                                ? const Color(0xFF7B4E2E)
+                                : const Color(0xFFCBBBA4),
+                          ),
                         ),
-                      ),
-                      child: const Icon(
-                        Icons.person_rounded,
-                        size: 14,
-                        color: Colors.white,
-                      ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Text(
+                            '${currentVersionIndex + 1}/$versionsCount',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF7B4E2E),
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: currentVersionIndex < versionsCount - 1
+                              ? () => onVersionChanged?.call(
+                                  currentVersionIndex + 1,
+                                )
+                              : null,
+                          child: Icon(
+                            Icons.chevron_right,
+                            size: 14,
+                            color: currentVersionIndex < versionsCount - 1
+                                ? const Color(0xFF7B4E2E)
+                                : const Color(0xFFCBBBA4),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'You',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        letterSpacing: 0.1,
-                        color: Color(0xFF7B4E2E),
-                      ),
-                    ),
-                    if (versionsCount > 1) ...[
-                      const SizedBox(width: 8),
-                      Container(
+                  ),
+                ],
+              ],
+              const Spacer(),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (message.tokenUsage.isNotEmpty && !isUser)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
+                          horizontal: 7,
+                          vertical: 2.5,
                         ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFF5EFE4),
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(20),
                           border: Border.all(
-                            color: const Color(0xFFDCCBB8),
-                            width: 0.5,
+                            color: const Color(0xFFE7D8C4),
+                            width: 0.6,
+                          ),
+                        ),
+                        child: Text(
+                          message.tokenUsage,
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                            color: Color(0xFF6C5946),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (message.tokensPerSec.isNotEmpty && !isUser)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: animationState != AvatarAnimationState.idle
+                              ? const Color(0xFFECFDF5)
+                              : const Color(0xFFF5EFE4),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: animationState != AvatarAnimationState.idle
+                                ? const Color(0xFF6EE7B7)
+                                : const Color(0xFFE7D8C4),
+                            width: 0.6,
                           ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            GestureDetector(
-                              onTap: currentVersionIndex > 0
-                                  ? () => onVersionChanged?.call(
-                                      currentVersionIndex - 1,
-                                    )
-                                  : null,
-                              child: Icon(
-                                Icons.chevron_left,
-                                size: 14,
-                                color: currentVersionIndex > 0
-                                    ? const Color(0xFF7B4E2E)
-                                    : const Color(0xFFCBBBA4),
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                              ),
-                              child: Text(
-                                '${currentVersionIndex + 1}/$versionsCount',
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF7B4E2E),
+                            if (animationState != AvatarAnimationState.idle)
+                              Container(
+                                width: 5,
+                                height: 5,
+                                margin: const EdgeInsets.only(right: 4),
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF059669),
+                                  shape: BoxShape.circle,
                                 ),
                               ),
-                            ),
-                            GestureDetector(
-                              onTap: currentVersionIndex < versionsCount - 1
-                                  ? () => onVersionChanged?.call(
-                                      currentVersionIndex + 1,
-                                    )
-                                  : null,
-                              child: Icon(
-                                Icons.chevron_right,
-                                size: 14,
-                                color: currentVersionIndex < versionsCount - 1
-                                    ? const Color(0xFF7B4E2E)
-                                    : const Color(0xFFCBBBA4),
+                            Text(
+                              '${message.tokensPerSec} tok/s',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.15,
+                                color:
+                                    animationState != AvatarAnimationState.idle
+                                    ? const Color(0xFF065F46)
+                                    : const Color(0xFF6C5946),
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ],
-                  const Spacer(),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (message.tokenUsage.isNotEmpty && !isUser)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 2.5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF5EFE4),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: const Color(0xFFE7D8C4),
-                                width: 0.6,
-                              ),
-                            ),
-                            child: Text(
-                              message.tokenUsage,
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                                color: Color(0xFF6C5946),
-                              ),
-                            ),
-                          ),
-                        ),
-                      if (message.tokensPerSec.isNotEmpty && !isUser)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 2.5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: animationState != AvatarAnimationState.idle
-                                  ? const Color(0xFFECFDF5)
-                                  : const Color(0xFFF5EFE4),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: animationState != AvatarAnimationState.idle
-                                    ? const Color(0xFF6EE7B7)
-                                    : const Color(0xFFE7D8C4),
-                                width: 0.6,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (animationState != AvatarAnimationState.idle)
-                                  Container(
-                                    width: 5,
-                                    height: 5,
-                                    margin: const EdgeInsets.only(right: 4),
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFF059669),
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
-                                Text(
-                                  '${message.tokensPerSec} tok/s',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: 0.15,
-                                    color: animationState != AvatarAnimationState.idle
-                                        ? const Color(0xFF065F46)
-                                        : const Color(0xFF6C5946),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+                    ),
                 ],
               ),
-              const SizedBox(height: 8),
             ],
-            if (message.images.isNotEmpty || message.videos.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10.0),
-                child: ChatMediaGrid(
-                  images: message.images,
-                  videos: message.videos,
-                ),
-              ),
-            if (isToolOutput)
-              Builder(
-                builder: (context) {
-                  // Parse a smart header for tool results
-                  final text = message.text;
-                  String header;
-                  IconData headerIcon;
-                  Color headerColor;
-                  final hasError =
-                      text.contains('"error"') || text.contains('Error:');
-                  if (hasError) {
-                    headerIcon = Icons.error_outline;
-                    headerColor = const Color(0xFFDC2626);
-                  } else {
-                    headerIcon = Icons.check_circle_outline;
-                    headerColor = const Color(0xFF059669);
-                  }
+          ),
+          const SizedBox(height: 8),
+        ],
+        if (message.images.isNotEmpty || message.videos.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10.0),
+            child: ChatMediaGrid(
+              images: message.images,
+              videos: message.videos,
+            ),
+          ),
+        if (isToolOutput)
+          Builder(
+            builder: (context) {
+              // Parse a smart header for tool results
+              final text = message.text;
+              String header;
+              IconData headerIcon;
+              Color headerColor;
+              final hasError =
+                  text.contains('"error"') || text.contains('Error:');
+              if (hasError) {
+                headerIcon = Icons.error_outline;
+                headerColor = const Color(0xFFDC2626);
+              } else {
+                headerIcon = Icons.check_circle_outline;
+                headerColor = const Color(0xFF059669);
+              }
 
-                  // Extract tool name from "Tool Result [method]:" or "Web Search results" etc.
-                  final toolResultMatch = RegExp(
-                    r'Tool Result \[(\w+)\]',
-                  ).firstMatch(text);
-                  final webSearchMatch =
-                      text.startsWith('Web Search results') ||
-                      text.startsWith('Search results:\n');
-                  final urlMatch =
-                      text.startsWith("Content of URL") ||
-                      text.startsWith("URL Content:\n");
-                  final mcpMatch = text.startsWith("MCP Result:\n");
-                  if (toolResultMatch != null) {
-                    final method = toolResultMatch.group(1) ?? 'tool';
-                    final sizeKb = (text.length / 1024).toStringAsFixed(1);
-                    header = hasError
-                        ? 'Failed: $method'
-                        : 'Tool result: $method · ${sizeKb} KB';
-                    headerIcon = hasError
-                        ? Icons.error_outline
-                        : Icons.check_circle_outline;
-                  } else if (webSearchMatch) {
-                    header = 'Web search results';
-                    headerIcon = Icons.search;
-                    headerColor = const Color(0xFF0369A1);
-                  } else if (urlMatch) {
-                    header = 'URL content fetched';
-                    headerIcon = Icons.language;
-                    headerColor = const Color(0xFF0369A1);
-                  } else if (mcpMatch) {
-                    header = 'MCP tool result';
-                    headerIcon = Icons.settings;
-                    headerColor = const Color(0xFF059669);
-                  } else {
-                    header = text.split('\n').first;
-                  }
+              // Extract tool name from "Tool Result [method]:" or "Web Search results" etc.
+              final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]')
+                  .firstMatch(text);
+              final webSearchMatch =
+                  text.startsWith('Web Search results') ||
+                  text.startsWith('Search results:\n');
+              final urlMatch =
+                  text.startsWith("Content of URL") ||
+                  text.startsWith("URL Content:\n");
+              final mcpMatch = text.startsWith("MCP Result:\n");
+              if (toolResultMatch != null) {
+                final method = toolResultMatch.group(1) ?? 'tool';
+                final sizeKb = (text.length / 1024).toStringAsFixed(1);
+                header = hasError
+                    ? 'Failed: $method'
+                    : 'Tool result: $method · ${sizeKb} KB';
+                headerIcon = hasError
+                    ? Icons.error_outline
+                    : Icons.check_circle_outline;
+              } else if (webSearchMatch) {
+                header = 'Web search results';
+                headerIcon = Icons.search;
+                headerColor = const Color(0xFF0369A1);
+              } else if (urlMatch) {
+                header = 'URL content fetched';
+                headerIcon = Icons.language;
+                headerColor = const Color(0xFF0369A1);
+              } else if (mcpMatch) {
+                header = 'MCP tool result';
+                headerIcon = Icons.settings;
+                headerColor = const Color(0xFF059669);
+              } else {
+                header = text.split('\n').first;
+              }
 
-                    final quiet =
-                        webSearchMatch ||
-                        urlMatch ||
-                        text.startsWith('Quiz results') ||
-                        text.startsWith('Quiz Tool Result') ||
-                        isQuietToolName(toolResultMatch?.group(1) ?? '');
-                    final detail = Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: webSearchMatch
-                          ? [_buildMarkdownResult(context, message.text)]
-                          : _buildToolResultDetails(context, message.text),
-                    );
-                    final card = ToolCallCard(
+              final quiet =
+                  webSearchMatch ||
+                  urlMatch ||
+                  text.startsWith('Quiz results') ||
+                  text.startsWith('Quiz Tool Result') ||
+                  isQuietToolName(toolResultMatch?.group(1) ?? '');
+              final detail = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: webSearchMatch
+                    ? [_buildMarkdownResult(context, message.text)]
+                    : _buildToolResultDetails(context, message.text),
+              );
+              final card = ToolCallCard(
+                icon: headerIcon,
+                accent: headerColor,
+                summary: header,
+                detail: detail,
+              );
+              if (quiet) {
+                return ThoughtBlock(
+                  entries: [
+                    ThoughtEntry(
                       icon: headerIcon,
                       accent: headerColor,
                       summary: header,
                       detail: detail,
-                    );
-                    if (quiet) {
-                      return ThoughtBlock(entries: [
-                        ThoughtEntry(
-                          icon: headerIcon,
-                          accent: headerColor,
-                          summary: header,
-                          detail: detail,
-                        ),
-                      ]);
-                    }
-                    return card;
-                },
-              )
-            else if (isUser)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Container(
-                constraints: const BoxConstraints(maxWidth: 520),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 15,
-                  vertical: 13,
-                ),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFFFFFDF9), Color(0xFFF9F1E3)],
-                  ),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(18),
-                      topRight: Radius.circular(18),
-                      bottomRight: Radius.circular(18),
-                      bottomLeft: Radius.circular(5),
-                    ),
-                  border: Border.all(color: Color(0xFFE7D8C4), width: 0.8),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0x0F7B4E2E),
-                      blurRadius: 10,
-                      offset: Offset(0, 3),
                     ),
                   ],
+                );
+              }
+              return card;
+            },
+          )
+        else if (isUser)
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 520),
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 13),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFFFDF9), Color(0xFFF9F1E3)],
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (message.files.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: message.files
-                              .map(
-                                (f) => Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 5,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: const Color(0xFFE7D8C4),
-                                      width: 0.7,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.04),
-                                        blurRadius: 6,
-                                        offset: const Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        Icons.insert_drive_file,
-                                        size: 13,
-                                        color: Color(0xFF7B4E2E),
-                                      ),
-                                      const SizedBox(width: 5),
-                                      Text(
-                                        f.name,
-                                        style: const TextStyle(
-                                          fontSize: 11.5,
-                                          color: Color(0xFF4A3424),
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    SelectableText(
-                      message.text,
-                      style: const TextStyle(
-                        height: 1.55,
-                        color: Color(0xFF2D241C),
-                        fontSize: 15,
-                        fontWeight: FontWeight.w400,
-                        letterSpacing: -0.1,
-                      ),
-                    ),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  topRight: Radius.circular(18),
+                  bottomRight: Radius.circular(18),
+                  bottomLeft: Radius.circular(5),
+                ),
+                border: Border.all(color: Color(0xFFE7D8C4), width: 0.8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x0F7B4E2E),
+                    blurRadius: 10,
+                    offset: Offset(0, 3),
+                  ),
                 ],
               ),
-              ),
-            )
-            else ...[
-              Builder(
-                builder: (context) {
-                  final thoughtEntries = <ThoughtEntry>[];
-                  if (!foldThoughtIntoLater) {
-                    for (var pi = 0; pi < mergedPrior.length; pi++) {
-                      final prior = mergedPrior[pi];
-                      final priorThink = cleanReasoningText(prior.reasoning);
-                      if (priorThink.isNotEmpty && reasoningEnabled) {
-                        thoughtEntries.add(
-                          ThoughtEntry(
-                            icon: Icons.psychology_outlined,
-                            accent: const Color(0xFF7B4E2E),
-                            summary: 'Thinking',
-                            detail: Text(
-                              priorThink,
-                              style: const TextStyle(
-                                fontSize: 12.5,
-                                fontStyle: FontStyle.italic,
-                                color: Color(0xFF5C4E40),
-                                height: 1.4,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (message.files.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: message.files
+                            .map(
+                              (f) => Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: const Color(0xFFE7D8C4),
+                                    width: 0.7,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.04),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.insert_drive_file,
+                                      size: 13,
+                                      color: Color(0xFF7B4E2E),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      f.name,
+                                      style: const TextStyle(
+                                        fontSize: 11.5,
+                                        color: Color(0xFF4A3424),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ),
-                        );
-                      }
-                      _parseRichMessageContent(
-                        context,
-                        prior.text,
-                        thoughtSink: thoughtEntries,
-                        resultText: mergedPriorResults[pi],
-                        mergeOnly: true,
-                      );
-                    }
-                    final ownThink = cleanReasoningText(message.reasoning);
-                    if (ownThink.isNotEmpty && reasoningEnabled) {
-                      thoughtEntries.add(
-                        ThoughtEntry(
-                          icon: Icons.psychology_outlined,
-                          accent: const Color(0xFF7B4E2E),
-                          summary: 'Thinking',
-                          detail: Text(
-                            ownThink,
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              fontStyle: FontStyle.italic,
-                              color: Color(0xFF5C4E40),
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      );
-                    }
-                  }
-                  final visible = _parseRichMessageContent(
-                    context,
-                    message.text,
-                    thoughtSink: foldThoughtIntoLater ? null : thoughtEntries,
-                    cardsOnly: foldThoughtIntoLater,
-                  );
-                  if (visible.isEmpty && thoughtEntries.isEmpty) {
-                    // Live turn with no tokens yet: keep the pulsing cursor
-                    // on screen from the moment the prompt was sent instead
-                    // of collapsing the bubble until the first chunk lands.
-                    if (animationState != AvatarAnimationState.idle) {
-                      return const StreamingCursor();
-                    }
-                    return const SizedBox.shrink();
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (thoughtEntries.isNotEmpty)
-                        ThoughtBlock(
-                          entries: thoughtEntries,
-                          // Stays open for the entire live turn — across tool
-                          // calls, their results, and the re-think after them.
-                          active: isLiveTurn,
-                        ),
-                      ...visible,
-                      if (animationState != AvatarAnimationState.idle)
-                        const StreamingCursor(),
-                    ],
-                  );
-                },
-              ),
-            ],
-            if (!isUser &&
-                !isToolOutput &&
-                !(isSending && isLastMessage) &&
-                !foldThoughtIntoLater)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _GhostAction(
-                      icon: Icons.content_copy_rounded,
-                      tooltip: 'Copy text',
-                      onTap: () {
-                        Clipboard.setData(ClipboardData(text: message.text));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Message copied to clipboard'),
-                            duration: Duration(seconds: 1),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      },
+                            )
+                            .toList(),
+                      ),
                     ),
-                    const SizedBox(width: 12),
-                    _SpeakAction(message: message),
-                  ],
-                ),
+                  SelectableText(
+                    message.text,
+                    style: const TextStyle(
+                      height: 1.55,
+                      color: Color(0xFF2D241C),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w400,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
+                ],
               ),
-            const SizedBox(height: 10),
-          ],
+            ),
+          )
+        else ...[
+          Builder(
+            builder: (context) {
+              final thoughtEntries = <ThoughtEntry>[];
+              if (!foldThoughtIntoLater) {
+                for (var pi = 0; pi < mergedPrior.length; pi++) {
+                  final prior = mergedPrior[pi];
+                  final priorThink = cleanReasoningText(prior.reasoning);
+                  if (priorThink.isNotEmpty && reasoningEnabled) {
+                    thoughtEntries.add(
+                      ThoughtEntry(
+                        icon: Icons.psychology_outlined,
+                        accent: const Color(0xFF7B4E2E),
+                        summary: 'Thinking',
+                        detail: Text(
+                          priorThink,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontStyle: FontStyle.italic,
+                            color: Color(0xFF5C4E40),
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  _parseRichMessageContent(
+                    context,
+                    prior.text,
+                    thoughtSink: thoughtEntries,
+                    resultText: mergedPriorResults[pi],
+                    mergeOnly: true,
+                  );
+                }
+                final ownThink = cleanReasoningText(message.reasoning);
+                if (ownThink.isNotEmpty && reasoningEnabled) {
+                  thoughtEntries.add(
+                    ThoughtEntry(
+                      icon: Icons.psychology_outlined,
+                      accent: const Color(0xFF7B4E2E),
+                      summary: 'Thinking',
+                      detail: Text(
+                        ownThink,
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          fontStyle: FontStyle.italic,
+                          color: Color(0xFF5C4E40),
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+              }
+              final visible = _parseRichMessageContent(
+                context,
+                message.text,
+                thoughtSink: foldThoughtIntoLater ? null : thoughtEntries,
+                cardsOnly: foldThoughtIntoLater,
+              );
+              if (visible.isEmpty && thoughtEntries.isEmpty) {
+                // Live turn with no tokens yet: keep the pulsing cursor
+                // on screen from the moment the prompt was sent instead
+                // of collapsing the bubble until the first chunk lands.
+                if (animationState != AvatarAnimationState.idle) {
+                  return const StreamingCursor();
+                }
+                return const SizedBox.shrink();
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (thoughtEntries.isNotEmpty)
+                    ThoughtBlock(
+                      entries: thoughtEntries,
+                      // Stays open for the entire live turn — across tool
+                      // calls, their results, and the re-think after them.
+                      active: isLiveTurn,
+                    ),
+                  ...visible,
+                  if (animationState != AvatarAnimationState.idle)
+                    const StreamingCursor(),
+                ],
+              );
+            },
           ),
-        ),
-      ),
+        ],
+        if (!isUser && !isToolOutput && !isSending && !foldThoughtIntoLater)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _CopyAction(text: message.text),
+                const SizedBox(width: 12),
+                _SpeakAction(message: message),
+                if (onRegenerate != null) ...[
+                  const SizedBox(width: 12),
+                  _GhostAction(
+                    icon: Icons.refresh_rounded,
+                    tooltip: 'Regenerate',
+                    onTap: onRegenerate!,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        const SizedBox(height: 10),
+      ],
     );
   }
 
@@ -680,80 +689,80 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-IconData _quietToolIcon(String t) {
-  if (t == 'web_search' || t == 'search_web') return Icons.public_rounded;
-  if (t == 'read_url') return Icons.link_rounded;
-  if (t.startsWith('workspace_')) return Icons.folder_open_rounded;
-  if (t == 'quiz' || t == 'quiz_request') return Icons.quiz_outlined;
-  if (t == 'todo_create' || t == 'todo_done') return Icons.checklist_rounded;
-  return Icons.build_outlined;
-}
-
-Color _quietToolAccent(String t) {
-  if (t == 'web_search' || t == 'search_web' || t == 'read_url') {
-    return const Color(0xFF0369A1);
+  IconData _quietToolIcon(String t) {
+    if (t == 'web_search' || t == 'search_web') return Icons.public_rounded;
+    if (t == 'read_url') return Icons.link_rounded;
+    if (t.startsWith('workspace_')) return Icons.folder_open_rounded;
+    if (t == 'quiz' || t == 'quiz_request') return Icons.quiz_outlined;
+    if (t == 'todo_create' || t == 'todo_done') return Icons.checklist_rounded;
+    return Icons.build_outlined;
   }
-  if (t.startsWith('workspace_')) return const Color(0xFFB45309);
-  if (t == 'todo_create' || t == 'todo_done') {
-    return const Color(0xFF059669);
-  }
-  return const Color(0xFF7B4E2E);
-}
 
-String _quietToolSummary(String t, Map<String, dynamic> call) {
-  final a = call['a'];
-  String? target;
-  if (a is Map) {
-    for (final k in const ['q', 'query', 'url', 'u', 'path', 'p']) {
-      final v = a[k];
-      if (v is String && v.trim().isNotEmpty) {
-        target = v.trim();
-        break;
+  Color _quietToolAccent(String t) {
+    if (t == 'web_search' || t == 'search_web' || t == 'read_url') {
+      return const Color(0xFF0369A1);
+    }
+    if (t.startsWith('workspace_')) return const Color(0xFFB45309);
+    if (t == 'todo_create' || t == 'todo_done') {
+      return const Color(0xFF059669);
+    }
+    return const Color(0xFF7B4E2E);
+  }
+
+  String _quietToolSummary(String t, Map<String, dynamic> call) {
+    final a = call['a'];
+    String? target;
+    if (a is Map) {
+      for (final k in const ['q', 'query', 'url', 'u', 'path', 'p']) {
+        final v = a[k];
+        if (v is String && v.trim().isNotEmpty) {
+          target = v.trim();
+          break;
+        }
       }
     }
-  }
-  if (target != null && target.length > 60) {
-    target = '${target.substring(0, 60)}…';
-  }
-  if (t == 'web_search' || t == 'search_web') {
-    return target == null ? 'Searching the web' : 'Searching for "$target"';
-  }
-  if (t == 'read_url') {
-    return target == null ? 'Reading a URL' : 'Reading $target';
-  }
-  if (t.startsWith('workspace_')) return 'Browsing workspace';
-  if (t == 'todo_create' || t == 'todo_done') return 'Updating todo list';
-  if (t == 'quiz' || t == 'quiz_request') return 'Quiz';
-  return t;
-}
-
-/// Reasoning text with stray reasoning tags removed and trimmed. Models
-/// that leak a split `</think>` tag into the reasoning stream would
-/// otherwise render empty or tag-only "Thinking" bullets in the Thought
-/// Process timeline.
-String cleanReasoningText(String raw) => raw
-    .replaceAll(
-      RegExp(r'</?(?:think|reasoning|thought)>', caseSensitive: false),
-      '',
-    )
-    .trim();
-
-/// True when a folded prior turn round still owns visible (non-quiet)
-/// tool cards that must keep their own bubble.
-bool _foldedRoundHasCards(String text) {
-  String rest = text;
-  while (true) {
-    final f = findNativeToolFence(rest);
-    if (f == null) return false;
-    final calls = f.json['calls'] is List
-        ? (f.json['calls'] as List).whereType<Map<String, dynamic>>().toList()
-        : <Map<String, dynamic>>[f.json];
-    for (final c in calls) {
-      if (!isQuietToolName(c['t']?.toString() ?? '')) return true;
+    if (target != null && target.length > 60) {
+      target = '${target.substring(0, 60)}…';
     }
-    rest = rest.substring(f.end);
+    if (t == 'web_search' || t == 'search_web') {
+      return target == null ? 'Searching the web' : 'Searching for "$target"';
+    }
+    if (t == 'read_url') {
+      return target == null ? 'Reading a URL' : 'Reading $target';
+    }
+    if (t.startsWith('workspace_')) return 'Browsing workspace';
+    if (t == 'todo_create' || t == 'todo_done') return 'Updating todo list';
+    if (t == 'quiz' || t == 'quiz_request') return 'Quiz';
+    return t;
   }
-}
+
+  /// Reasoning text with stray reasoning tags removed and trimmed. Models
+  /// that leak a split `</think>` tag into the reasoning stream would
+  /// otherwise render empty or tag-only "Thinking" bullets in the Thought
+  /// Process timeline.
+  String cleanReasoningText(String raw) => raw
+      .replaceAll(
+        RegExp(r'</?(?:think|reasoning|thought)>', caseSensitive: false),
+        '',
+      )
+      .trim();
+
+  /// True when a folded prior turn round still owns visible (non-quiet)
+  /// tool cards that must keep their own bubble.
+  bool _foldedRoundHasCards(String text) {
+    String rest = text;
+    while (true) {
+      final f = findNativeToolFence(rest);
+      if (f == null) return false;
+      final calls = f.json['calls'] is List
+          ? (f.json['calls'] as List).whereType<Map<String, dynamic>>().toList()
+          : <Map<String, dynamic>>[f.json];
+      for (final c in calls) {
+        if (!isQuietToolName(c['t']?.toString() ?? '')) return true;
+      }
+      rest = rest.substring(f.end);
+    }
+  }
 
   List<Widget> _parseRichMessageContent(
     BuildContext context,
@@ -809,12 +818,13 @@ bool _foldedRoundHasCards(String text) {
       // Native JSON tool calls: fenced ```json blocks shaped {"t":...} or
       // {"calls":[...]} render as tool cards.
       final toolFence = findNativeToolFence(substring);
-      final researchFence = findFenceWithKeys(
-        substring,
-        const ['research_plan', 'research_state'],
-      );
+      final researchFence = findFenceWithKeys(substring, const [
+        'research_plan',
+        'research_state',
+      ]);
 
-      final useResearch = researchFence != null &&
+      final useResearch =
+          researchFence != null &&
           (toolFence == null ||
               (researchFence['start'] as int) < toolFence!.start);
 
@@ -950,11 +960,14 @@ bool _foldedRoundHasCards(String text) {
     return widgets;
   }
 
-
   Widget _buildMarkdownResult(BuildContext context, String text) {
     final lines = text.split('\n');
-    final contentStart = lines.indexWhere((l) => l.trim().isNotEmpty && !l.startsWith('🔍'));
-    final content = contentStart > 0 ? lines.sublist(contentStart).join('\n') : text;
+    final contentStart = lines.indexWhere(
+      (l) => l.trim().isNotEmpty && !l.startsWith('🔍'),
+    );
+    final content = contentStart > 0
+        ? lines.sublist(contentStart).join('\n')
+        : text;
     return MarkdownBody(
       data: content.trim(),
       selectable: true,
@@ -964,8 +977,15 @@ bool _foldedRoundHasCards(String text) {
         }
       },
       styleSheet: MarkdownStyleSheet(
-        p: const TextStyle(fontSize: 12.5, height: 1.4, color: Color(0xFF2D241C)),
-        a: const TextStyle(color: Color(0xFF0369A1), decoration: TextDecoration.underline),
+        p: const TextStyle(
+          fontSize: 12.5,
+          height: 1.4,
+          color: Color(0xFF2D241C),
+        ),
+        a: const TextStyle(
+          color: Color(0xFF0369A1),
+          decoration: TextDecoration.underline,
+        ),
         listBullet: const TextStyle(color: Color(0xFF6C5946)),
       ),
     );
@@ -1068,17 +1088,24 @@ bool _foldedRoundHasCards(String text) {
     final widgets = <Widget>[];
     for (var i = 0; i < blocks.length; i++) {
       final block = blocks[i];
-      final streaming = animationState != AvatarAnimationState.idle &&
+      final streaming =
+          animationState != AvatarAnimationState.idle &&
           i == blocks.length - 1 &&
           block.isCode &&
           unclosedFence;
-      final isVisualLang = const {'svg', 'chart', 'json-chart'}
-          .contains(block.language.toLowerCase());
+      final isVisualLang = const {
+        'svg',
+        'chart',
+        'json-chart',
+      }.contains(block.language.toLowerCase());
       widgets.add(
         streaming
             ? (isVisualLang
                   ? const _VisualStreamingPlaceholder()
-                  : StreamingCodeBlock(code: block.content, language: block.language))
+                  : StreamingCodeBlock(
+                      code: block.content,
+                      language: block.language,
+                    ))
             : _buildSingleBlock(context, block),
       );
     }
@@ -1151,8 +1178,14 @@ bool _foldedRoundHasCards(String text) {
           contentLower.contains('void main(') ||
           contentLower.contains('def main(') ||
           contentLower.contains('if __name__') ||
-          RegExp(r'^\s*(class|public class|abstract class|private class)\s+', multiLine: true).hasMatch(block.content) ||
-          RegExp(r'^\s*(function|export function|async function|export default function)\s+', multiLine: true).hasMatch(block.content);
+          RegExp(
+            r'^\s*(class|public class|abstract class|private class)\s+',
+            multiLine: true,
+          ).hasMatch(block.content) ||
+          RegExp(
+            r'^\s*(function|export function|async function|export default function)\s+',
+            multiLine: true,
+          ).hasMatch(block.content);
       final isArtifact =
           lang == 'artifact' ||
           ((lang == 'html' || lang == 'react' || lang == 'javascript') &&
@@ -1334,13 +1367,51 @@ class _SpeakAction extends StatelessWidget {
       builder: (context, _, __) {
         final speaking = NexonTts.isSpeakingMessage(message.text);
         return _GhostAction(
-          icon: speaking
-              ? Icons.stop_circle_outlined
-              : Icons.volume_up_rounded,
+          icon: speaking ? Icons.stop_circle_outlined : Icons.volume_up_rounded,
           tooltip: speaking ? 'Stop reading' : 'Read aloud',
           onTap: () => NexonTts.toggleSpeak(message.text, () {}),
         );
       },
+    );
+  }
+}
+
+class _CopyAction extends StatefulWidget {
+  const _CopyAction({required this.text});
+
+  final String text;
+
+  @override
+  State<_CopyAction> createState() => _CopyActionState();
+}
+
+class _CopyActionState extends State<_CopyAction> {
+  Timer? _resetTimer;
+  bool _copied = false;
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.text));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    _resetTimer?.cancel();
+    _resetTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _GhostAction(
+      icon: _copied ? Icons.check_rounded : Icons.content_copy_rounded,
+      tooltip: _copied ? 'Copied' : 'Copy text',
+      onTap: _copy,
+      color: _copied ? const Color(0xFF059669) : null,
     );
   }
 }
@@ -1350,11 +1421,13 @@ class _GhostAction extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.color,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -1365,7 +1438,7 @@ class _GhostAction extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.all(4),
-          child: Icon(icon, size: 15, color: const Color(0xFF8B7355)),
+          child: Icon(icon, size: 15, color: color ?? const Color(0xFF8B7355)),
         ),
       ),
     );

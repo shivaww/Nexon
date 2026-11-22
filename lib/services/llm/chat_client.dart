@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:nexon/main.dart';
@@ -268,7 +269,9 @@ class ChatClient {
 
       final payload = <String, dynamic>{
         'model': model,
-        'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
+        'messages': MessagePipeline.sanitizeForProvider(messages).map((
+          message,
+        ) {
           String finalText = message.text;
           final inlineFiles = studyModeEnabled
               ? message.files.where((f) => !f.isWorkspaceFile).toList()
@@ -345,9 +348,9 @@ class ChatClient {
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
             final response = await request.close().timeout(
-              const Duration(seconds: 90),
+              const Duration(seconds: 120),
               onTimeout: () => throw TimeoutException(
-                'LLM request timed out after 90s waiting for response.',
+                'LLM request timed out after 120s waiting for response.',
               ),
             );
 
@@ -366,9 +369,9 @@ class ChatClient {
                 .transform(utf8.decoder)
                 .join()
                 .timeout(
-                  const Duration(seconds: 90),
+                  const Duration(seconds: 120),
                   onTimeout: () => throw TimeoutException(
-                    'LLM response body timed out after 90s.',
+                    'LLM response body timed out after 120s.',
                   ),
                 );
             final decoded = jsonDecode(body);
@@ -436,7 +439,9 @@ class ChatClient {
       if (allKeys.isEmpty) allKeys.add('');
       final payload = <String, dynamic>{
         'model': model,
-        'messages': MessagePipeline.sanitizeForProvider(messages).map((message) {
+        'messages': MessagePipeline.sanitizeForProvider(messages).map((
+          message,
+        ) {
           String finalText = message.text;
           final inlineFiles = studyModeEnabled
               ? message.files.where((f) => !f.isWorkspaceFile).toList()
@@ -661,17 +666,12 @@ class ChatClient {
   static String _cleanSnippet(Object? raw, {int max = 500}) {
     var s = (raw ?? '').toString();
     s = s.replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), ' ');
-    s = s.replaceAllMapped(
-      RegExp(r'\[([^\]]*)\]\([^)]*\)'),
-      (m) => m[1] ?? '',
-    );
+    s = s.replaceAllMapped(RegExp(r'\[([^\]]*)\]\([^)]*\)'), (m) => m[1] ?? '');
     s = s.replaceAll(RegExp(r'\[\.{3}\]'), ' ');
     final kept = s
         .split('\n')
         .map((l) => l.trim())
-        .where(
-          (t) => t.isNotEmpty && !_isBoilerLine(t),
-        )
+        .where((t) => t.isNotEmpty && !_isBoilerLine(t))
         .map((t) => t.replaceFirst(RegExp(r'^#{1,6}\s*'), ''));
     s = kept.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
     if (s.length <= max) return s;
@@ -859,24 +859,33 @@ class ChatClient {
             final customId = provider.substring(7);
             final cp = customProviders.firstWhere(
               (p) => p.id == customId,
-              orElse: () => throw Exception('Unknown custom search provider: $customId'),
+              orElse: () =>
+                  throw Exception('Unknown custom search provider: $customId'),
             );
             final uri = Uri.parse(cp.endpoint);
             final request = cp.method.toUpperCase() == 'GET'
-                ? await client.getUrl(Uri.parse(
-                    '${cp.endpoint}?${cp.queryParam}=${Uri.encodeComponent(query)}'
-                    '${cp.extraParams.entries.map((e) => '&${e.key}=${Uri.encodeComponent(e.value)}').join('')}'
-                  ))
+                ? await client.getUrl(
+                    Uri.parse(
+                      '${cp.endpoint}?${cp.queryParam}=${Uri.encodeComponent(query)}'
+                      '${cp.extraParams.entries.map((e) => '&${e.key}=${Uri.encodeComponent(e.value)}').join('')}',
+                    ),
+                  )
                 : await client.postUrl(uri);
             request.followRedirects = false;
             if (cp.method.toUpperCase() == 'GET') {
               if (currentKey.isNotEmpty) {
-                request.headers.set(cp.apiKeyHeader, '${cp.apiKeyPrefix}$currentKey');
+                request.headers.set(
+                  cp.apiKeyHeader,
+                  '${cp.apiKeyPrefix}$currentKey',
+                );
               }
             } else {
               request.headers.contentType = ContentType.json;
               if (currentKey.isNotEmpty) {
-                request.headers.set(cp.apiKeyHeader, '${cp.apiKeyPrefix}$currentKey');
+                request.headers.set(
+                  cp.apiKeyHeader,
+                  '${cp.apiKeyPrefix}$currentKey',
+                );
               }
               final payload = <String, dynamic>{
                 cp.queryParam: query,
@@ -898,12 +907,17 @@ class ChatClient {
               }
               rawResults = node is List ? node : [];
             } else {
-              rawResults = (decoded is Map ? decoded[cp.resultsPath] : null) as List? ?? [];
+              rawResults =
+                  (decoded is Map ? decoded[cp.resultsPath] : null) as List? ??
+                  [];
             }
-            return rawResults.map((r) {
-              final item = r as Map;
-              return '- [${item[cp.titleField] ?? ""}](${item[cp.urlField] ?? ""}): ${item[cp.snippetField] ?? ""}';
-            }).take(6).join('\n\n');
+            return rawResults
+                .map((r) {
+                  final item = r as Map;
+                  return '- [${item[cp.titleField] ?? ""}](${item[cp.urlField] ?? ""}): ${item[cp.snippetField] ?? ""}';
+                })
+                .take(6)
+                .join('\n\n');
           } else if (provider == 'duckduckgo') {
             final uri = Uri.parse('https://lite.duckduckgo.com/lite/');
             final request = await client.postUrl(uri);

@@ -3,6 +3,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -26,6 +27,7 @@ class Composer extends StatelessWidget {
     required this.onCancelEdit,
     this.onStop,
     this.onOpenLiveVoice,
+    this.focusNode,
     this.activeFeaturePills = const [],
     super.key,
   });
@@ -36,6 +38,7 @@ class Composer extends StatelessWidget {
   final VoidCallback? onStop;
   final VoidCallback onPlusPressed;
   final VoidCallback? onOpenLiveVoice;
+  final FocusNode? focusNode;
   final List<String> attachedImages;
   final ValueChanged<int> onRemoveImage;
   final List<AttachedFile> attachedFiles;
@@ -201,7 +204,9 @@ class Composer extends StatelessWidget {
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: controller,
             builder: (context, value, _) {
-              final suggestions = SlashCommandService.filterCommands(value.text);
+              final suggestions = SlashCommandService.filterCommands(
+                value.text,
+              );
               if (suggestions.isEmpty) return const SizedBox.shrink();
               return Container(
                 margin: const EdgeInsets.only(bottom: 8),
@@ -249,10 +254,12 @@ class Composer extends StatelessWidget {
                 child: ListView(
                   scrollDirection: Axis.horizontal,
                   children: activeFeaturePills
-                      .map((pill) => Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: pill,
-                          ))
+                      .map(
+                        (pill) => Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: pill,
+                        ),
+                      )
                       .toList(),
                 ),
               ),
@@ -301,6 +308,7 @@ class Composer extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(vertical: 4),
                       child: TextField(
                         controller: controller,
+                        focusNode: focusNode,
                         minLines: 1,
                         maxLines: 6,
                         textInputAction: TextInputAction.newline,
@@ -338,20 +346,20 @@ class Composer extends StatelessWidget {
                       final Color btnColor = isSending
                           ? const Color(0xFF9B4D39)
                           : (hasText
-                              ? const Color(0xFF7B4E2E)
-                              : const Color(0xFFCBBBA4));
+                                ? const Color(0xFF7B4E2E)
+                                : const Color(0xFFCBBBA4));
                       return AnimatedSwitcher(
                         duration: const Duration(milliseconds: 180),
                         switchInCurve: Curves.easeOutCubic,
                         switchOutCurve: Curves.easeInCubic,
                         transitionBuilder: (child, animation) =>
                             ScaleTransition(
-                          scale: animation,
-                          child: FadeTransition(
-                            opacity: animation,
-                            child: child,
-                          ),
-                        ),
+                              scale: animation,
+                              child: FadeTransition(
+                                opacity: animation,
+                                child: child,
+                              ),
+                            ),
                         child: MetalFx(
                           key: ValueKey<bool>(isSending),
                           preset: MetalPreset.bronze,
@@ -370,8 +378,9 @@ class Composer extends StatelessWidget {
                             onPressed: isSending
                                 ? (onStop ?? () {})
                                 : (canTap ? onSend : () {}),
-                            tooltip:
-                                isSending ? 'Stop response' : 'Send message',
+                            tooltip: isSending
+                                ? 'Stop response'
+                                : 'Send message',
                           ),
                         ),
                       );

@@ -108,7 +108,6 @@ export 'package:nexon/utils/code_helpers.dart';
 export 'package:nexon/widgets/research_agent_avatars.dart';
 export 'package:nexon/screens/kaggle_setup_screen.dart';
 
-
 /// Helper class for Text-To-Speech audio playback of model outputs.
 import 'package:nexon/services/tts_service.dart';
 export 'package:nexon/services/tts_service.dart';
@@ -213,7 +212,8 @@ class ChatHomePage extends StatefulWidget {
   State<ChatHomePage> createState() => _ChatHomePageState();
 }
 
-class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver {
+class _ChatHomePageState extends State<ChatHomePage>
+    with WidgetsBindingObserver {
   static final _secureStorage = const FlutterSecureStorage();
   static const _settingsKey = 'provider_settings_v1';
   static const _selectedProviderKey = 'selected_provider_id';
@@ -221,6 +221,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
+  final _composerFocusNode = FocusNode();
   final _chatClient = ChatClient();
 
   SharedPreferences? _prefs;
@@ -232,6 +233,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   // True while the user is reading earlier output; auto-scroll yields instead
   // of yanking them back to the bottom on every streaming tick.
   bool _userScrolledUp = false;
+  bool _showJumpToBottom = false;
+  bool _jumpToBottomInProgress = false;
   var _isFetchingModels = false;
   SearchSettings _searchSettings = SearchSettings.defaults();
   bool _agenticEnabled = true;
@@ -343,8 +346,12 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   void _openLiveVoiceMode() {
     // Voice Mode only works in Normal Mode (no other mode/feature active)
-    if (_agenticEnabled || _searchSettings.enabled || _deepResearchEnabled ||
-        _studyModeEnabled || _svgVisualsEnabled || _artifactsEnabled) {
+    if (_agenticEnabled ||
+        _searchSettings.enabled ||
+        _deepResearchEnabled ||
+        _studyModeEnabled ||
+        _svgVisualsEnabled ||
+        _artifactsEnabled) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -385,7 +392,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   List<TodoItem> _activeTodos = [];
   bool _todoListVisible = false;
-
 
   List<ChatSession> _sessions = [];
   String? _activeSessionId;
@@ -485,9 +491,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   int _mergeLoadedSessions(List<ChatSession> incoming) {
     if (incoming.isEmpty) return 0;
     int added = 0;
-    final Map<String, ChatSession> map = {
-      for (final s in _sessions) s.id: s,
-    };
+    final Map<String, ChatSession> map = {for (final s in _sessions) s.id: s};
 
     for (final remote in incoming) {
       if (!map.containsKey(remote.id)) {
@@ -565,7 +569,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     try {
       final rawUrl = _customMcpUrl.trim();
       final parsed = rawUrl.isEmpty ? null : Uri.tryParse(rawUrl);
-      final base = (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty)
+      final base =
+          (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty)
           ? '${parsed.scheme}://${parsed.host}${parsed.hasPort ? ':${parsed.port}' : ''}'
           : 'http://127.0.0.1:8390';
       final target = sessionId == null || sessionId.trim().isEmpty
@@ -623,10 +628,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => WorkspaceFilesSheet(
-        baseUrl: base,
-        sessionId: sessionId,
-      ),
+      builder: (_) => WorkspaceFilesSheet(baseUrl: base, sessionId: sessionId),
     );
   }
 
@@ -900,8 +902,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
 
   Future<String> _expandHomePath(String path) async {
     if (path == '~') {
-      return Platform.environment['HOME'] ??
-          '/data/data/com.termux/files/home';
+      return Platform.environment['HOME'] ?? '/data/data/com.termux/files/home';
     }
     if (path.startsWith('~/')) {
       final home =
@@ -957,7 +958,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       selectedWorkspace.isNotEmpty ? selectedWorkspace : _agenticWorkspace,
     );
     return [
-      File('${workspace.replaceAll(RegExp(r'/+$'), '')}/.nexon/sessions/prefs_backup.json'),
+      File(
+        '${workspace.replaceAll(RegExp(r'/+$'), '')}/.nexon/sessions/prefs_backup.json',
+      ),
       File('${docs.path}/sessions/prefs_backup.json'),
     ];
   }
@@ -966,8 +969,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     String? configuredWorkspace,
   ]) async {
     final current = await _sessionBackupPrefsFile();
-    for (final candidate in
-        await _legacySessionBackupPrefsFiles(configuredWorkspace)) {
+    for (final candidate in await _legacySessionBackupPrefsFiles(
+      configuredWorkspace,
+    )) {
       if (candidate.path != current.path && await candidate.exists()) {
         return candidate;
       }
@@ -1040,16 +1044,20 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     if (parsed == null) {
       return {'facts': facts, 'findings': findings};
     }
-    final rawFacts = parsed['facts'] is List ? parsed['facts'] as List : const [];
-    final rawFindings =
-        parsed['findings'] is List ? parsed['findings'] as List : const [];
-    
+    final rawFacts = parsed['facts'] is List
+        ? parsed['facts'] as List
+        : const [];
+    final rawFindings = parsed['findings'] is List
+        ? parsed['findings'] as List
+        : const [];
+
     String _normUrl(String u) {
       var s = u.trim().toLowerCase();
       if (s.endsWith('/') && s.length > 8) s = s.substring(0, s.length - 1);
       s = s.replaceAll('http://', 'https://');
       return s;
     }
+
     String _matchSource(String url) {
       final norm = _normUrl(url);
       for (final expected in expectedSources) {
@@ -1057,6 +1065,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       }
       return expectedSources.first;
     }
+
     for (final item in rawFacts) {
       if (item is! Map) continue;
       final sourceUrl = item['source']?.toString() ?? '';
@@ -1072,8 +1081,15 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     for (final item in rawFindings) {
       if (item is! Map) continue;
       final sourceUrl = item['source']?.toString() ?? '';
+      final rawText = item['text']?.toString().trim() ?? '';
+      if (rawText.isEmpty) continue;
+      // Keep short structured evidence intact: markdown tables and exact
+      // numeric lines are useful to the writer, so do not flatten whitespace.
+      final text = rawText.length > 400
+          ? '${rawText.substring(0, 399)}…'
+          : rawText;
       findings.add({
-        'text': item['text']?.toString() ?? '',
+        'text': text,
         'source': _matchSource(sourceUrl),
         'confidence': item['confidence']?.toString() ?? 'high',
       });
@@ -1137,7 +1153,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       // the two trims never stack on typical content.
       if (content.length > 12000) {
         combinedContent.writeln(content.substring(0, 9000));
-        combinedContent.writeln('\n...[${content.length - 11000} chars omitted]...\n');
+        combinedContent.writeln(
+          '\n...[${content.length - 11000} chars omitted]...\n',
+        );
         combinedContent.writeln(content.substring(content.length - 2000));
       } else {
         combinedContent.writeln(content);
@@ -1148,7 +1166,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     final summarizerMessages = [
       ChatMessage(
         role: MessageRole.system,
-        text: DeepResearchPrompts.summarizerSystemPrompt +
+        text:
+            DeepResearchPrompts.summarizerSystemPrompt +
             '\n\nYou are summarizing MULTIPLE sources. ' +
             'Each source is marked with === SOURCE: <url> ===. ' +
             'Extract facts and findings from ALL sources. ' +
@@ -1156,10 +1175,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
             'Deduplicate across sources — if two sources report the same fact, ' +
             'keep only one with the more authoritative source.',
       ),
-      ChatMessage(
-        role: MessageRole.user,
-        text: combinedContent.toString(),
-      ),
+      ChatMessage(role: MessageRole.user, text: combinedContent.toString()),
     ];
 
     final nonReasoningSettings = settings.copyWith(reasoningEnabled: false);
@@ -1240,6 +1256,46 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       }
     }
     return items.join(' ');
+  }
+
+  /// Turn a finished phase into a concise durable handoff. This deliberately
+  /// uses the non-reasoning JSON path: it is an extraction/consolidation call,
+  /// not a task that benefits from visible chain-of-thought.
+  Future<Map<String, dynamic>?> _consolidateDeepResearchPhase({
+    required String phaseTitle,
+    required String queryText,
+    required String nextPhaseHeading,
+    required List<_JsonMap> phaseFacts,
+    required List<_JsonMap> phaseFindings,
+    required List<_JsonMap> searchSnippets,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+  }) async {
+    final payload = {
+      'phase_title': phaseTitle,
+      'query_text': queryText,
+      'next_phase_heading': nextPhaseHeading,
+      'phase_facts': phaseFacts.take(30).toList(),
+      'phase_findings': phaseFindings.take(20).toList(),
+      // These are intentionally supplementary. The consolidator is instructed
+      // to use them only when page-derived evidence is sparse.
+      'web_search_snippets': searchSnippets.take(12).toList(),
+    };
+    final response = await _retryLlmCall(
+      provider: provider,
+      settings: settings.copyWith(reasoningEnabled: false),
+      model: model,
+      messages: [
+        const ChatMessage(
+          role: MessageRole.system,
+          text: DeepResearchPrompts.phaseConsolidatorSystemPrompt,
+        ),
+        ChatMessage(role: MessageRole.user, text: jsonEncode(payload)),
+      ],
+      maxRetries: 1,
+    );
+    return DeepResearchHelpers.parseJsonObject(response);
   }
 
   List<String> _evidenceSourceUrls(String tempJsonContent) {
@@ -1393,14 +1449,14 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   ProviderDefinition get _provider => _resolveProvider(_selectedProviderId);
 
   List<ProviderDefinition> get _allProviders => [
-        ...providerCatalog,
-        ..._customProviders,
-      ];
+    ...providerCatalog,
+    ..._customProviders,
+  ];
 
   ProviderDefinition _resolveProvider(String id) => _allProviders.firstWhere(
-        (item) => item.id == id,
-        orElse: () => providerCatalog.first,
-      );
+    (item) => item.id == id,
+    orElse: () => providerCatalog.first,
+  );
 
   static bool _isCustomProviderId(String id) =>
       id == 'custom' || id.startsWith('custom_');
@@ -1419,6 +1475,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _messageController.addListener(_handleMessageTextChanged);
+    _scrollController.addListener(_handleChatScroll);
     _loadSettings();
     NexonTts.init();
     _startBridgeTimer();
@@ -1470,13 +1527,16 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       final bytes = utf8.encode(jsonEncode({'method': 'ping', 'params': {}}));
       request.headers.contentLength = bytes.length;
       request.add(bytes);
-      final response = await request.close().timeout(const Duration(seconds: 3));
+      final response = await request.close().timeout(
+        const Duration(seconds: 3),
+      );
       final body = await response
           .transform(utf8.decoder)
           .join()
           .timeout(const Duration(seconds: 3));
       final decoded = jsonDecode(body);
-      ok = response.statusCode >= 200 &&
+      ok =
+          response.statusCode >= 200 &&
           response.statusCode < 300 &&
           decoded is Map &&
           decoded['result'] is Map &&
@@ -1628,7 +1688,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     _autoBackupInFlight = true;
     try {
       final prefs = await SharedPreferences.getInstance();
-      final backupEnabled = prefs.getBool('google_drive_backup_enabled') ?? false;
+      final backupEnabled =
+          prefs.getBool('google_drive_backup_enabled') ?? false;
       if (!backupEnabled) return;
 
       // Prefer the in-memory full session list to avoid sending truncated history.
@@ -1674,7 +1735,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     _bridgeTimer?.cancel();
     _messageController.removeListener(_handleMessageTextChanged);
     _messageController.dispose();
+    _scrollController.removeListener(_handleChatScroll);
     _scrollController.dispose();
+    _composerFocusNode.dispose();
     _mcpHttpClient.close();
     super.dispose();
   }
@@ -1737,7 +1800,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
     // The IME may have truncated the paste; prefer the full clipboard
     // content when it matches what actually reached the field.
-    final payload = (clipboardText.length > inserted.length &&
+    final payload =
+        (clipboardText.length > inserted.length &&
             clipboardText.startsWith(inserted))
         ? clipboardText
         : inserted;
@@ -1749,9 +1813,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFFFFFBF2),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Large Paste Detected',
           style: TextStyle(
@@ -1825,9 +1887,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       });
       _saveSessions();
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Pasted text attached as file')),
         );
       }
@@ -1866,8 +1926,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
           key: 'search_api_key',
           value: legacySearchKey,
         );
-        final migratedSearchKey =
-            await _secureStorage.read(key: 'search_api_key');
+        final migratedSearchKey = await _secureStorage.read(
+          key: 'search_api_key',
+        );
         if (migratedSearchKey == legacySearchKey) {
           savedSearchKey = migratedSearchKey;
           searchKeySecured = true;
@@ -1875,9 +1936,13 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       } catch (_) {}
     }
     try {
-      final savedFallbacks = await _secureStorage.read(key: 'search_fallback_keys');
+      final savedFallbacks = await _secureStorage.read(
+        key: 'search_fallback_keys',
+      );
       if (savedFallbacks != null && savedFallbacks.trim().isNotEmpty) {
-        savedFallbackKeys = (jsonDecode(savedFallbacks) as List).map((e) => e.toString()).toList();
+        savedFallbackKeys = (jsonDecode(savedFallbacks) as List)
+            .map((e) => e.toString())
+            .toList();
         searchFallbacksSecured = true;
       }
     } catch (_) {}
@@ -1888,8 +1953,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
           key: 'search_fallback_keys',
           value: encodedFallbacks,
         );
-        final migratedFallbacks =
-            await _secureStorage.read(key: 'search_fallback_keys');
+        final migratedFallbacks = await _secureStorage.read(
+          key: 'search_fallback_keys',
+        );
         if (migratedFallbacks == encodedFallbacks) {
           savedFallbackKeys = legacySearchFallbacks;
           searchFallbacksSecured = true;
@@ -1908,10 +1974,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       await prefs.setString(
         'search_settings_v1',
         jsonEncode(
-          loadedSearchSettings.copyWith(
-            apiKey: '',
-            fallbackApiKeys: const [],
-          ).toJson(),
+          loadedSearchSettings
+              .copyWith(apiKey: '', fallbackApiKeys: const [])
+              .toJson(),
         ),
       );
     }
@@ -1949,9 +2014,7 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
             final id = entry['id']?.toString() ?? '';
             final name = entry['name']?.toString() ?? '';
             final baseUrl = entry['baseUrl']?.toString() ?? '';
-            if (!id.startsWith('custom_') ||
-                name.isEmpty ||
-                baseUrl.isEmpty) {
+            if (!id.startsWith('custom_') || name.isEmpty || baseUrl.isEmpty) {
               continue;
             }
             loadedCustom.add(
@@ -2005,8 +2068,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       final normalized = current.maxTokens < 1
           ? current.copyWith(maxTokens: provider.defaultMaxTokens)
           : current;
-      nextSettings[provider.id] =
-          normalized.copyWith(apiKey: key ?? normalized.apiKey);
+      nextSettings[provider.id] = normalized.copyWith(
+        apiKey: key ?? normalized.apiKey,
+      );
     }
 
     final agenticRaw = prefs.getBool('agentic_enabled_v1');
@@ -2056,7 +2120,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       _writerContextBudget = writerContextBudgetRaw ?? 32000;
       _customProviders = loadedCustom;
       if (effectiveSelected != null &&
-          (providerCatalog.any((provider) => provider.id == effectiveSelected) ||
+          (providerCatalog.any(
+                (provider) => provider.id == effectiveSelected,
+              ) ||
               loadedCustom.any(
                 (provider) => provider.id == effectiveSelected,
               ))) {
@@ -2099,7 +2165,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       } catch (_) {
         // Never fall back to plaintext SharedPreferences for provider keys.
         await prefs.remove('fallback_api_key_${entry.key}');
-        debugPrint('Provider key could not be saved securely and will need to be re-entered.');
+        debugPrint(
+          'Provider key could not be saved securely and will need to be re-entered.',
+        );
       }
     }
     await prefs.setString(_settingsKey, jsonEncode(metadata));
@@ -2432,11 +2500,12 @@ jobs:
   Future<void> _sendMessage({
     String? promptText,
     String? userTextOverride,
+    bool reuseExistingUserMessage = false,
   }) async {
     final prompt = (promptText ?? userTextOverride ?? _messageController.text)
         .trim();
     if (prompt.isEmpty) return;
-    if (prompt.startsWith('/')) {
+    if (prompt.startsWith('/') && !reuseExistingUserMessage) {
       if (promptText == null && userTextOverride == null) {
         _messageController.clear();
       }
@@ -2519,7 +2588,15 @@ jobs:
 
       int newActiveBranchIndex = session.activeBranchIndex ?? 0;
 
-      if (isEditing &&
+      if (reuseExistingUserMessage) {
+        if (newActiveBranchIndex >= 0 &&
+            newActiveBranchIndex < updatedBranches.length) {
+          updatedBranches[newActiveBranchIndex] = baseMessages;
+        } else {
+          updatedBranches.add(baseMessages);
+          newActiveBranchIndex = updatedBranches.length - 1;
+        }
+      } else if (isEditing &&
           editIndex != null &&
           editIndex >= 0 &&
           editIndex < baseMessages.length) {
@@ -2580,7 +2657,7 @@ jobs:
         });
 
         if (targetSessionId == _activeSessionId) {
-          _scrollToBottom(force: true);
+          _scrollToBottom();
         }
 
         final List<ChatMessage> historyForApi = [];
@@ -2613,8 +2690,12 @@ jobs:
           _promptEngine.resetToDefaults();
           _promptEngine.setUserInfo(
             userName: _userName,
-            cwd: (_agenticEnabled || _studyModeEnabled) ? _agenticWorkspace : null,
-            os: (_agenticEnabled || _studyModeEnabled) ? 'android with termux' : null,
+            cwd: (_agenticEnabled || _studyModeEnabled)
+                ? _agenticWorkspace
+                : null,
+            os: (_agenticEnabled || _studyModeEnabled)
+                ? 'android with termux'
+                : null,
             date: currentDateStr,
             modelName: _settings[_selectedProviderId]?.model ?? '',
           );
@@ -2654,7 +2735,6 @@ jobs:
             _promptEngine.addFeature(VoiceModePrompts.features);
           }
 
-
           systemPromptText = _promptEngine.assemble();
         }
 
@@ -2686,9 +2766,11 @@ jobs:
           estTokens += m.text.length ~/ 4;
         }
         const kHistoryBudget = 90000;
-        for (var i = 1;
-            i < historyForApi.length - 8 && estTokens > kHistoryBudget;
-            i++) {
+        for (
+          var i = 1;
+          i < historyForApi.length - 8 && estTokens > kHistoryBudget;
+          i++
+        ) {
           final m = historyForApi[i];
           if (m.text.length > 200) {
             final stub = '[context space: earlier turn omitted]';
@@ -2799,9 +2881,12 @@ jobs:
                 if (idx != -1) {
                   final msgs = List<ChatMessage>.from(_sessions[idx].messages);
                   if (assistantMessageIndex < msgs.length) {
-                    final elapsedSec = streamStopwatch.elapsedMilliseconds / 1000.0;
+                    final elapsedSec =
+                        streamStopwatch.elapsedMilliseconds / 1000.0;
                     final estTokens = (streamCharCount / 4).ceil();
-                    final tps = elapsedSec > 0.1 ? (estTokens / elapsedSec) : 0.0;
+                    final tps = elapsedSec > 0.1
+                        ? (estTokens / elapsedSec)
+                        : 0.0;
                     final maxTok = settings.maxTokens;
                     msgs[assistantMessageIndex] = ChatMessage(
                       role: MessageRole.assistant,
@@ -2857,7 +2942,9 @@ jobs:
         streamStopwatch.stop();
         final finalElapsedSec = streamStopwatch.elapsedMilliseconds / 1000.0;
         final finalEstTokens = (streamCharCount / 4).ceil();
-        final finalTps = finalElapsedSec > 0.1 ? (finalEstTokens / finalElapsedSec) : 0.0;
+        final finalTps = finalElapsedSec > 0.1
+            ? (finalEstTokens / finalElapsedSec)
+            : 0.0;
         final finalMaxTok = settings.maxTokens;
         final finalUsage = formatTokenUsage(finalEstTokens, finalMaxTok);
 
@@ -2867,14 +2954,14 @@ jobs:
             final msgs = List<ChatMessage>.from(_sessions[idx].messages);
             if (assistantMessageIndex < msgs.length) {
               msgs[assistantMessageIndex] = ChatMessage(
-                  role: MessageRole.assistant,
-                  text: _svgVisualsEnabled
-                      ? _fenceBareToolCalls(fullText)
-                      : _stripSvgVisuals(_fenceBareToolCalls(fullText)),
-                  reasoning: reasoningText,
-                  tokensPerSec: finalTps > 0 ? finalTps.toStringAsFixed(1) : '',
-                  tokenUsage: finalUsage,
-                );
+                role: MessageRole.assistant,
+                text: _svgVisualsEnabled
+                    ? _fenceBareToolCalls(fullText)
+                    : _stripSvgVisuals(_fenceBareToolCalls(fullText)),
+                reasoning: reasoningText,
+                tokensPerSec: finalTps > 0 ? finalTps.toStringAsFixed(1) : '',
+                tokenUsage: finalUsage,
+              );
               _sessions[idx] = _sessions[idx].copyWith(messages: msgs);
             }
           }
@@ -2890,8 +2977,7 @@ jobs:
                 (planFence['json'] as Map<String, dynamic>)['research_plan'];
             final phaseList = rawPlan is List
                 ? rawPlan
-                : (rawPlan is Map<String, dynamic> &&
-                          rawPlan['phases'] is List
+                : (rawPlan is Map<String, dynamic> && rawPlan['phases'] is List
                       ? rawPlan['phases'] as List
                       : const <dynamic>[]);
             // Normalize once here so the state fence always carries the
@@ -2956,8 +3042,7 @@ jobs:
         // always-on XML regexes): web_search/read_url must work in plain chat
         // too, and workspace tools + quiz in study mode. The cheap fence
         // prefilter skips replies that can't contain a JSON tool block.
-        if (fullText.contains('```') ||
-            fullText.contains('"t"')) {
+        if (fullText.contains('```') || fullText.contains('"t"')) {
           final nativeCalls = _findNativeToolCalls(fullText);
           if (nativeCalls.isEmpty &&
               (_agenticEnabled || _studyModeEnabled) &&
@@ -3000,8 +3085,9 @@ jobs:
                     if (s.isNotEmpty) searchQueries.add(s);
                   }
                 }
-                final singleQ =
-                    (toolArgs['q'] ?? toolArgs['query'] ?? '').toString().trim();
+                final singleQ = (toolArgs['q'] ?? toolArgs['query'] ?? '')
+                    .toString()
+                    .trim();
                 if (searchQueries.isEmpty && singleQ.isNotEmpty) {
                   searchQueries.add(singleQ);
                 }
@@ -3021,14 +3107,14 @@ jobs:
                 final startDate =
                     (toolArgs['start_date'] ?? toolArgs['startDate'])
                         ?.toString();
-                final endDate =
-                    (toolArgs['end_date'] ?? toolArgs['endDate'])
-                        ?.toString();
+                final endDate = (toolArgs['end_date'] ?? toolArgs['endDate'])
+                    ?.toString();
                 if (mounted) {
-                  setState(() => _toolStatus =
-                      searchQueries.length == 1
-                          ? '🔍 Searching: "${searchQueries.first}"'
-                          : '🔍 Searching ${searchQueries.length} queries…');
+                  setState(
+                    () => _toolStatus = searchQueries.length == 1
+                        ? '🔍 Searching: "${searchQueries.first}"'
+                        : '🔍 Searching ${searchQueries.length} queries…',
+                  );
                 }
                 final results = await Future.wait(
                   searchQueries.map(
@@ -3056,8 +3142,9 @@ jobs:
               if (toolName == 'read_url') {
                 executedTools = true;
                 final url = (toolArgs['url'] ?? '').toString();
-                final shortUrl =
-                    url.length > 50 ? '${url.substring(0, 47)}…' : url;
+                final shortUrl = url.length > 50
+                    ? '${url.substring(0, 47)}…'
+                    : url;
                 if (mounted) {
                   setState(() => _toolStatus = '🌐 Fetching: $shortUrl');
                 }
@@ -3079,14 +3166,17 @@ jobs:
                     if (item is String) {
                       title = item;
                     } else if (item is Map) {
-                      title = item['title']?.toString() ??
+                      title =
+                          item['title']?.toString() ??
                           item['t']?.toString() ??
                           'Task ${i + 1}';
                     } else {
                       title = item.toString();
                     }
                     if (title.trim().isNotEmpty) {
-                      items.add(TodoItem(n: items.length + 1, title: title.trim()));
+                      items.add(
+                        TodoItem(n: items.length + 1, title: title.trim()),
+                      );
                     }
                   }
                 }
@@ -3169,16 +3259,25 @@ jobs:
                     for (int i = bareStart.start; i < fullText.length; i++) {
                       final c = fullText[i];
                       if (inStr) {
-                        if (esc) { esc = false; }
-                        else if (c == '\\') { esc = true; }
-                        else if (c == '"') { inStr = false; }
+                        if (esc) {
+                          esc = false;
+                        } else if (c == '\\') {
+                          esc = true;
+                        } else if (c == '"') {
+                          inStr = false;
+                        }
                       } else {
-                        if (c == '"') { inStr = true; }
-                        else if (c == '{') { depth++; }
-                        else if (c == '}') {
+                        if (c == '"') {
+                          inStr = true;
+                        } else if (c == '{') {
+                          depth++;
+                        } else if (c == '}') {
                           depth--;
                           if (depth == 0) {
-                            rawQuizBlock = fullText.substring(bareStart.start, i + 1);
+                            rawQuizBlock = fullText.substring(
+                              bareStart.start,
+                              i + 1,
+                            );
                             break;
                           }
                         }
@@ -3196,8 +3295,7 @@ jobs:
                         _sessions[idx].messages,
                       );
                       if (assistantMessageIndex < msgs.length) {
-                        final stripped = msgs[assistantMessageIndex]
-                            .text
+                        final stripped = msgs[assistantMessageIndex].text
                             .replaceFirst(rawQuizBlock, '')
                             .trim();
                         // A quiz-only reply would otherwise become an empty
@@ -3206,9 +3304,7 @@ jobs:
                             ? '[Interactive quiz completed]'
                             : stripped;
                         msgs[assistantMessageIndex] =
-                            msgs[assistantMessageIndex].copyWith(
-                              text: cleaned,
-                            );
+                            msgs[assistantMessageIndex].copyWith(text: cleaned);
                         _sessions[idx] = _sessions[idx].copyWith(
                           messages: msgs,
                         );
@@ -3360,8 +3456,8 @@ jobs:
               final cmd = toolName == 'sh'
                   ? (toolArgs['cmd']?.toString() ?? '')
                   : toolName == 'diagnostics'
-                      ? (toolArgs['cmd']?.toString() ?? '')
-                      : 'py:${toolArgs['m'] ?? ''}';
+                  ? (toolArgs['cmd']?.toString() ?? '')
+                  : 'py:${toolArgs['m'] ?? ''}';
               if (_classifyShellSegments(cmd) == 'deny') {
                 toolOutputs.add(
                   'Tool Result [$toolName]:\n\n{"error":"Command denied by safety policy: contains a hard-denied segment (rm -rf, chmod 777/666, mkfs, dd if=, or force-push)."}',
@@ -3421,23 +3517,34 @@ jobs:
             final resultJson = jsonEncode(result);
             toolOutputs.add('Tool Result [$toolName]:\n\n$resultJson');
 
-            if (toolName == 'patch' || toolName == 'edit' || toolName == 'create_file') {
+            if (toolName == 'patch' ||
+                toolName == 'edit' ||
+                toolName == 'create_file') {
               String? filePath;
               if (toolArgs['f'] is String) {
                 filePath = toolArgs['f'] as String;
-              } else if (toolArgs['p'] is List && (toolArgs['p'] as List).isNotEmpty) {
+              } else if (toolArgs['p'] is List &&
+                  (toolArgs['p'] as List).isNotEmpty) {
                 final first = (toolArgs['p'] as List).first;
-                if (first is Map && first['f'] is String) filePath = first['f'] as String;
-              } else if (toolArgs['e'] is List && (toolArgs['e'] as List).isNotEmpty) {
+                if (first is Map && first['f'] is String)
+                  filePath = first['f'] as String;
+              } else if (toolArgs['e'] is List &&
+                  (toolArgs['e'] as List).isNotEmpty) {
                 final first = (toolArgs['e'] as List).first;
-                if (first is Map && first['f'] is String) filePath = first['f'] as String;
+                if (first is Map && first['f'] is String)
+                  filePath = first['f'] as String;
               }
-              if (filePath != null && filePath.endsWith('.dart') && !resultJson.contains('"err"')) {
+              if (filePath != null &&
+                  filePath.endsWith('.dart') &&
+                  !resultJson.contains('"err"')) {
                 try {
                   final diagResult = await NativeToolsService.call(
                     workspace: _agenticWorkspace,
                     tool: 'diagnostics',
-                    args: {'cmd': 'dart analyze ${_verifyShellQuote(filePath)} 2>&1', 'to': 60},
+                    args: {
+                      'cmd': 'dart analyze ${_verifyShellQuote(filePath)} 2>&1',
+                      'to': 60,
+                    },
                     customUrl: _customMcpUrl,
                   );
                   final diagOut = (diagResult['out'] ?? '').toString();
@@ -3630,7 +3737,8 @@ jobs:
                       if (resultData.containsKey('diff') &&
                           resultData['diff'].toString().isNotEmpty) {
                         cleanResult +=
-                            '\n\n--- DIFF ---\n' + resultData['diff'].toString();
+                            '\n\n--- DIFF ---\n' +
+                            resultData['diff'].toString();
                       }
                       if (resultData.containsKey('stderr') &&
                           resultData['stderr'].toString().trim().isNotEmpty) {
@@ -3856,9 +3964,8 @@ jobs:
         String newText = msg.text;
 
         if (newText.length > 8000) {
-          final toolResultMatch = RegExp(
-            r'Tool Result \[(\w+)\]',
-          ).firstMatch(newText);
+          final toolResultMatch = RegExp(r'Tool Result \[(\w+)\]')
+              .firstMatch(newText);
           final mcpMatch = newText.contains('MCP Result:\n');
           final method = toolResultMatch?.group(1)?.trim();
           const keepRichToolMethods = {
@@ -3954,7 +4061,9 @@ jobs:
                 '<patches>... [Patches data of length ${match.group(1)!.length} characters omitted] ...</patches>',
           );
           newText = newText.replaceAllMapped(
-            RegExp(r'```(?:html|markdown|md|react|json-chart|docx)\s*\n([\s\S]{800,}?)\n```'),
+            RegExp(
+              r'```(?:html|markdown|md|react|json-chart|docx)\s*\n([\s\S]{800,}?)\n```',
+            ),
             (match) =>
                 '```[Artifact of ${match.group(1)!.length} chars omitted for context space]```',
           );
@@ -3977,7 +4086,8 @@ jobs:
           if (userText.startsWith('Search results for') ||
               userText.startsWith('Content of URL') ||
               userText.startsWith('Web Search results')) {
-            userText = userText.substring(0, 2000) +
+            userText =
+                userText.substring(0, 2000) +
                 '\n\n...[${userText.length - 3000} chars omitted for context space]...\n\n' +
                 userText.substring(userText.length - 1000);
           }
@@ -4094,10 +4204,10 @@ jobs:
     if (!mounted) return false;
     final navigator = Navigator.of(context, rootNavigator: true);
     final result = await showDialog<String>(
-          context: context,
-          useRootNavigator: true,
-          barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFFFFFBF2),
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
@@ -4269,11 +4379,8 @@ jobs:
             ],
           ),
         ],
-          ),
-        ).timeout(
-          const Duration(seconds: 30),
-          onTimeout: () => 'no',
-        );
+      ),
+    ).timeout(const Duration(seconds: 30), onTimeout: () => 'no');
 
     if (result == null || result == 'no') return false;
     if (result == 'always') {
@@ -4527,7 +4634,11 @@ jobs:
       final previewParams = Map<String, dynamic>.from(params);
       previewParams['dry_run'] = true;
       previewParams['auto_checkpoint'] = false;
-      final resultData = await _postMcp(method, previewParams, timeoutSeconds: 10);
+      final resultData = await _postMcp(
+        method,
+        previewParams,
+        timeoutSeconds: 10,
+      );
       if (resultData == null) return null;
       final diff = resultData['diff']?.toString() ?? '';
       return diff.trim().isNotEmpty ? diff : null;
@@ -4553,9 +4664,9 @@ jobs:
     final bytes = utf8.encode(payload);
     request.headers.contentLength = bytes.length;
     request.add(bytes);
-    final response = await request
-        .close()
-        .timeout(Duration(seconds: timeoutSeconds));
+    final response = await request.close().timeout(
+      Duration(seconds: timeoutSeconds),
+    );
     final body = await response
         .transform(utf8.decoder)
         .join()
@@ -4608,11 +4719,10 @@ jobs:
         }
         final diags = data['diags'];
         final errors = data['errors'];
-        final hasErrors = (errors is int && errors > 0) ||
+        final hasErrors =
+            (errors is int && errors > 0) ||
             (diags is List &&
-                diags.any(
-                  (d) => d is Map && d['severity'] == 'error',
-                ));
+                diags.any((d) => d is Map && d['severity'] == 'error'));
         if (!hasErrors) {
           return '\n\n--- AUTO-VERIFICATION: PASSED (dart_diagnostics, 0 errors) ---';
         }
@@ -4817,8 +4927,7 @@ jobs:
     String searchResult = searchResultRaw;
     if (searchResult.length > 4000) {
       searchResult =
-          searchResult.substring(0, 4000) +
-          '\n\n...[truncated due to length]';
+          searchResult.substring(0, 4000) + '\n\n...[truncated due to length]';
     }
     return searchResult;
   }
@@ -4855,22 +4964,14 @@ jobs:
           HttpHeaders.acceptHeader,
           'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         );
-        request.headers.set(
-          HttpHeaders.acceptLanguageHeader,
-          'en-US,en;q=0.9',
-        );
+        request.headers.set(HttpHeaders.acceptLanguageHeader, 'en-US,en;q=0.9');
 
-        response = await request.close().timeout(
-          const Duration(seconds: 45),
-        );
+        response = await request.close().timeout(const Duration(seconds: 45));
 
         if ((response.isRedirect ||
-                (response.statusCode >= 300 &&
-                    response.statusCode < 400)) &&
+                (response.statusCode >= 300 && response.statusCode < 400)) &&
             redirectCount < 8) {
-          final location = response.headers.value(
-            HttpHeaders.locationHeader,
-          );
+          final location = response.headers.value(HttpHeaders.locationHeader);
           if (location != null && location.isNotEmpty) {
             await response.drain<void>();
             redirectCount++;
@@ -4933,7 +5034,11 @@ jobs:
 
         // Strip boilerplate/navigation tags to save tokens
         htmlBody = htmlBody.replaceAll(
-          RegExp(r'<(nav|header|footer|aside)\b[^>]*>[\s\S]*?</\1>', caseSensitive: false, dotAll: true),
+          RegExp(
+            r'<(nav|header|footer|aside)\b[^>]*>[\s\S]*?</\1>',
+            caseSensitive: false,
+            dotAll: true,
+          ),
           ' ',
         );
 
@@ -4965,10 +5070,7 @@ jobs:
           ),
           '',
         );
-        htmlBody = htmlBody.replaceAll(
-          RegExp(r'<!--.*?-->', dotAll: true),
-          '',
-        );
+        htmlBody = htmlBody.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
 
         text = htmlBody.replaceAll(RegExp(r'<[^>]*>'), ' ');
         text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -4981,8 +5083,7 @@ jobs:
         final lastPeriod = substring.lastIndexOf('. ');
         final endIdx = lastPeriod > 6000 ? lastPeriod + 1 : 8000;
         urlResult =
-            urlResult.substring(0, endIdx) +
-            '\n\n...[truncated due to length]';
+            urlResult.substring(0, endIdx) + '\n\n...[truncated due to length]';
       }
       return urlResult;
     } catch (e) {
@@ -5129,14 +5230,8 @@ jobs:
 
     s = _stripJsonComments(s);
     s = s.replaceAllMapped(RegExp(r',\s*([}\]])'), (m) => m.group(1)!);
-    s = s.replaceAllMapped(
-      RegExp(r"'([^']*)':"),
-      (m) => '"${m.group(1)}":',
-    );
-    s = s.replaceAllMapped(
-      RegExp(r":\s*'([^']*)'"),
-      (m) => ':"${m.group(1)}"',
-    );
+    s = s.replaceAllMapped(RegExp(r"'([^']*)':"), (m) => '"${m.group(1)}":');
+    s = s.replaceAllMapped(RegExp(r":\s*'([^']*)'"), (m) => ':"${m.group(1)}"');
     s = s.replaceAllMapped(
       RegExp(r'([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:'),
       (m) => '${m.group(1)}"${m.group(2)}":',
@@ -5195,9 +5290,6 @@ jobs:
     return out.toString();
   }
 
-
-
-
   /// Fallback for models that emit tool JSON without a ```json fence:
   /// scans for bare {"t": ...} objects whose tool name is known. Plain JSON
   /// code samples or prose braces never match: the 't' value must be a
@@ -5250,7 +5342,6 @@ jobs:
 
   bool _isKnownToolName(String t) => isKnownToolNameGlobal(t);
 
-
   /// Wraps bare known-tool JSON objects in ```json fences so the existing
   /// renderer shows them as tool cards instead of raw text.
   String _fenceBareToolCalls(String text) {
@@ -5295,7 +5386,8 @@ jobs:
       bool known = false;
       try {
         final dynamic d = jsonDecode(candidate);
-        known = d is Map<String, dynamic> &&
+        known =
+            d is Map<String, dynamic> &&
             _isKnownToolName(d['t']?.toString() ?? '');
       } catch (_) {}
       if (!known) continue;
@@ -5600,7 +5692,8 @@ jobs:
         final r = params['r'];
         if (r is List && r.isNotEmpty) {
           final first = r.first;
-          if (first is Map) return '📖 Reading ${shortPath(first['f']?.toString() ?? '')}';
+          if (first is Map)
+            return '📖 Reading ${shortPath(first['f']?.toString() ?? '')}';
         }
         return '📖 Reading…';
       case 'search':
@@ -5611,14 +5704,16 @@ jobs:
         final patches = params['p'];
         if (patches is List && patches.isNotEmpty) {
           final first = patches.first;
-          if (first is Map) return '✏️ Patching ${shortPath(first['f']?.toString() ?? '')}';
+          if (first is Map)
+            return '✏️ Patching ${shortPath(first['f']?.toString() ?? '')}';
         }
         return '✏️ Patching…';
       case 'edit':
         final edits = params['e'];
         if (edits is List && edits.isNotEmpty) {
           final first = edits.first;
-          if (first is Map) return '✏️ Editing ${shortPath(first['f']?.toString() ?? '')}';
+          if (first is Map)
+            return '✏️ Editing ${shortPath(first['f']?.toString() ?? '')}';
         }
         return '✏️ Editing…';
       case 'sh':
@@ -5690,7 +5785,8 @@ jobs:
     }
 
     try {
-      final rawState = editedStateMap ??
+      final rawState =
+          editedStateMap ??
           (stateFence['json'] as Map<String, dynamic>)['research_state']
               as Map<String, dynamic>;
       final stateMap = Map<String, dynamic>.from(rawState);
@@ -5748,9 +5844,7 @@ jobs:
         text: _updateResearchStateInText(messages[messageIndex].text, stateMap),
         reasoning: messages[messageIndex].reasoning,
       );
-      _sessions[idx] = _sessions[idx].copyWith(
-        messages: messages,
-      );
+      _sessions[idx] = _sessions[idx].copyWith(messages: messages);
     });
   }
 
@@ -5822,8 +5916,7 @@ jobs:
       ...head,
       const ChatMessage(
         role: MessageRole.user,
-        text:
-            '[Earlier search/fetch turns in this phase were trimmed to stay within the context window. Continue with the latest results below.]',
+        text: '[Earlier search/fetch turns in this phase were trimmed to stay within the context window. Continue with the latest results below.]',
       ),
       ...tail.reversed,
     ];
@@ -5835,8 +5928,11 @@ jobs:
     required String phaseTitle,
     required List<_JsonMap> facts,
     required List<_JsonMap> findings,
+    String phaseSummary = '',
   }) {
-    if (facts.isEmpty && findings.isEmpty) return;
+    if (facts.isEmpty && findings.isEmpty && phaseSummary.trim().isEmpty) {
+      return;
+    }
     final entitySet = <String>{};
     for (final f in facts) {
       final subj = (f['subject'] ?? '').toString().trim();
@@ -5847,11 +5943,43 @@ jobs:
       }
     }
     const stopWords = {
-      'this', 'that', 'these', 'those', 'there', 'their', 'they', 'when',
-      'where', 'which', 'while', 'with', 'from', 'have', 'been', 'were',
-      'also', 'more', 'most', 'some', 'such', 'than', 'then', 'into',
-      'over', 'under', 'about', 'after', 'before', 'between', 'during',
-      'however', 'because', 'according', 'based', 'using', 'shows',
+      'this',
+      'that',
+      'these',
+      'those',
+      'there',
+      'their',
+      'they',
+      'when',
+      'where',
+      'which',
+      'while',
+      'with',
+      'from',
+      'have',
+      'been',
+      'were',
+      'also',
+      'more',
+      'most',
+      'some',
+      'such',
+      'than',
+      'then',
+      'into',
+      'over',
+      'under',
+      'about',
+      'after',
+      'before',
+      'between',
+      'during',
+      'however',
+      'because',
+      'according',
+      'based',
+      'using',
+      'shows',
     };
     for (final f in findings) {
       if (entitySet.length >= 25) break;
@@ -5861,8 +5989,10 @@ jobs:
         final clean = words[wi].replaceAll(RegExp(r'[^\w\-\.]'), '');
         if (clean.length <= 3 || clean.length >= 40) continue;
         if (stopWords.contains(clean.toLowerCase())) continue;
-        final isProperOrCode = clean.contains('-') ||
-            (clean.contains('.') && RegExp(r'[A-Za-z]\.[A-Za-z0-9]').hasMatch(clean)) ||
+        final isProperOrCode =
+            clean.contains('-') ||
+            (clean.contains('.') &&
+                RegExp(r'[A-Za-z]\.[A-Za-z0-9]').hasMatch(clean)) ||
             (wi > 0 && RegExp(r'^[A-Z][a-zA-Z0-9]').hasMatch(clean));
         if (isProperOrCode) {
           entitySet.add(clean);
@@ -5875,6 +6005,9 @@ jobs:
       if (s.isNotEmpty) sourceUrls.add(s);
     }
     buffer.writeln('━━ Phase $phaseNumber:$phaseTitle ━━');
+    if (phaseSummary.trim().isNotEmpty) {
+      buffer.writeln('Phase summary: ${phaseSummary.trim()}');
+    }
     if (entitySet.isNotEmpty) {
       buffer.writeln('Discovered entities: ${entitySet.take(25).join(', ')}');
     }
@@ -6005,7 +6138,8 @@ jobs:
       final existingStepsPreview = DeepResearchHelpers.normalizeSteps(
         stateMap['steps'] as List?,
       );
-      final bool isResuming = DeepResearchHelpers.hasUsablePlan(stateMap) &&
+      final bool isResuming =
+          DeepResearchHelpers.hasUsablePlan(stateMap) &&
           existingStepsPreview.any(
             (s) =>
                 s['status'] == 'completed' ||
@@ -6056,7 +6190,6 @@ jobs:
         ];
 
         String planText = '';
-        String plannerReasoning = '';
         final plannerStream = _chatClient.sendChatStream(
           provider: provider,
           settings: settings,
@@ -6072,9 +6205,7 @@ jobs:
           sessionId: sessionId,
           stream: plannerStream,
           onChunk: (chunk) {
-            if (chunk.startsWith('[REASONING]')) {
-              plannerReasoning += chunk.substring(11);
-            } else {
+            if (!chunk.startsWith('[REASONING]')) {
               var textChunk = chunk;
               if (textChunk.contains('<think>') ||
                   textChunk.contains('<reasoning>') ||
@@ -6100,8 +6231,8 @@ jobs:
             : (rawPlan is Map<String, dynamic> && rawPlan['phases'] is List
                   ? rawPlan['phases'] as List
                   : const <dynamic>[]);
-        final phaseList = phaseListRaw.length > 12
-            ? phaseListRaw.sublist(0, 12)
+        final phaseList = phaseListRaw.length > 8
+            ? phaseListRaw.sublist(0, 8)
             : phaseListRaw;
 
         int stepIdx = 1;
@@ -6197,6 +6328,20 @@ jobs:
               for (final f in (item['findings'] as List? ?? const [])) {
                 if (f is Map) rFindings.add(_JsonMap.from(f));
               }
+              final restoredSummary = (item['summary'] ?? '').toString().trim();
+              final restoredStageId = (item['stage_id'] ?? '').toString();
+              final restoredStepIndex = steps.indexWhere(
+                (step) => step['id'] == restoredStageId,
+              );
+              if (restoredSummary.isNotEmpty && restoredStepIndex != -1) {
+                final existingSummary =
+                    (steps[restoredStepIndex]['phase_summary'] ?? '')
+                        .toString()
+                        .trim();
+                if (existingSummary.isEmpty) {
+                  steps[restoredStepIndex]['phase_summary'] = restoredSummary;
+                }
+              }
               cumulativeFacts += rFacts.length;
               cumulativeFindings += rFindings.length;
               for (final rec in [...rFacts, ...rFindings]) {
@@ -6218,9 +6363,11 @@ jobs:
               _appendPhaseToCrossPhaseContext(
                 crossPhaseContext,
                 phaseNumber: restoredPhaseNum,
-                phaseTitle: (item['phase_title'] ?? 'Previous Phase').toString(),
+                phaseTitle: (item['phase_title'] ?? 'Previous Phase')
+                    .toString(),
                 facts: rFacts,
                 findings: rFindings,
+                phaseSummary: restoredSummary,
               );
             }
           }
@@ -6256,9 +6403,10 @@ jobs:
         }
         steps[i]['status'] = 'running';
         _publishResearchState(sessionId, messageIndex, stateMap);
-        // IMPROVEMENT: Per-phase timeout (4 minutes max per phase)
+        // Each phase has enough time to read primary sources and consolidate
+        // them, while the global budget still bounds the full run.
         final phaseStartTime = DateTime.now();
-        const phaseTimeout = Duration(minutes: 4);
+        const phaseTimeout = Duration(minutes: 7);
 
         final String Function({
           required String kind,
@@ -6421,8 +6569,21 @@ jobs:
         int readUrlCount = 0;
         int consecutiveMalformedTags = 0;
         final Set<String> phaseFailedUrls = {};
+        final List<_JsonMap> phaseSearchSnippets = [];
         String stepContent = '';
         int transientRetries = 0;
+        bool reflectedThisPhase = false;
+
+        void syncPhaseProgress({bool publish = false}) {
+          steps[i]['research_stats'] = {
+            'searches_used': webSearchCount,
+            'pages_read': readUrlCount,
+            'facts_extracted': phaseFacts.length,
+          };
+          if (publish) {
+            _publishResearchState(sessionId, messageIndex, stateMap);
+          }
+        }
 
         while (!stepDone && loopCount < 20) {
           if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
@@ -6435,7 +6596,7 @@ jobs:
           if (phaseStartTime.add(phaseTimeout).isBefore(DateTime.now())) {
             stepDone = true;
             stepFailure =
-                'Phase exceeded${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
+                'Phase exceeded ${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
             break;
           }
           if (!mounted) return;
@@ -6450,8 +6611,34 @@ jobs:
           String responseText = '';
           String reasoningText = '';
           var isThinking = false;
-          var researchStreamCharCount = 0;
           var tagHold = '';
+          final priorReasoning = (steps[i]['reasoning'] ?? '').toString();
+          final reasoningPublishWatch = Stopwatch()..start();
+
+          void publishLiveReasoning({bool force = false}) {
+            if (reasoningText.trim().isEmpty ||
+                (!force &&
+                    reasoningPublishWatch.elapsed <
+                        const Duration(milliseconds: 200))) {
+              return;
+            }
+            final joined = priorReasoning.trim().isEmpty
+                ? reasoningText.trim()
+                : '${priorReasoning.trim()}\n\n---\n\n${reasoningText.trim()}';
+            steps[i]['reasoning'] = joined.length > 6000
+                ? joined.substring(joined.length - 6000)
+                : joined;
+            _publishResearchState(sessionId, messageIndex, stateMap);
+            reasoningPublishWatch
+              ..reset()
+              ..start();
+          }
+
+          void appendLiveReasoning(String text) {
+            if (text.isEmpty) return;
+            reasoningText += text;
+            publishLiveReasoning();
+          }
 
           try {
             final stream = _chatClient.sendChatStream(
@@ -6467,8 +6654,7 @@ jobs:
               stream: stream,
               onChunk: (chunk) {
                 if (chunk.startsWith('[REASONING]')) {
-                  reasoningText += chunk.substring(11);
-                  researchStreamCharCount += chunk.length - 11;
+                  appendLiveReasoning(chunk.substring(11));
                 } else {
                   var textChunk = tagHold + chunk;
                   tagHold = '';
@@ -6502,14 +6688,14 @@ jobs:
                         ? '</thought>'
                         : '</reasoning>';
                     final parts = textChunk.split(tag);
-                    reasoningText += parts[0];
+                    appendLiveReasoning(parts[0]);
                     isThinking = false;
                     textChunk = parts.length > 1
                         ? parts.sublist(1).join(tag)
                         : '';
                     responseText += textChunk;
                   } else if (isThinking) {
-                    reasoningText += textChunk;
+                    appendLiveReasoning(textChunk);
                   } else {
                     responseText += textChunk;
                   }
@@ -6519,12 +6705,15 @@ jobs:
             // Flush any trailing partial tag buffer so characters aren't lost.
             if (tagHold.isNotEmpty) {
               if (isThinking) {
-                reasoningText += tagHold;
+                appendLiveReasoning(tagHold);
               } else {
                 responseText += tagHold;
               }
               tagHold = '';
             }
+            // The stream may finish before the next throttle interval. Ensure
+            // the final tail reaches the UI before processing tool calls.
+            publishLiveReasoning(force: true);
 
             if (!_sendingSessionIds.contains(sessionId)) {
               stepDone = true;
@@ -6542,18 +6731,6 @@ jobs:
             );
 
             transientRetries = 0;
-            if (reasoningText.trim().isNotEmpty) {
-              final String prevReasoning =
-                  (steps[i]['reasoning'] ?? '').toString();
-              final String joinedReasoning = prevReasoning.isEmpty
-                  ? reasoningText.trim()
-                  : '$prevReasoning\n\n---\n\n${reasoningText.trim()}';
-              steps[i]['reasoning'] = joinedReasoning.length > 6000
-                  ? joinedReasoning.substring(joinedReasoning.length - 6000)
-                  : joinedReasoning;
-              _publishResearchState(sessionId, messageIndex, stateMap);
-            }
-
             final unrecognizedErrors = <Map<String, dynamic>>[];
             // JSON tool calls are extracted directly from fenced ```json blocks
             // in the dispatch loop — no preprocessing/reinterpretation needed.
@@ -6605,8 +6782,7 @@ jobs:
               stepMessages.add(
                 const ChatMessage(
                   role: MessageRole.user,
-                  text:
-                      'Error: Malformed or unclosed tool call tags detected. Please check tag syntax.',
+                  text: 'Error: Malformed or unclosed tool call tags detected. Please check tag syntax.',
                 ),
               );
               continue;
@@ -6702,9 +6878,9 @@ jobs:
                   continue;
                 }
 
-                if (webSearchCount >= 20) {
+                if (webSearchCount >= 6) {
                   const limitMsg =
-                      'Search limit reached for this phase (20/20 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                      'Search limit reached for this phase (6/6 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
                   searchFutures.add(Future.value('Error: $limitMsg'));
                   finishResearchEvent(
                     eventIds[k],
@@ -6718,6 +6894,7 @@ jobs:
 
                 executedQueries.add(normQuery);
                 webSearchCount++;
+                syncPhaseProgress(publish: true);
                 searchFutures.add(() async {
                   try {
                     final res = await _chatClient
@@ -6730,10 +6907,8 @@ jobs:
                           ],
                           googleCx: _searchSettings.googleCx,
                           topic: attrs['topic'],
-                          timeRange:
-                              attrs['time_range'] ?? attrs['time-range'],
-                          startDate:
-                              attrs['start_date'] ?? attrs['start-date'],
+                          timeRange: attrs['time_range'] ?? attrs['time-range'],
+                          startDate: attrs['start_date'] ?? attrs['start-date'],
                           endDate: attrs['end_date'] ?? attrs['end-date'],
                           searchDepth:
                               attrs['search_depth'] ??
@@ -6752,7 +6927,9 @@ jobs:
 
               final searchResults = await Future.wait(searchFutures);
               final StringBuffer combinedResults = StringBuffer();
-              final mdLinkRe = RegExp(r'\[([^\]\n]+)\]\((https?://[^\s)\]]+)\)');
+              final mdResultRe = RegExp(
+                r'\[([^\]\n]+)\]\((https?://[^\s)\]]+)\):\s*([\s\S]*?)(?=\n\s*\n(?:-\s*)?\[|\s*$)',
+              );
               final plainUrlRe = RegExp(r"(https?://[^\s)\]<>\x22']+)");
 
               for (var k = 0; k < queries.length; k++) {
@@ -6777,13 +6954,13 @@ jobs:
 
                 final parsedItems = <_StrMap>[];
                 final seenResultUrls = <String>{};
-                for (final m in mdLinkRe.allMatches(searchResult)) {
+                for (final m in mdResultRe.allMatches(searchResult)) {
                   final u = (m.group(2) ?? '').trim();
                   if (u.isNotEmpty && seenResultUrls.add(u)) {
                     parsedItems.add({
                       'title': (m.group(1) ?? '').trim(),
                       'url': u,
-                      'snippet': '',
+                      'snippet': (m.group(3) ?? '').trim(),
                     });
                   }
                 }
@@ -6795,6 +6972,20 @@ jobs:
                     if (u.isNotEmpty && seenResultUrls.add(u)) {
                       parsedItems.add({'title': u, 'url': u, 'snippet': ''});
                     }
+                  }
+                }
+
+                for (final item in parsedItems) {
+                  final snippet = (item['snippet'] ?? '').toString().trim();
+                  final source = (item['url'] ?? '').toString().trim();
+                  if (snippet.isNotEmpty && source.isNotEmpty) {
+                    phaseSearchSnippets.add({
+                      'text': snippet.length > 400
+                          ? '${snippet.substring(0, 399)}…'
+                          : snippet,
+                      'source': source,
+                      'confidence': 'low',
+                    });
                   }
                 }
 
@@ -6837,7 +7028,7 @@ jobs:
               final List<bool> duplicateInBatch = [];
               final List<bool> prevFailedInPhase = [];
               final Set<String> batchSeenNormUrls = {};
-              const int readUrlLimit = 5;
+              const int readUrlLimit = 9;
 
               bool looksLikePdfUrl(String u) {
                 final lower = u.toLowerCase();
@@ -6845,13 +7036,15 @@ jobs:
               }
 
               for (final call in readUrlCalls) {
-                final url = ((call['a'] is Map<String, dynamic>)
-                        ? ((call['a'] as Map<String, dynamic>)['url'] ?? '')
-                            .toString()
-                        : '')
-                    .trim();
+                final url =
+                    ((call['a'] is Map<String, dynamic>)
+                            ? ((call['a'] as Map<String, dynamic>)['url'] ?? '')
+                                  .toString()
+                            : '')
+                        .trim();
                 var targetPreview = url;
-                if (targetPreview.isNotEmpty && !targetPreview.startsWith('http')) {
+                if (targetPreview.isNotEmpty &&
+                    !targetPreview.startsWith('http')) {
                   targetPreview = 'https://$targetPreview';
                 }
                 final normPreview = _normalizeQueryOrUrl(targetPreview);
@@ -6867,7 +7060,10 @@ jobs:
                   url: url,
                 );
                 eventIds.add(eventId);
-                final trailEntry = jsonEncode({'t': 'read_url', 'a': call['a']});
+                final trailEntry = jsonEncode({
+                  't': 'read_url',
+                  'a': call['a'],
+                });
                 stepContent = stepContent.isEmpty
                     ? trailEntry
                     : '$stepContent\n\n$trailEntry';
@@ -6875,7 +7071,8 @@ jobs:
                 final isPdfPreview =
                     targetPreview.isNotEmpty && looksLikePdfUrl(targetPreview);
                 final isCacheHit = runFetchedUrls.contains(normPreview);
-                final isBatchDup = normPreview.isNotEmpty &&
+                final isBatchDup =
+                    normPreview.isNotEmpty &&
                     !batchSeenNormUrls.add(normPreview);
                 final isPrevFailed = phaseFailedUrls.contains(normPreview);
 
@@ -6897,6 +7094,7 @@ jobs:
                   overLimit.add(false);
                 }
               }
+              syncPhaseProgress();
               steps[i]['content'] = stepContent;
               _publishResearchState(sessionId, messageIndex, stateMap);
 
@@ -6966,11 +7164,12 @@ jobs:
                       details: {
                         'url': targetUrl,
                         'already_attempted': true,
-                        'result_payload': {'summary': 'Duplicate URL in same batch'},
+                        'result_payload': {
+                          'summary': 'Duplicate URL in same batch',
+                        },
                       },
                     );
-                    urlResults[idx] =
-                        'Duplicate URL in the same batch (see first result for this URL).';
+                    urlResults[idx] = 'Duplicate URL in the same batch (see first result for this URL).';
                     return;
                   }
 
@@ -6982,8 +7181,7 @@ jobs:
                       details: {'url': targetUrl, 'already_attempted': true},
                       error: 'URL already failed earlier in this phase.',
                     );
-                    urlResults[idx] =
-                        'Skipped: this URL already failed earlier in this phase. Choose a different source.';
+                    urlResults[idx] = 'Skipped: this URL already failed earlier in this phase. Choose a different source.';
                     return;
                   }
 
@@ -7007,7 +7205,7 @@ jobs:
 
                   if (overLimit[idx]) {
                     const capMsg =
-                        'Read URL limit reached for this phase (5/5 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                        'Read URL limit reached for this phase (9/9 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
                     finishResearchEvent(
                       eventId,
                       status: 'error',
@@ -7044,7 +7242,9 @@ jobs:
                         failedFetches: phaseFailedFetches,
                       );
                     } catch (e) {
-                      debugPrint('Intermediate PDF skip persistence failed: $e');
+                      debugPrint(
+                        'Intermediate PDF skip persistence failed: $e',
+                      );
                     }
 
                     finishResearchEvent(
@@ -7062,7 +7262,8 @@ jobs:
                   }
 
                   if (runFetchedUrls.contains(normUrl)) {
-                    final cached = runUrlSummaries[normUrl] ??
+                    final cached =
+                        runUrlSummaries[normUrl] ??
                         const {
                           'facts': <dynamic>[],
                           'findings': <dynamic>[],
@@ -7112,7 +7313,9 @@ jobs:
                         failedFetches: phaseFailedFetches,
                       );
                     } catch (e) {
-                      debugPrint('Intermediate cache-hit persistence failed: $e');
+                      debugPrint(
+                        'Intermediate cache-hit persistence failed: $e',
+                      );
                     }
 
                     finishResearchEvent(
@@ -7168,7 +7371,12 @@ jobs:
                         );
                       }
                       final relevanceQuery = queryText
-                          .split(RegExp(r' - | \| | success:| Key questions:', caseSensitive: false))
+                          .split(
+                            RegExp(
+                              r' - | \| | success:| Key questions:',
+                              caseSensitive: false,
+                            ),
+                          )
                           .where((s) => s.trim().isNotEmpty)
                           .take(2)
                           .join(' ');
@@ -7203,7 +7411,9 @@ jobs:
                           failedFetches: phaseFailedFetches,
                         );
                       } catch (e) {
-                        debugPrint('Intermediate skipped_pdf persistence failed: $e');
+                        debugPrint(
+                          'Intermediate skipped_pdf persistence failed: $e',
+                        );
                       }
                       finishResearchEvent(
                         eventId,
@@ -7306,8 +7516,8 @@ jobs:
                     }
                   }
 
-                  // Cap at 20 facts per phase, drop lowest confidence first
-                  if (phaseFacts.length > 20) {
+                  // Cap at 30 facts per phase, drop lowest confidence first.
+                  if (phaseFacts.length > 30) {
                     phaseFacts.sort((a, b) {
                       final ra =
                           a['confidence']?.toString().toLowerCase() ?? 'medium';
@@ -7316,18 +7526,23 @@ jobs:
                       const ranks = {'high': 0, 'medium': 1, 'low': 2};
                       return (ranks[ra] ?? 1).compareTo(ranks[rb] ?? 1);
                     });
-                    phaseFacts.removeRange(20, phaseFacts.length);
+                    phaseFacts.removeRange(30, phaseFacts.length);
                   }
+                  syncPhaseProgress();
 
                   for (final entry in fetchedTexts.entries) {
                     final url = entry.key;
                     final normUrl = _normalizeQueryOrUrl(url);
                     runFetchedUrls.add(normUrl);
                     final urlFacts = facts
-                        .where((f) => f is Map && f['source']?.toString() == url)
+                        .where(
+                          (f) => f is Map && f['source']?.toString() == url,
+                        )
                         .toList();
                     final urlFindings = findings
-                        .where((f) => f is Map && f['source']?.toString() == url)
+                        .where(
+                          (f) => f is Map && f['source']?.toString() == url,
+                        )
                         .toList();
                     runUrlSummaries[normUrl] = {
                       'facts': urlFacts,
@@ -7347,17 +7562,23 @@ jobs:
                       failedFetches: phaseFailedFetches,
                     );
                   } catch (e) {
-                    debugPrint('Intermediate batch-summary persistence failed: $e');
+                    debugPrint(
+                      'Intermediate batch-summary persistence failed: $e',
+                    );
                   }
 
                   for (final entry in fetchedTargetByIdx.entries) {
                     final idx = entry.key;
                     final url = entry.value;
                     final urlFactsList = facts
-                        .where((f) => f is Map && f['source']?.toString() == url)
+                        .where(
+                          (f) => f is Map && f['source']?.toString() == url,
+                        )
                         .toList();
                     final urlFindingsList = findings
-                        .where((f) => f is Map && f['source']?.toString() == url)
+                        .where(
+                          (f) => f is Map && f['source']?.toString() == url,
+                        )
                         .toList();
                     urlResults[idx] = formatUrlDigest(
                       urlFactsList,
@@ -7374,9 +7595,7 @@ jobs:
                         'findings_count': urlFindingsList.length,
                         'new_chunks_added':
                             urlFactsList.length + urlFindingsList.length,
-                        'result_payload': {
-                          'summary': 'Batch summarized',
-                        },
+                        'result_payload': {'summary': 'Batch summarized'},
                       },
                     );
                   }
@@ -7475,8 +7694,7 @@ jobs:
                 stepMessages.add(
                   const ChatMessage(
                     role: MessageRole.user,
-                    text:
-                        'You replied with prose but issued no tool call, and this phase has no evidence yet. The grounding rule is non-negotiable: emit a web_search or read_url call now.',
+                    text: 'You replied with prose but issued no tool call, and this phase has no evidence yet. The grounding rule is non-negotiable: emit a web_search or read_url call now.',
                   ),
                 );
                 continue;
@@ -7487,9 +7705,15 @@ jobs:
               stepDone = true;
             }
 
+            final bool reflectorMayRun =
+                !reflectedThisPhase &&
+                ((readUrlCount >= 2 && loopCount >= 3) ||
+                    (readUrlCount == 0 && webSearchCount >= 4));
             if (!stepDone &&
+                reflectorMayRun &&
                 _sendingSessionIds.contains(sessionId) &&
                 (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
+              reflectedThisPhase = true;
               final stepReflectMessages = [
                 const ChatMessage(
                   role: MessageRole.system,
@@ -7556,8 +7780,7 @@ jobs:
                 stepMessages.add(
                   const ChatMessage(
                     role: MessageRole.user,
-                    text:
-                        'Reflection analysis failed. Continue searching for more evidence or emit step_complete if you have enough.',
+                    text: 'Reflection analysis failed. Continue searching for more evidence or emit step_complete if you have enough.',
                   ),
                 );
               }
@@ -7589,7 +7812,8 @@ jobs:
                 'Transient research stream error, retry $transientRetries/3: $errStr',
               );
               loopCount--;
-              final bool busyErr = errLower.contains('429') ||
+              final bool busyErr =
+                  errLower.contains('429') ||
                   errLower.contains('rate limit') ||
                   errLower.contains('temporarily busy') ||
                   errLower.contains('overloaded') ||
@@ -7607,7 +7831,7 @@ jobs:
           }
         }
 
-        final phaseSummary = _buildDeepResearchPhaseSummary(
+        String phaseSummary = _buildDeepResearchPhaseSummary(
           phaseTitle: phaseTitle,
           stepContent: stepContent,
           facts: phaseFacts,
@@ -7615,7 +7839,103 @@ jobs:
           skippedPdfs: phaseSkippedPdfs,
           failedFetches: phaseFailedFetches,
         );
-        final hadIssues = !stepFailed &&
+        Map<String, dynamic>? phaseConsolidation;
+        try {
+          phaseConsolidation = await _consolidateDeepResearchPhase(
+            phaseTitle: phaseTitle,
+            queryText: queryText,
+            nextPhaseHeading: nextPhaseHeading,
+            phaseFacts: phaseFacts,
+            phaseFindings: phaseFindings,
+            searchSnippets: phaseSearchSnippets,
+            provider: provider,
+            settings: settings,
+            model: model,
+          );
+          final consolidatedSummary =
+              (phaseConsolidation?['phase_summary'] ?? '').toString().trim();
+          if (consolidatedSummary.isNotEmpty) {
+            phaseSummary = consolidatedSummary;
+          }
+
+          final rawEntities = phaseConsolidation?['key_entities'];
+          if (rawEntities is List) {
+            final entities = rawEntities
+                .map((item) => item.toString().trim())
+                .where((item) => item.isNotEmpty)
+                .take(25)
+                .toList();
+            if (entities.isNotEmpty) steps[i]['key_entities'] = entities;
+          }
+
+          // Snippets are a clearly marked last resort when pages could not be
+          // read. Do not mix them into healthy page-derived evidence.
+          final evidenceIsSparse = phaseFacts.length + phaseFindings.length < 2;
+          if (evidenceIsSparse) {
+            final allowedSources = phaseSearchSnippets
+                .map((snippet) => (snippet['source'] ?? '').toString().trim())
+                .where((source) => source.isNotEmpty)
+                .toSet();
+            final rawSnippetFindings =
+                phaseConsolidation?['snippet_findings'] is List
+                ? phaseConsolidation!['snippet_findings'] as List
+                : const <dynamic>[];
+            final candidates = <dynamic>[
+              ...rawSnippetFindings,
+              ...phaseSearchSnippets,
+            ];
+            final existingKeys = phaseFindings
+                .map(
+                  (finding) => '${finding['text']}\u007C${finding['source']}',
+                )
+                .toSet();
+            for (final candidate in candidates) {
+              if (candidate is! Map) continue;
+              final text = (candidate['text'] ?? '').toString().trim();
+              final source = (candidate['source'] ?? '').toString().trim();
+              if (text.isEmpty ||
+                  source.isEmpty ||
+                  !allowedSources.contains(source)) {
+                continue;
+              }
+              final key = '$text\u007C$source';
+              if (!existingKeys.add(key)) continue;
+              phaseFindings.add({
+                'text': text.length > 400 ? '${text.substring(0, 399)}…' : text,
+                'source': source,
+                'confidence': 'low',
+              });
+              if (phaseFindings.length >= 10) break;
+            }
+            syncPhaseProgress();
+          }
+        } catch (e) {
+          debugPrint('Phase-end consolidation failed for $phaseTitle: $e');
+        }
+
+        steps[i]['phase_summary'] = phaseSummary;
+        if (i + 1 < steps.length &&
+            (steps[i + 1]['handoff_brief'] ?? '').toString().trim().isEmpty) {
+          final consolidatedBrief = (phaseConsolidation?['next_brief'] ?? '')
+              .toString()
+              .trim();
+          final sources = <String>{
+            ...phaseFacts.map(
+              (fact) => (fact['source'] ?? '').toString().trim(),
+            ),
+            ...phaseFindings.map(
+              (finding) => (finding['source'] ?? '').toString().trim(),
+            ),
+          }..remove('');
+          steps[i + 1]['handoff_brief'] = consolidatedBrief.isNotEmpty
+              ? consolidatedBrief
+              : 'Continue from "$phaseTitle" using its persisted phase summary and evidence. '
+                    'For "$nextPhaseHeading", start with the concrete query '
+                    '"$nextPhaseHeading official primary source"'
+                    '${sources.isEmpty ? '.' : ' and review these URLs first: ${sources.take(5).join(', ')}.'}';
+        }
+        final hadIssues =
+            !stepFailed &&
             (phaseFailedFetches.isNotEmpty ||
                 phaseSkippedPdfs.isNotEmpty ||
                 (steps[i]['checkpoint_warning'] ?? '').toString().isNotEmpty);
@@ -7650,6 +7970,7 @@ jobs:
           phaseTitle: phaseTitle,
           facts: phaseFacts,
           findings: phaseFindings,
+          phaseSummary: phaseSummary,
         );
 
         _publishResearchState(sessionId, messageIndex, stateMap);
@@ -7665,7 +7986,8 @@ jobs:
               'phases_completed': i + 1,
               'phases_total': steps.length,
               'facts_collected': (cumulativeFacts += phaseFacts.length),
-              'findings_collected': (cumulativeFindings += phaseFindings.length),
+              'findings_collected': (cumulativeFindings +=
+                  phaseFindings.length),
             },
           );
         } catch (e) {
@@ -7679,10 +8001,7 @@ jobs:
       for (final stepValue in steps) {
         final cw = (stepValue as Map)['checkpoint_warning'];
         if (cw != null && cw.toString().isNotEmpty) {
-          executionIssues.add({
-            'kind': 'checkpoint',
-            'message': cw.toString(),
-          });
+          executionIssues.add({'kind': 'checkpoint', 'message': cw.toString()});
         }
       }
       for (final stepValue in steps) {
@@ -7714,6 +8033,7 @@ jobs:
       }
 
       stateMap['status'] = 'generating_report';
+      stateMap.remove('writer_reasoning');
       _publishResearchState(sessionId, messageIndex, stateMap);
 
       String tempJsonContent = '[]';
@@ -7749,11 +8069,10 @@ jobs:
           executionIssues.add({
             'step': 'Writer input export',
             'status': 'warning',
-            'error':
-                'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
+            'error': 'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
           });
-          writerInputFailure =
-              'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
+        } else if (!rawHasPhases) {
+          writerInputFailure = 'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
         }
         final truncatedFacts =
             (writerExport['truncated_facts'] as num?)?.toInt() ?? 0;
@@ -7783,11 +8102,12 @@ jobs:
 
       var verifiedSourceUrls = _evidenceSourceUrls(rawTempJson);
       if (writerInputFailure == null && verifiedSourceUrls.isEmpty) {
-        writerInputFailure =
-            'No verified source URLs were persisted to temp.json, so a research artifact cannot be generated safely.';
+        writerInputFailure = 'No verified source URLs were persisted to temp.json, so a research artifact cannot be generated safely.';
       }
 
-      final writerEvidence = compactText.isNotEmpty ? compactText : tempJsonContent;
+      final writerEvidence = compactText.isNotEmpty
+          ? compactText
+          : tempJsonContent;
 
       final evidenceUrls = <String>{};
       try {
@@ -7810,7 +8130,9 @@ jobs:
           }
         }
       } catch (_) {}
-      verifiedSourceUrls = verifiedSourceUrls.where((u) => evidenceUrls.contains(u)).toList();
+      verifiedSourceUrls = verifiedSourceUrls
+          .where((u) => evidenceUrls.contains(u))
+          .toList();
 
       // IMPROVEMENT: Build evidence summary so the writer knows the scope of research
       int totalFacts = 0;
@@ -7820,8 +8142,12 @@ jobs:
         final phases = jsonDecode(tempJsonContent);
         if (phases is List) {
           for (final phase in phases.whereType<Map>()) {
-            totalFacts += (phase['facts'] is List) ? (phase['facts'] as List).length : 0;
-            totalFindings += (phase['findings'] is List) ? (phase['findings'] as List).length : 0;
+            totalFacts += (phase['facts'] is List)
+                ? (phase['facts'] as List).length
+                : 0;
+            totalFindings += (phase['findings'] is List)
+                ? (phase['findings'] as List).length
+                : 0;
           }
           totalSources = verifiedSourceUrls.length;
         }
@@ -7869,6 +8195,29 @@ jobs:
           String responseText = '';
           String reasoningText = '';
           var isThinking = false;
+          final reasoningPublishWatch = Stopwatch()..start();
+
+          void publishWriterReasoning({bool force = false}) {
+            if (reasoningText.trim().isEmpty ||
+                (!force &&
+                    reasoningPublishWatch.elapsed <
+                        const Duration(milliseconds: 200))) {
+              return;
+            }
+            stateMap['writer_reasoning'] = reasoningText.length > 6000
+                ? reasoningText.substring(reasoningText.length - 6000)
+                : reasoningText;
+            _publishResearchState(sessionId, messageIndex, stateMap);
+            reasoningPublishWatch
+              ..reset()
+              ..start();
+          }
+
+          void appendWriterReasoning(String text) {
+            if (text.isEmpty) return;
+            reasoningText += text;
+            publishWriterReasoning();
+          }
 
           final stream = _chatClient.sendChatStream(
             provider: provider,
@@ -7887,7 +8236,7 @@ jobs:
             stream: stream,
             onChunk: (chunk) {
               if (chunk.startsWith('[REASONING]')) {
-                reasoningText += chunk.substring(11);
+                appendWriterReasoning(chunk.substring(11));
               } else {
                 var textChunk = tagHold + chunk;
                 tagHold = '';
@@ -7906,7 +8255,9 @@ jobs:
                   final parts = textChunk.split(tag);
                   responseText += parts[0];
                   isThinking = true;
-                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                  textChunk = parts.length > 1
+                      ? parts.sublist(1).join(tag)
+                      : '';
                 }
 
                 if (isThinking &&
@@ -7919,12 +8270,14 @@ jobs:
                       ? '</thought>'
                       : '</reasoning>';
                   final parts = textChunk.split(tag);
-                  reasoningText += parts[0];
+                  appendWriterReasoning(parts[0]);
                   isThinking = false;
-                  textChunk = parts.length > 1 ? parts.sublist(1).join(tag) : '';
+                  textChunk = parts.length > 1
+                      ? parts.sublist(1).join(tag)
+                      : '';
                   responseText += textChunk;
                 } else if (isThinking) {
-                  reasoningText += textChunk;
+                  appendWriterReasoning(textChunk);
                 } else {
                   responseText += textChunk;
                 }
@@ -7933,12 +8286,15 @@ jobs:
           );
           if (tagHold.isNotEmpty) {
             if (isThinking) {
-              reasoningText += tagHold;
+              appendWriterReasoning(tagHold);
             } else {
               responseText += tagHold;
             }
             tagHold = '';
           }
+          // Do not lose a short final reasoning fragment that arrived inside
+          // the final throttle window.
+          publishWriterReasoning(force: true);
 
           if (!_sendingSessionIds.contains(sessionId)) {
             writerFailure = 'Research cancelled by user.';
@@ -8007,7 +8363,9 @@ jobs:
       if (writerFailure == null && reportSaved) {
         try {
           await _deepResearchBridge.reset(keepCheckpoint: false);
-          debugPrint('Deep Research: temp.json cleaned up after successful report.');
+          debugPrint(
+            'Deep Research: temp.json cleaned up after successful report.',
+          );
         } catch (e) {
           debugPrint('Deep Research: temp.json cleanup failed:$e');
         }
@@ -8042,9 +8400,7 @@ jobs:
                 ? finalReasoningText
                 : msgs[messageIndex].reasoning,
           );
-          _sessions[sIdx] = _sessions[sIdx].copyWith(
-            messages: msgs,
-          );
+          _sessions[sIdx] = _sessions[sIdx].copyWith(messages: msgs);
         });
         await _saveSessions();
       } else {
@@ -8072,9 +8428,7 @@ jobs:
                 '\n\n⚠️ Deep Research stopped before completion. Reason: $globalError',
             reasoning: msgs[messageIndex].reasoning,
           );
-          _sessions[sIdx] = _sessions[sIdx].copyWith(
-            messages: msgs,
-          );
+          _sessions[sIdx] = _sessions[sIdx].copyWith(messages: msgs);
         });
         await _saveSessions();
       } else {
@@ -8224,7 +8578,9 @@ jobs:
     String sourcePath = target;
     if (!target.contains('/')) {
       final root = await _chooseWritableNexonRoot();
-      final candidate = File('${root.path}/sessions/${_safeFileStem(target)}.json');
+      final candidate = File(
+        '${root.path}/sessions/${_safeFileStem(target)}.json',
+      );
       if (await candidate.exists()) {
         sourcePath = candidate.path;
       } else {
@@ -8253,7 +8609,9 @@ jobs:
     var loaded = ChatSession.fromJson(sessionMap);
     final duplicateId = _sessions.any((s) => s.id == loaded.id);
     if (duplicateId) {
-      loaded = loaded.copyWith(id: DateTime.now().millisecondsSinceEpoch.toString());
+      loaded = loaded.copyWith(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+      );
     }
     if (mounted) {
       setState(() {
@@ -8279,7 +8637,9 @@ jobs:
     }
     final safeKeepLast = keepLast < 1 ? 1 : keepLast;
     final head = session.messages.take(1).toList();
-    final tail = session.messages.skip(session.messages.length - safeKeepLast).toList();
+    final tail = session.messages
+        .skip(session.messages.length - safeKeepLast)
+        .toList();
     final middle = session.messages
         .skip(1)
         .take(session.messages.length - safeKeepLast - 1)
@@ -8289,7 +8649,10 @@ jobs:
       middle,
       config: const CompressionConfig(
         maxTokens: 1500,
-        preferredMethods: [CompressionMethod.extractive, CompressionMethod.pruning],
+        preferredMethods: [
+          CompressionMethod.extractive,
+          CompressionMethod.pruning,
+        ],
       ),
     );
     final summaryMsg = ChatMessage(
@@ -8397,7 +8760,9 @@ jobs:
       if (dir.existsSync()) {
         final entries = dir.listSync(followLinks: false).where((e) {
           final name = e.path.split('/').last;
-          return !name.startsWith('.') && name != 'build' && name != 'node_modules';
+          return !name.startsWith('.') &&
+              name != 'build' &&
+              name != 'node_modules';
         });
         hasExistingFiles = entries.isNotEmpty;
       }
@@ -8405,24 +8770,26 @@ jobs:
     final String planInstruction;
     if (hasExistingFiles) {
       planInstruction =
-        'The user wants: $prompt\n\n'
-        'This workspace already has files. Before creating a todo list, explore the codebase to understand the current structure:\n'
-        '1. Call list to see the project tree (depth 2-3).\n'
-        '2. Call search for key terms from the user request to find relevant files.\n'
-        '3. Call outline on the most relevant files to understand the code organization.\n'
-        '4. Based on what you found, create a todo list with todo_create covering the specific changes needed.\n'
-        '5. Execute each task one by one, marking each with todo_done when complete.\n'
-        'Do NOT create the todo list until you have explored the codebase and understand what exists.';
+          'The user wants: $prompt\n\n'
+          'This workspace already has files. Before creating a todo list, explore the codebase to understand the current structure:\n'
+          '1. Call list to see the project tree (depth 2-3).\n'
+          '2. Call search for key terms from the user request to find relevant files.\n'
+          '3. Call outline on the most relevant files to understand the code organization.\n'
+          '4. Based on what you found, create a todo list with todo_create covering the specific changes needed.\n'
+          '5. Execute each task one by one, marking each with todo_done when complete.\n'
+          'Do NOT create the todo list until you have explored the codebase and understand what exists.';
     } else {
       planInstruction =
-        'The user wants: $prompt\n\n'
-        'This workspace is empty — the user is building from scratch. Create a todo list immediately:\n'
-        '1. Call todo_create with the steps needed to build this project from scratch (project setup, core files, configuration, tests, etc.).\n'
-        '2. Execute each task one by one using create_file, sh (for package installs), and other tools.\n'
-        '3. Mark each task with todo_done as you complete it.\n'
-        'Be thorough in the todo list — include project structure, dependencies, all source files, config, and a README.';
+          'The user wants: $prompt\n\n'
+          'This workspace is empty — the user is building from scratch. Create a todo list immediately:\n'
+          '1. Call todo_create with the steps needed to build this project from scratch (project setup, core files, configuration, tests, etc.).\n'
+          '2. Execute each task one by one using create_file, sh (for package installs), and other tools.\n'
+          '3. Mark each task with todo_done as you complete it.\n'
+          'Be thorough in the todo list — include project structure, dependencies, all source files, config, and a README.';
     }
-    await _appendSystemMessage('Plan mode: "$prompt" — ${hasExistingFiles ? "exploring codebase" : "building from scratch"}…');
+    await _appendSystemMessage(
+      'Plan mode: "$prompt" — ${hasExistingFiles ? "exploring codebase" : "building from scratch"}…',
+    );
     if (mounted) {
       setState(() => _toolStatus = '📋 Planning: $prompt');
     }
@@ -8774,6 +9141,72 @@ jobs:
     });
   }
 
+  void _selectChatSuggestion(String suggestion) {
+    _suppressPasteDetection = true;
+    _messageController.value = TextEditingValue(
+      text: suggestion,
+      selection: TextSelection.collapsed(offset: suggestion.length),
+    );
+    _suppressPasteDetection = false;
+    _composerFocusNode.requestFocus();
+  }
+
+  void _regenerateMessage(int assistantIndex) {
+    final sessionId = _activeSessionId;
+    if (sessionId == null || _sendingSessionIds.contains(sessionId)) return;
+
+    final sessionIndex = _sessions.indexWhere(
+      (session) => session.id == sessionId,
+    );
+    if (sessionIndex == -1) return;
+    final session = _sessions[sessionIndex];
+    final currentMessages = List<ChatMessage>.from(session.messages);
+    if (assistantIndex < 0 ||
+        assistantIndex >= currentMessages.length ||
+        currentMessages[assistantIndex].role != MessageRole.assistant) {
+      return;
+    }
+
+    var userIndex = assistantIndex - 1;
+    while (userIndex >= 0 &&
+        currentMessages[userIndex].role != MessageRole.user) {
+      userIndex--;
+    }
+    if (userIndex < 0) return;
+
+    final prompt = currentMessages[userIndex].text;
+    if (prompt.trim().isEmpty) return;
+    final preservedBranch = List<ChatMessage>.from(currentMessages);
+    final regeneratedBranch = currentMessages.sublist(0, userIndex + 1);
+
+    setState(() {
+      final branches =
+          session.branches
+              ?.map((branch) => List<ChatMessage>.from(branch))
+              .toList() ??
+          <List<ChatMessage>>[];
+      final previousActiveIndex = session.activeBranchIndex ?? 0;
+      if (previousActiveIndex >= 0 && previousActiveIndex < branches.length) {
+        branches[previousActiveIndex] = preservedBranch;
+      } else {
+        branches.add(preservedBranch);
+      }
+      branches.add(regeneratedBranch);
+      final regeneratedBranchIndex = branches.length - 1;
+
+      _sessions[sessionIndex] = session.copyWith(
+        messages: regeneratedBranch,
+        branches: branches,
+        activeBranchIndex: regeneratedBranchIndex,
+      );
+      _editingMessageIndex = null;
+      _messageController.clear();
+    });
+    _saveSessions();
+    _scrollToBottom(force: true);
+    unawaited(_sendMessage(promptText: prompt, reuseExistingUserMessage: true));
+  }
+
   void _switchBranch(int branchIndex) {
     setState(() {
       final sessionIndex = _sessions.indexWhere(
@@ -8813,6 +9246,62 @@ jobs:
     return (chunk, '');
   }
 
+  void _handleChatScroll() {
+    if (_jumpToBottomInProgress || !_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final distanceFromBottom = (position.maxScrollExtent - position.pixels)
+        .clamp(0.0, double.infinity);
+
+    if (position.userScrollDirection == ScrollDirection.forward) {
+      _userScrolledUp = true;
+      if (distanceFromBottom > 120) {
+        _setJumpToBottomVisible(true);
+      }
+      return;
+    }
+
+    if (distanceFromBottom > 120) {
+      _userScrolledUp = true;
+      _setJumpToBottomVisible(true);
+    } else if (distanceFromBottom <= 40) {
+      _userScrolledUp = false;
+      _setJumpToBottomVisible(false);
+    }
+  }
+
+  void _setJumpToBottomVisible(bool visible) {
+    if (_showJumpToBottom == visible) return;
+    if (mounted) {
+      setState(() => _showJumpToBottom = visible);
+    } else {
+      _showJumpToBottom = visible;
+    }
+  }
+
+  void _jumpToBottom() {
+    _userScrolledUp = false;
+    _jumpToBottomInProgress = true;
+    _setJumpToBottomVisible(false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) {
+        _jumpToBottomInProgress = false;
+        return;
+      }
+      unawaited(
+        _scrollController
+            .animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOutCubic,
+            )
+            .whenComplete(() {
+              _jumpToBottomInProgress = false;
+              if (mounted) _handleChatScroll();
+            }),
+      );
+    });
+  }
+
   void _scrollToBottom({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
@@ -8822,16 +9311,19 @@ jobs:
 
       if (force) {
         _userScrolledUp = false;
+        _setJumpToBottomVisible(false);
       } else {
         // ScrollPosition knows whether a finger is driving the view: forward
         // means dragging toward the top. Yield the moment the user reads up,
         // re-arm only once they are back at the bottom.
         if (position.userScrollDirection == ScrollDirection.forward) {
           _userScrolledUp = true;
+          return;
         }
         if (_userScrolledUp) {
-          if (maxScroll - currentScroll <= 48.0) {
+          if (maxScroll - currentScroll <= 40.0) {
             _userScrolledUp = false;
+            _setJumpToBottomVisible(false);
           } else {
             return;
           }
@@ -8841,7 +9333,7 @@ jobs:
       if (force) {
         _scrollController.animateTo(
           maxScroll,
-          duration: const Duration(milliseconds: 280),
+          duration: const Duration(milliseconds: 250),
           curve: Curves.easeOutCubic,
         );
       } else if (maxScroll - currentScroll > 0.5) {
@@ -8903,17 +9395,18 @@ jobs:
                 settings: _activeSettings,
                 model: _activeModel,
                 messages: _messages,
+                sessionId: _activeSessionId,
                 messageController: _messageController,
                 scrollController: _scrollController,
                 isSending: _sendingSessionIds.contains(_activeSessionId),
-                 toolStatus: _toolStatus,
-                 activeTodos: _activeTodos,
-                 todoListVisible: _todoListVisible,
-                  onCloseTodoList: () => setState(() => _todoListVisible = false),
-                  agenticEnabled: _agenticEnabled,
-                  onToggleTodoList: () => setState(() {
-                    _todoListVisible = !_todoListVisible;
-                  }),
+                toolStatus: _toolStatus,
+                activeTodos: _activeTodos,
+                todoListVisible: _todoListVisible,
+                onCloseTodoList: () => setState(() => _todoListVisible = false),
+                agenticEnabled: _agenticEnabled,
+                onToggleTodoList: () => setState(() {
+                  _todoListVisible = !_todoListVisible;
+                }),
                 onOpenProvider: () => _openProviderSheet(_selectedProviderId),
                 onOpenModel: _openModelSheet,
                 onSend: _sendMessage,
@@ -8931,31 +9424,59 @@ jobs:
                 onBranchChanged: _switchBranch,
                 agenticWorkspace: _agenticWorkspace,
                 deepResearchEnabled: _deepResearchEnabled,
+                studyModeEnabled: _studyModeEnabled,
                 onStartResearch: _startResearchLoop,
                 fileName: _getResearchFileName(activeSession.title),
                 onOpenLiveVoice: _openLiveVoiceMode,
                 onOpenSource: _openSourcePage,
+                showJumpToBottom: _showJumpToBottom,
+                onJumpToBottom: _jumpToBottom,
+                onSuggestionSelected: _selectChatSuggestion,
+                onRegenerateMessage: _regenerateMessage,
+                composerFocusNode: _composerFocusNode,
                 activeFeaturePills: [
-                  if (_deepResearchEnabled) const FeaturePill(icon: Icons.psychology, label: 'Deep Research'),
-                  if (_agenticEnabled) const FeaturePill(icon: Icons.terminal, label: 'Agentic IDE'),
-                  if (_searchSettings.enabled) const FeaturePill(icon: Icons.search, label: 'Web Search'),
+                  if (_deepResearchEnabled)
+                    const FeaturePill(
+                      icon: Icons.psychology,
+                      label: 'Deep Research',
+                    ),
+                  if (_agenticEnabled)
+                    const FeaturePill(
+                      icon: Icons.terminal,
+                      label: 'Agentic IDE',
+                    ),
+                  if (_searchSettings.enabled)
+                    const FeaturePill(icon: Icons.search, label: 'Web Search'),
                   if (_studyModeEnabled)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: _openWorkspaceFiles,
-                      child: const FeaturePill(icon: Icons.menu_book, label: 'Study Mode'),
+                      child: const FeaturePill(
+                        icon: Icons.menu_book,
+                        label: 'Study Mode',
+                      ),
                     ),
                   if (_studyModeEnabled && _bridgeOnline != null)
                     FeaturePill(
                       icon: _bridgeOnline! ? Icons.cloud_done : Icons.cloud_off,
-                      label: _bridgeOnline! ? 'Bridge online' : 'Bridge offline',
+                      label: _bridgeOnline!
+                          ? 'Bridge online'
+                          : 'Bridge offline',
                       color: _bridgeOnline!
                           ? const Color(0xFF3E7B3E)
                           : const Color(0xFFB3402E),
                     ),
                   ..._buildStudyActionChips(),
-                  if (_artifactsEnabled) const FeaturePill(icon: Icons.extension, label: 'Artifacts'),
-                  if (_svgVisualsEnabled) const FeaturePill(icon: Icons.auto_awesome, label: 'Visuals'),
+                  if (_artifactsEnabled)
+                    const FeaturePill(
+                      icon: Icons.extension,
+                      label: 'Artifacts',
+                    ),
+                  if (_svgVisualsEnabled)
+                    const FeaturePill(
+                      icon: Icons.auto_awesome,
+                      label: 'Visuals',
+                    ),
                 ],
               ),
             ),

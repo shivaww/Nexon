@@ -143,7 +143,7 @@ class DeepResearchOrchestrator:
                     self.run_ingested_urls.add(norm)
                 merged_findings.append(finding)
 
-            merged_facts = self._cap_evidence(merged_facts, 20)
+            merged_facts = self._cap_evidence(merged_facts, 30)
             merged_findings = self._cap_evidence(merged_findings, 30)
             merged_skipped_pdfs = self._dedup_url_items(
                 existing.get("skipped_pdfs") or [], skipped_pdfs or []
