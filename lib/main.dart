@@ -1073,12 +1073,25 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       if (item is! Map) continue;
       final sourceUrl = item['source']?.toString() ?? '';
       findings.add({
-        'text': item['text']?.toString() ?? '',
+        // Findings may carry compact markdown tables or verbatim spec lines.
+        'text': _clampFindingText(item['text']?.toString() ?? ''),
         'source': _matchSource(sourceUrl),
         'confidence': item['confidence']?.toString() ?? 'high',
       });
     }
     return {'facts': facts, 'findings': findings};
+  }
+
+  /// Bound one finding to ~400 characters without destroying structure.
+  /// Markdown tables and verbatim spec/pricing lines are kept intact: when
+  /// the text overflows, trim at the last complete line, never mid-row.
+  String _clampFindingText(String raw) {
+    const maxChars = 400;
+    final text = raw.trim();
+    if (text.length <= maxChars) return text;
+    final lineBreak = text.lastIndexOf('\n', maxChars);
+    final cut = lineBreak > 0 ? lineBreak : maxChars;
+    return '${text.substring(0, cut).trimRight()}…';
   }
 
   /// IMPROVEMENT: LLM retry wrapper with exponential backoff.
@@ -1240,6 +1253,59 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       }
     }
     return items.join(' ');
+  }
+
+  /// Phase-End Consolidator: ONE non-reasoning JSON call per phase that
+  /// synthesizes the phase, names confirmed entities, and writes the next
+  /// phase's search directives. Returns null on call/parse failure so the
+  /// caller falls back to _buildDeepResearchPhaseSummary.
+  Future<Map<String, dynamic>?> _consolidatePhaseEnd({
+    required String phaseTitle,
+    required String queryText,
+    required String nextPhaseHeading,
+    required List<_JsonMap> facts,
+    required List<_JsonMap> findings,
+    required List<Map<String, dynamic>> searchSnippets,
+    required ProviderDefinition provider,
+    required ProviderSettings settings,
+    required String model,
+  }) async {
+    final payload = <String, dynamic>{
+      'phase_title': phaseTitle,
+      'phase_goal': queryText,
+      'next_phase_title': nextPhaseHeading,
+      'facts': facts.take(30).toList(),
+      'findings': findings.take(20).toList(),
+      'search_snippets': searchSnippets.take(12).toList(),
+    };
+    final messages = [
+      const ChatMessage(
+        role: MessageRole.system,
+        text: DeepResearchPrompts.phaseConsolidatorSystemPrompt,
+      ),
+      ChatMessage(
+        role: MessageRole.user,
+        text:
+            'Phase evidence (JSON). Synthesize it and write the next brief:\n'
+            '${jsonEncode(payload)}',
+      ),
+    ];
+    try {
+      // JSON-only consolidation: reasoning stays OFF so the call is fast,
+      // cheap, and reliably emits parseable JSON.
+      final nonReasoningSettings = settings.copyWith(reasoningEnabled: false);
+      final response = await _retryLlmCall(
+        provider: provider,
+        settings: nonReasoningSettings,
+        model: model,
+        messages: messages,
+        maxRetries: 1,
+      );
+      return DeepResearchHelpers.parseJsonObject(response);
+    } catch (e) {
+      debugPrint('Phase-end consolidation failed: $e');
+      return null;
+    }
   }
 
   List<String> _evidenceSourceUrls(String tempJsonContent) {
@@ -5835,8 +5901,12 @@ jobs:
     required String phaseTitle,
     required List<_JsonMap> facts,
     required List<_JsonMap> findings,
+    String phaseSummary = '',
   }) {
-    if (facts.isEmpty && findings.isEmpty) return;
+    final summary = phaseSummary.trim();
+    // A consolidated synthesis is worth carrying forward even when the phase
+    // extracted no structured records (blocked or paywalled sources).
+    if (facts.isEmpty && findings.isEmpty && summary.isEmpty) return;
     final entitySet = <String>{};
     for (final f in facts) {
       final subj = (f['subject'] ?? '').toString().trim();
@@ -5874,7 +5944,10 @@ jobs:
       final s = (f['source'] ?? '').toString().trim();
       if (s.isNotEmpty) sourceUrls.add(s);
     }
-    buffer.writeln('━━ Phase $phaseNumber:$phaseTitle ━━');
+    buffer.writeln('━━ Phase $phaseNumber: $phaseTitle ━━');
+    if (summary.isNotEmpty) {
+      buffer.writeln('Phase synthesis: $summary');
+    }
     if (entitySet.isNotEmpty) {
       buffer.writeln('Discovered entities: ${entitySet.take(25).join(', ')}');
     }
@@ -6056,7 +6129,6 @@ jobs:
         ];
 
         String planText = '';
-        String plannerReasoning = '';
         final plannerStream = _chatClient.sendChatStream(
           provider: provider,
           settings: settings,
@@ -6073,7 +6145,7 @@ jobs:
           stream: plannerStream,
           onChunk: (chunk) {
             if (chunk.startsWith('[REASONING]')) {
-              plannerReasoning += chunk.substring(11);
+              // Planner reasoning is transient: only the JSON plan is kept.
             } else {
               var textChunk = chunk;
               if (textChunk.contains('<think>') ||
@@ -6100,8 +6172,9 @@ jobs:
             : (rawPlan is Map<String, dynamic> && rawPlan['phases'] is List
                   ? rawPlan['phases'] as List
                   : const <dynamic>[]);
-        final phaseList = phaseListRaw.length > 12
-            ? phaseListRaw.sublist(0, 12)
+        // Hard cap mirrors DeepResearchPrompts.plannerSystemPrompt (max 8).
+        final phaseList = phaseListRaw.length > 8
+            ? phaseListRaw.sublist(0, 8)
             : phaseListRaw;
 
         int stepIdx = 1;
@@ -6221,6 +6294,7 @@ jobs:
                 phaseTitle: (item['phase_title'] ?? 'Previous Phase').toString(),
                 facts: rFacts,
                 findings: rFindings,
+                phaseSummary: (item['summary'] ?? '').toString(),
               );
             }
           }
@@ -6256,9 +6330,9 @@ jobs:
         }
         steps[i]['status'] = 'running';
         _publishResearchState(sessionId, messageIndex, stateMap);
-        // IMPROVEMENT: Per-phase timeout (4 minutes max per phase)
+        // IMPROVEMENT: Per-phase timeout (7 minutes max per phase)
         final phaseStartTime = DateTime.now();
-        const phaseTimeout = Duration(minutes: 4);
+        const phaseTimeout = Duration(minutes: 7);
 
         final String Function({
           required String kind,
@@ -6423,6 +6497,11 @@ jobs:
         final Set<String> phaseFailedUrls = {};
         String stepContent = '';
         int transientRetries = 0;
+        // Reflector is gated to one run per phase (see reflectorReady below).
+        bool reflectedThisPhase = false;
+        // Compact web_search snippet trail, used only as fallback evidence
+        // when read_url was blocked and the phase extracted no facts.
+        final List<Map<String, dynamic>> phaseSearchSnippets = [];
 
         while (!stepDone && loopCount < 20) {
           if (startTime.add(globalTimeBudget).isBefore(DateTime.now())) {
@@ -6435,7 +6514,7 @@ jobs:
           if (phaseStartTime.add(phaseTimeout).isBefore(DateTime.now())) {
             stepDone = true;
             stepFailure =
-                'Phase exceeded${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
+                'Phase exceeded ${phaseTimeout.inMinutes}-minute timeout. Proceeding with partial results.';
             break;
           }
           if (!mounted) return;
@@ -6453,6 +6532,26 @@ jobs:
           var researchStreamCharCount = 0;
           var tagHold = '';
 
+          // Capture the pre-turn reasoning ONCE. Live flushes write into
+          // steps[i]['reasoning'], so re-reading it at the end would treat
+          // this turn's own text as history and duplicate it.
+          final String reasoningBeforeTurn =
+              (steps[i]['reasoning'] ?? '').toString();
+          final reasoningWatch = Stopwatch()..start();
+          var lastFlushedReasoningChars = 0;
+
+          void flushResearchReasoning() {
+            final trimmed = reasoningText.trim();
+            if (trimmed.isEmpty) return;
+            final joined = reasoningBeforeTurn.isEmpty
+                ? trimmed
+                : '$reasoningBeforeTurn\n\n---\n\n$trimmed';
+            steps[i]['reasoning'] = joined.length > 6000
+                ? joined.substring(joined.length - 6000)
+                : joined;
+            _publishResearchState(sessionId, messageIndex, stateMap);
+          }
+
           try {
             final stream = _chatClient.sendChatStream(
               provider: provider,
@@ -6468,7 +6567,6 @@ jobs:
               onChunk: (chunk) {
                 if (chunk.startsWith('[REASONING]')) {
                   reasoningText += chunk.substring(11);
-                  researchStreamCharCount += chunk.length - 11;
                 } else {
                   var textChunk = tagHold + chunk;
                   tagHold = '';
@@ -6514,6 +6612,17 @@ jobs:
                     responseText += textChunk;
                   }
                 }
+                // Count every reasoning character (both the [REASONING] frame
+                // path and the inline-tag path) and publish at most ~5x/sec so
+                // the UI stays live without re-encoding the whole state fence
+                // on every token.
+                researchStreamCharCount = reasoningText.length;
+                if (researchStreamCharCount != lastFlushedReasoningChars &&
+                    reasoningWatch.elapsedMilliseconds >= 200) {
+                  flushResearchReasoning();
+                  lastFlushedReasoningChars = researchStreamCharCount;
+                  reasoningWatch.reset();
+                }
               },
             );
             // Flush any trailing partial tag buffer so characters aren't lost.
@@ -6542,17 +6651,9 @@ jobs:
             );
 
             transientRetries = 0;
-            if (reasoningText.trim().isNotEmpty) {
-              final String prevReasoning =
-                  (steps[i]['reasoning'] ?? '').toString();
-              final String joinedReasoning = prevReasoning.isEmpty
-                  ? reasoningText.trim()
-                  : '$prevReasoning\n\n---\n\n${reasoningText.trim()}';
-              steps[i]['reasoning'] = joinedReasoning.length > 6000
-                  ? joinedReasoning.substring(joinedReasoning.length - 6000)
-                  : joinedReasoning;
-              _publishResearchState(sessionId, messageIndex, stateMap);
-            }
+            // Final flush: commit whatever the throttle had not yet published,
+            // including the trailing tagHold characters appended above.
+            flushResearchReasoning();
 
             final unrecognizedErrors = <Map<String, dynamic>>[];
             // JSON tool calls are extracted directly from fenced ```json blocks
@@ -6702,9 +6803,9 @@ jobs:
                   continue;
                 }
 
-                if (webSearchCount >= 20) {
+                if (webSearchCount >= 6) {
                   const limitMsg =
-                      'Search limit reached for this phase (20/20 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                      'Search limit reached for this phase (6/6 used). No further web_search calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
                   searchFutures.add(Future.value('Error: $limitMsg'));
                   finishResearchEvent(
                     eventIds[k],
@@ -6811,6 +6912,26 @@ jobs:
                   );
                 }
 
+                // Keep a compact snippet trail so the Phase-End Consolidator
+                // can salvage low-confidence evidence when read_url was
+                // blocked (Cloudflare/paywall) and the phase has no facts.
+                if (!isSearchErr && searchResult.trim().isNotEmpty) {
+                  phaseSearchSnippets.add({
+                    'query': query,
+                    'excerpt': _truncateEventText(searchResult, 1200),
+                    'urls': parsedItems
+                        .take(6)
+                        .map((item) => item['url'] ?? '')
+                        .toList(),
+                  });
+                  if (phaseSearchSnippets.length > 12) {
+                    phaseSearchSnippets.removeRange(
+                      0,
+                      phaseSearchSnippets.length - 12,
+                    );
+                  }
+                }
+
                 combinedResults.writeln(
                   "Search results for '$query':\n$searchResult\n",
                 );
@@ -6837,7 +6958,7 @@ jobs:
               final List<bool> duplicateInBatch = [];
               final List<bool> prevFailedInPhase = [];
               final Set<String> batchSeenNormUrls = {};
-              const int readUrlLimit = 5;
+              const int readUrlLimit = 9;
 
               bool looksLikePdfUrl(String u) {
                 final lower = u.toLowerCase();
@@ -7306,8 +7427,8 @@ jobs:
                     }
                   }
 
-                  // Cap at 20 facts per phase, drop lowest confidence first
-                  if (phaseFacts.length > 20) {
+                  // Cap at 30 facts per phase, drop lowest confidence first
+                  if (phaseFacts.length > 30) {
                     phaseFacts.sort((a, b) {
                       final ra =
                           a['confidence']?.toString().toLowerCase() ?? 'medium';
@@ -7316,7 +7437,7 @@ jobs:
                       const ranks = {'high': 0, 'medium': 1, 'low': 2};
                       return (ranks[ra] ?? 1).compareTo(ranks[rb] ?? 1);
                     });
-                    phaseFacts.removeRange(20, phaseFacts.length);
+                    phaseFacts.removeRange(30, phaseFacts.length);
                   }
 
                   for (final entry in fetchedTexts.entries) {
@@ -7487,9 +7608,17 @@ jobs:
               stepDone = true;
             }
 
+            // Reflector runs AT MOST ONCE per phase, and never before a
+            // read_url batch has been attempted - unless searches alone were
+            // exhausted without surfacing a single readable source.
+            final bool reflectorReady = !reflectedThisPhase &&
+                ((readUrlCount >= 2 && loopCount >= 3) ||
+                    (readUrlCount == 0 && webSearchCount >= 4));
             if (!stepDone &&
+                reflectorReady &&
                 _sendingSessionIds.contains(sessionId) &&
                 (phaseFacts.isNotEmpty || phaseFindings.isNotEmpty)) {
+              reflectedThisPhase = true;
               final stepReflectMessages = [
                 const ChatMessage(
                   role: MessageRole.system,
@@ -7607,14 +7736,73 @@ jobs:
           }
         }
 
-        final phaseSummary = _buildDeepResearchPhaseSummary(
-          phaseTitle: phaseTitle,
-          stepContent: stepContent,
-          facts: phaseFacts,
-          findings: phaseFindings,
-          skippedPdfs: phaseSkippedPdfs,
-          failedFetches: phaseFailedFetches,
-        );
+        // ── PHASE-END CONSOLIDATION ──
+        // Runs once per phase after the loop, on EVERY exit path (step_complete,
+        // prose exit, Reflector early-exit, timeout, transient failure), so the
+        // next phase always receives a synthesis and a handoff brief.
+        final consolidation =
+            mounted && _sendingSessionIds.contains(sessionId)
+            ? await _consolidatePhaseEnd(
+                phaseTitle: phaseTitle,
+                queryText: queryText,
+                nextPhaseHeading: nextPhaseHeading,
+                facts: phaseFacts,
+                findings: phaseFindings,
+                searchSnippets: phaseSearchSnippets,
+                provider: provider,
+                settings: settings,
+                model: model,
+              )
+            : null;
+        var phaseSummary = '';
+        if (consolidation != null) {
+          phaseSummary = (consolidation['phase_summary'] ?? '').toString().trim();
+          // Salvage snippet-only evidence ONLY when the phase came away with
+          // almost nothing (Cloudflare/paywall blocks). Tagged low confidence.
+          if (phaseFacts.length + phaseFindings.length < 3) {
+            final salvaged = consolidation['snippet_findings'];
+            if (salvaged is List) {
+              final seen = phaseFindings
+                  .map((f) => '${f['text']}|${f['source']}')
+                  .toSet();
+              for (final record in salvaged.whereType<Map>()) {
+                final text = (record['text'] ?? '').toString().trim();
+                final source = (record['source'] ?? '').toString().trim();
+                if (text.isEmpty || source.isEmpty) continue;
+                if (!seen.add('$text|$source')) continue;
+                phaseFindings.add({
+                  'text': _clampFindingText(text),
+                  'source': source,
+                  'confidence': 'low',
+                });
+              }
+            }
+          }
+          // Guarantee the handoff: never leave Phase N+1 without directives.
+          if (i + 1 < steps.length) {
+            final existingBrief = (steps[i + 1]['handoff_brief'] ?? '')
+                .toString()
+                .trim();
+            final nextBrief = (consolidation['next_brief'] ?? '')
+                .toString()
+                .trim();
+            if (existingBrief.isEmpty && nextBrief.isNotEmpty) {
+              steps[i + 1]['handoff_brief'] = nextBrief;
+            }
+          }
+        }
+        if (phaseSummary.isEmpty) {
+          // Fallback: mechanical template when the LLM call or parse failed.
+          phaseSummary = _buildDeepResearchPhaseSummary(
+            phaseTitle: phaseTitle,
+            stepContent: stepContent,
+            facts: phaseFacts,
+            findings: phaseFindings,
+            skippedPdfs: phaseSkippedPdfs,
+            failedFetches: phaseFailedFetches,
+          );
+        }
+        steps[i]['phase_summary'] = phaseSummary;
         final hadIssues = !stepFailed &&
             (phaseFailedFetches.isNotEmpty ||
                 phaseSkippedPdfs.isNotEmpty ||
@@ -7650,6 +7838,7 @@ jobs:
           phaseTitle: phaseTitle,
           facts: phaseFacts,
           findings: phaseFindings,
+          phaseSummary: phaseSummary,
         );
 
         _publishResearchState(sessionId, messageIndex, stateMap);
@@ -7752,6 +7941,9 @@ jobs:
             'error':
                 'Budgeted evidence export was empty; the writer received the complete temp.json fallback instead.',
           });
+        } else if (!rawHasPhases) {
+          // Only abort when NEITHER the budgeted export nor raw temp.json
+          // holds any persisted phase results.
           writerInputFailure =
               'No phase results were persisted to temp.json, so a sourced report cannot be generated.';
         }
@@ -7869,6 +8061,17 @@ jobs:
           String responseText = '';
           String reasoningText = '';
           var isThinking = false;
+          final writerReasoningWatch = Stopwatch()..start();
+          var lastFlushedWriterChars = 0;
+
+          void flushWriterReasoning() {
+            final trimmed = reasoningText.trim();
+            if (trimmed.isEmpty) return;
+            stateMap['writer_reasoning'] = trimmed.length > 6000
+                ? trimmed.substring(trimmed.length - 6000)
+                : trimmed;
+            _publishResearchState(sessionId, messageIndex, stateMap);
+          }
 
           final stream = _chatClient.sendChatStream(
             provider: provider,
@@ -7929,6 +8132,13 @@ jobs:
                   responseText += textChunk;
                 }
               }
+              // Throttled live preview (~200ms) for the Writer stage.
+              if (reasoningText.length != lastFlushedWriterChars &&
+                  writerReasoningWatch.elapsedMilliseconds >= 200) {
+                flushWriterReasoning();
+                lastFlushedWriterChars = reasoningText.length;
+                writerReasoningWatch.reset();
+              }
             },
           );
           if (tagHold.isNotEmpty) {
@@ -7939,6 +8149,9 @@ jobs:
             }
             tagHold = '';
           }
+          // Final flush so the last reasoning tail is visible even if the
+          // throttle never fired again before the stream closed.
+          flushWriterReasoning();
 
           if (!_sendingSessionIds.contains(sessionId)) {
             writerFailure = 'Research cancelled by user.';

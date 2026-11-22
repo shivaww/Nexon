@@ -345,9 +345,9 @@ class ChatClient {
             request.headers.contentLength = payloadBytes.length;
             request.add(payloadBytes);
             final response = await request.close().timeout(
-              const Duration(seconds: 90),
+              const Duration(seconds: 120),
               onTimeout: () => throw TimeoutException(
-                'LLM request timed out after 90s waiting for response.',
+                'LLM request timed out after 120s waiting for response.',
               ),
             );
 
@@ -366,9 +366,9 @@ class ChatClient {
                 .transform(utf8.decoder)
                 .join()
                 .timeout(
-                  const Duration(seconds: 90),
+                  const Duration(seconds: 120),
                   onTimeout: () => throw TimeoutException(
-                    'LLM response body timed out after 90s.',
+                    'LLM response body timed out after 120s.',
                   ),
                 );
             final decoded = jsonDecode(body);

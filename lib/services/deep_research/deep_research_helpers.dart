@@ -120,6 +120,12 @@ class DeepResearchHelpers {
             : <Map<String, dynamic>>[],
         if (m['error'] != null) 'error': m['error'].toString(),
         if (m['reasoning'] != null) 'reasoning': m['reasoning'].toString(),
+        // Phase N -> Phase N+1 directives and the consolidated phase synthesis
+        // must survive pause/resume; dropping them here blinds resumed phases.
+        if (m['handoff_brief'] != null)
+          'handoff_brief': m['handoff_brief'].toString(),
+        if (m['phase_summary'] != null)
+          'phase_summary': m['phase_summary'].toString(),
       });
       i++;
     }

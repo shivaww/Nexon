@@ -37,6 +37,8 @@ class ResearchPlanWidget extends StatefulWidget {
 
 class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   final Set<int> _expandedSteps = {};
+  final Set<int> _expandedLiveReasoning = {};
+  bool _writerReasoningExpanded = false;
   late final Stopwatch _stopwatch;
   Timer? _timer;
 
@@ -162,6 +164,102 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  /// Live per-step activity counter derived from the step's event records.
+  /// Deduplicated/capped searches are not counted as used budget, and skipped
+  /// PDFs are not counted as pages read.
+  String _stepCounterLabel(Map<String, dynamic> step) {
+    final events = (step['events'] as List? ?? const []).whereType<Map>();
+    var searches = 0;
+    var pages = 0;
+    var facts = 0;
+    for (final e in events) {
+      final tool = e['tool']?.toString();
+      final status = e['status']?.toString();
+      if (tool == 'web_search' &&
+          status == 'done' &&
+          e['deduplicated'] != true) {
+        searches++;
+      }
+      if (tool == 'read_url' &&
+          status == 'done' &&
+          e['parse_format']?.toString() != 'skipped_pdf') {
+        pages++;
+      }
+      final fc = e['facts_count'];
+      if (fc is num) facts += fc.toInt();
+    }
+    return 'Searches used: $searches · Pages read: $pages · '
+        'Facts extracted: $facts';
+  }
+
+  /// Compact, always-visible reasoning block. [expanded] toggles between a
+  /// tail preview and the full (already 6,000-char capped) reasoning text.
+  Widget _liveReasoningBlock({
+    required String label,
+    required String reasoning,
+    required bool expanded,
+    required VoidCallback onToggle,
+  }) {
+    final text = reasoning.trim();
+    final preview = text.length > 240
+        ? '…${text.substring(text.length - 240)}'
+        : text;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3EFE8),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE2D8C8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.lightbulb_outline,
+                size: 14,
+                color: Color(0xFF8A6D3B),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF8A6D3B),
+                  ),
+                ),
+              ),
+              if (text.length > 240)
+                InkWell(
+                  onTap: onToggle,
+                  child: Text(
+                    expanded ? 'Collapse' : 'Expand',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xFF2C5282),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          SelectableText(
+            expanded ? text : preview,
+            style: const TextStyle(
+              fontSize: 12,
+              height: 1.35,
+              color: Colors.black54,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _downloadFile({bool asDocx = false}) async {
@@ -399,6 +497,36 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
               ],
             ),
           ),
+          if (status == 'pending' && steps.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+              child: Text(
+                '${steps.length} phases · max ${steps.length}×6 searches · '
+                'max ${steps.length}×9 pages',
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  color: Color(0xFF4A6785),
+                ),
+              ),
+            ),
+          if (status == 'generating_report' &&
+              (widget.stateMap['writer_reasoning'] ?? '')
+                  .toString()
+                  .trim()
+                  .isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+              child: _liveReasoningBlock(
+                label: 'Writer reasoning',
+                reasoning: widget.stateMap['writer_reasoning'].toString(),
+                expanded: _writerReasoningExpanded,
+                onToggle: () {
+                  setState(() {
+                    _writerReasoningExpanded = !_writerReasoningExpanded;
+                  });
+                },
+              ),
+            ),
           if (status == 'completed' &&
               (widget.stateMap['report_path'] ?? '').toString().isNotEmpty)
             Padding(
@@ -469,23 +597,39 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                         Icon(statusIcon, size: 18, color: statusColor),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: Text(
-                            (step['title'] as String?) ?? 'Step ${idx + 1}',
-                            style: TextStyle(
-                              decoration:
-                                  (stepStatus == 'completed' ||
-                                      stepStatus == 'completed_with_issues')
-                                  ? TextDecoration.lineThrough
-                                  : null,
-                              color:
-                                  (stepStatus == 'completed' ||
-                                      stepStatus == 'completed_with_issues')
-                                  ? Colors.grey
-                                  : Colors.black87,
-                              fontWeight: stepStatus == 'running'
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                (step['title'] as String?) ??
+                                    'Step ${idx + 1}',
+                                style: TextStyle(
+                                  decoration:
+                                      (stepStatus == 'completed' ||
+                                          stepStatus ==
+                                              'completed_with_issues')
+                                      ? TextDecoration.lineThrough
+                                      : null,
+                                  color:
+                                      (stepStatus == 'completed' ||
+                                          stepStatus ==
+                                              'completed_with_issues')
+                                      ? Colors.grey
+                                      : Colors.black87,
+                                  fontWeight: stepStatus == 'running'
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _stepCounterLabel(step),
+                                style: const TextStyle(
+                                  fontSize: 10.5,
+                                  color: Color(0xFF4A6785),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         Icon(
@@ -499,6 +643,28 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                     ),
                   ),
                 ),
+                if (stepStatus == 'running' &&
+                    (step['reasoning'] ?? '')
+                        .toString()
+                        .trim()
+                        .isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(40, 0, 14, 8),
+                    child: _liveReasoningBlock(
+                      label: 'Live reasoning',
+                      reasoning: (step['reasoning'] ?? '').toString(),
+                      expanded: _expandedLiveReasoning.contains(idx),
+                      onToggle: () {
+                        setState(() {
+                          if (_expandedLiveReasoning.contains(idx)) {
+                            _expandedLiveReasoning.remove(idx);
+                          } else {
+                            _expandedLiveReasoning.add(idx);
+                          }
+                        });
+                      },
+                    ),
+                  ),
                 if (isExpanded)
                   Container(
                     padding: const EdgeInsets.fromLTRB(40, 0, 14, 12),
@@ -536,10 +702,11 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             ),
                           ),
                         ],
-                        if ((step['reasoning'] ?? '')
-                            .toString()
-                            .trim()
-                            .isNotEmpty) ...[
+                        if (stepStatus != 'running' &&
+                            (step['reasoning'] ?? '')
+                                .toString()
+                                .trim()
+                                .isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Theme(
                             data: Theme.of(context)
