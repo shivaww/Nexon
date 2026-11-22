@@ -46,12 +46,20 @@ class _ChatHistoryBody extends StatelessWidget {
     final filtered = q.isEmpty
         ? sessions
         : sessions.where((s) => _sessionMatches(s, q)).toList();
-    final sortedSessions = List<ChatSession>.from(filtered)
-      ..sort((a, b) {
-        if (a.isPinned && !b.isPinned) return -1;
-        if (!a.isPinned && b.isPinned) return 1;
-        return 0; // Maintain original relative order
-      });
+    // Explicit, stable order: pinned first, then blank (new) chats, then
+    // everything else in its existing order. List.sort is not stable, so a
+    // comparator returning 0 could shuffle a new chat into the middle.
+    final pinnedSessions = filtered.where((s) => s.isPinned).toList();
+    final unpinnedSessions = filtered.where((s) => !s.isPinned).toList();
+    final blankSessions =
+        unpinnedSessions.where((s) => s.messages.isEmpty).toList();
+    final usedSessions =
+        unpinnedSessions.where((s) => s.messages.isNotEmpty).toList();
+    final sortedSessions = <ChatSession>[
+      ...pinnedSessions,
+      ...blankSessions,
+      ...usedSessions,
+    ];
 
     final displayedSessions = sortedSessions.take(visibleLimit).toList();
 
@@ -80,7 +88,10 @@ class _ChatHistoryBody extends StatelessWidget {
     };
 
     for (final session in displayedSessions) {
-      final b = getBucket(session.updatedAt);
+      // Blank chats always show under Today so a new chat is at the top.
+      final b = session.messages.isEmpty
+          ? 'Today'
+          : getBucket(session.updatedAt);
       grouped[b]!.add(session);
     }
 
