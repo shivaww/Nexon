@@ -114,25 +114,12 @@ class DeepResearchHelpers {
         'events': m['events'] is List
             ? List<Map<String, dynamic>>.from(
                 (m['events'] as List).whereType<Map>().map(
-                  (e) => Map<String, dynamic>.from(e),
-                ),
+                      (e) => Map<String, dynamic>.from(e),
+                    ),
               )
             : <Map<String, dynamic>>[],
         if (m['error'] != null) 'error': m['error'].toString(),
         if (m['reasoning'] != null) 'reasoning': m['reasoning'].toString(),
-        // These fields are produced between phases. Keep them when a saved
-        // plan is normalized for resume so the next phase retains its direct
-        // instructions and prior synthesis.
-        if (m['handoff_brief'] != null)
-          'handoff_brief': m['handoff_brief'].toString(),
-        if (m['phase_summary'] != null)
-          'phase_summary': m['phase_summary'].toString(),
-        if (m['key_entities'] is List)
-          'key_entities': List<dynamic>.from(m['key_entities'] as List),
-        if (m['research_stats'] is Map)
-          'research_stats': Map<String, dynamic>.from(
-            m['research_stats'] as Map,
-          ),
       });
       i++;
     }
@@ -149,15 +136,15 @@ class DeepResearchHelpers {
   }
 
   static Map<String, dynamic> emptyStats() => {
-    'llm_calls': 0,
-    'searches': 0,
-    'fetches': 0,
-    'summaries': 0,
-    'reflections': 0,
-    'estimated_prompt_chars': 0,
-    'estimated_completion_chars': 0,
-    'estimated_tokens': 0,
-  };
+        'llm_calls': 0,
+        'searches': 0,
+        'fetches': 0,
+        'summaries': 0,
+        'reflections': 0,
+        'estimated_prompt_chars': 0,
+        'estimated_completion_chars': 0,
+        'estimated_tokens': 0,
+      };
 
   static void bumpStat(Map<String, dynamic> stats, String key, [int by = 1]) {
     stats[key] = ((stats[key] as num?)?.toInt() ?? 0) + by;
@@ -173,7 +160,7 @@ class DeepResearchHelpers {
         ((stats['estimated_prompt_chars'] as num?)?.toInt() ?? 0) + promptChars;
     stats['estimated_completion_chars'] =
         ((stats['estimated_completion_chars'] as num?)?.toInt() ?? 0) +
-        completionChars;
+            completionChars;
     _recomputeTokens(stats);
   }
 
@@ -194,12 +181,9 @@ class DeepResearchHelpers {
     if (parsed == null) {
       return {'facts': facts, 'findings': findings};
     }
-    final rawFacts = parsed['facts'] is List
-        ? parsed['facts'] as List
-        : const [];
-    final rawFindings = parsed['findings'] is List
-        ? parsed['findings'] as List
-        : const [];
+    final rawFacts = parsed['facts'] is List ? parsed['facts'] as List : const [];
+    final rawFindings =
+        parsed['findings'] is List ? parsed['findings'] as List : const [];
     for (final item in rawFacts) {
       if (item is! Map) continue;
       facts.add({

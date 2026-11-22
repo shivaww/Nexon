@@ -5,7 +5,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -203,7 +202,9 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
         final baseName = widget.fileName.isNotEmpty
             ? widget.fileName
             : 'research_report';
-        targetFileName = baseName.endsWith('.md') ? baseName : '$baseName.md';
+        targetFileName = baseName.endsWith('.md')
+            ? baseName
+            : '$baseName.md';
       }
 
       final bytes = Uint8List.fromList(bytesList);
@@ -242,75 +243,10 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
     }
   }
 
-  int _progressValue(Map<dynamic, dynamic> step, String key) {
-    final stats = step['research_stats'];
-    if (stats is! Map) return 0;
-    final value = stats[key];
-    if (value is num) return value.toInt();
-    return int.tryParse(value?.toString() ?? '') ?? 0;
-  }
-
-  String _reasoningPreview(String reasoning, {int maxChars = 240}) {
-    final compact = reasoning.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (compact.length <= maxChars) return compact;
-    return '${compact.substring(0, maxChars - 1)}…';
-  }
-
-  Widget _liveReasoningBlock(
-    BuildContext context, {
-    required String keyPrefix,
-    required String label,
-    required String reasoning,
-  }) {
-    return Theme(
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        key: ValueKey(keyPrefix),
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: const EdgeInsets.only(bottom: 8),
-        title: Text(
-          '$label: ${_reasoningPreview(reasoning)}',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 12,
-            height: 1.3,
-            color: Colors.black54,
-          ),
-        ),
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3EFE8),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: SelectableText(
-              reasoning,
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.4,
-                color: Colors.black54,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final steps = widget.stateMap['steps'] as List? ?? [];
     final status = widget.stateMap['status'] as String? ?? 'running';
-    int totalProgress(String key) => steps.whereType<Map>().fold<int>(
-      0,
-      (sum, step) => sum + _progressValue(step, key),
-    );
-    final totalSearches = totalProgress('searches_used');
-    final totalPages = totalProgress('pages_read');
-    final totalFacts = totalProgress('facts_extracted');
 
     return LiquidGlassSurface(
       margin: const EdgeInsets.only(bottom: 12, top: 4),
@@ -344,45 +280,19 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              status == 'completed'
-                                  ? 'Deep Research Complete'
-                                  : status == 'pending'
-                                  ? 'Research Plan Ready'
-                                  : (status == 'running' && !widget.isSending)
-                                  ? 'Deep Research Interrupted'
-                                  : status == 'generating_report'
-                                  ? 'Writing research report...'
-                                  : 'Deep Research in Progress...',
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF2C5282),
-                              ),
-                            ),
-                            if (status == 'pending')
-                              Text(
-                                '${steps.length} phases · max ${steps.length}×6 searches · max ${steps.length}×9 pages',
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  color: Color(0xFF4A6785),
-                                ),
-                              )
-                            else if (status == 'running' ||
-                                status == 'generating_report')
-                              Text(
-                                'Searches used: $totalSearches · Pages read: $totalPages · Facts extracted: $totalFacts',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  color: Color(0xFF4A6785),
-                                ),
-                              ),
-                          ],
+                        child: Text(
+                          status == 'completed'
+                              ? 'Deep Research Complete'
+                              : status == 'pending'
+                              ? 'Research Plan Ready'
+                              : (status == 'running' && !widget.isSending)
+                              ? 'Deep Research Interrupted'
+                              : 'Deep Research in Progress...',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2C5282),
+                          ),
                         ),
                       ),
                     ],
@@ -495,24 +405,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
               padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
               child: Text(
                 'Report saved: ${(widget.stateMap['report_path'] ?? '').toString().split('/').last}',
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  color: Color(0xFF4A6785),
-                ),
-              ),
-            ),
-          if (status == 'generating_report' &&
-              (widget.stateMap['writer_reasoning'] ?? '')
-                  .toString()
-                  .trim()
-                  .isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-              child: _liveReasoningBlock(
-                context,
-                keyPrefix: 'writer-reasoning',
-                label: 'Writer reasoning',
-                reasoning: widget.stateMap['writer_reasoning'].toString(),
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF4A6785)),
               ),
             ),
           if (steps.isNotEmpty)
@@ -538,10 +431,6 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
             final step = entry.value as Map<String, dynamic>;
             final stepStatus = step['status'] as String? ?? 'pending';
             final isExpanded = _expandedSteps.contains(idx);
-            final stepReasoning = (step['reasoning'] ?? '').toString().trim();
-            final searchesUsed = _progressValue(step, 'searches_used');
-            final pagesRead = _progressValue(step, 'pages_read');
-            final factsExtracted = _progressValue(step, 'facts_extracted');
 
             IconData statusIcon = Icons.radio_button_unchecked;
             Color statusColor = Colors.grey;
@@ -580,41 +469,23 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                         Icon(statusIcon, size: 18, color: statusColor),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                (step['title'] as String?) ?? 'Step ${idx + 1}',
-                                style: TextStyle(
-                                  decoration:
-                                      (stepStatus == 'completed' ||
-                                          stepStatus == 'completed_with_issues')
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                  color:
-                                      (stepStatus == 'completed' ||
-                                          stepStatus == 'completed_with_issues')
-                                      ? Colors.grey
-                                      : Colors.black87,
-                                  fontWeight: stepStatus == 'running'
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                ),
-                              ),
-                              if (stepStatus == 'running' ||
-                                  searchesUsed > 0 ||
-                                  pagesRead > 0 ||
-                                  factsExtracted > 0)
-                                Text(
-                                  'Searches used: $searchesUsed · Pages read: $pagesRead · Facts extracted: $factsExtracted',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 10.5,
-                                    color: Color(0xFF64748B),
-                                  ),
-                                ),
-                            ],
+                          child: Text(
+                            (step['title'] as String?) ?? 'Step ${idx + 1}',
+                            style: TextStyle(
+                              decoration:
+                                  (stepStatus == 'completed' ||
+                                      stepStatus == 'completed_with_issues')
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                              color:
+                                  (stepStatus == 'completed' ||
+                                      stepStatus == 'completed_with_issues')
+                                  ? Colors.grey
+                                  : Colors.black87,
+                              fontWeight: stepStatus == 'running'
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
                           ),
                         ),
                         Icon(
@@ -628,16 +499,6 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                     ),
                   ),
                 ),
-                if (stepStatus == 'running' && stepReasoning.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(40, 0, 14, 6),
-                    child: _liveReasoningBlock(
-                      context,
-                      keyPrefix: 'live-step-reasoning-$idx',
-                      label: 'Reasoning',
-                      reasoning: stepReasoning,
-                    ),
-                  ),
                 if (isExpanded)
                   Container(
                     padding: const EdgeInsets.fromLTRB(40, 0, 14, 12),
@@ -675,8 +536,10 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                             ),
                           ),
                         ],
-                        if (stepStatus != 'running' &&
-                            stepReasoning.isNotEmpty) ...[
+                        if ((step['reasoning'] ?? '')
+                            .toString()
+                            .trim()
+                            .isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Theme(
                             data: Theme.of(context)
@@ -702,7 +565,7 @@ class _ResearchPlanWidgetState extends State<ResearchPlanWidget> {
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                   child: SelectableText(
-                                    stepReasoning,
+                                    step['reasoning'].toString(),
                                     style: const TextStyle(
                                       fontSize: 12,
                                       height: 1.4,

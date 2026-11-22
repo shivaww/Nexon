@@ -143,7 +143,7 @@ class DeepResearchBridgeClient {
     return call(
       'read_url',
       params: {'url': url, 'allow_pdf': allowPdf, 'query': query},
-      timeout: const Duration(seconds: 45),
+      timeout: const Duration(seconds: 105),
     );
   }
 

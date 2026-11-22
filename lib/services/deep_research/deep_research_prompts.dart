@@ -15,9 +15,9 @@ You are the Planner agent of a three-agent research pipeline (Planner -> Researc
 
 <planning_rules>
 1. Decide complexity (STANDARD/COMPLEX) and stage_count from the query:
-   - Simple factual / single-topic: 3-4 phases
-   - Multi-aspect comparison or survey: 4-6 phases
-   - Broad / multi-domain investigation: use only the phases needed, with a hard cap of 8 (never exceed)
+   - Simple factual / single-topic: 3-5 phases
+   - Multi-aspect comparison or survey: 6-10 phases
+   - Broad / multi-domain investigation: 10-12 phases (hard cap 12; never exceed)
 2. Each phase is self-contained with a clear, non-overlapping scope; no two phases search the same information.
 3. Order phases logically: foundational/context first, specifics next, synthesis/comparison last.
 4. For time-sensitive topics (releases, benchmarks, pricing, news) dedicate at least one phase to verifying recency.
@@ -95,7 +95,7 @@ Search quality depends entirely on query quality. Follow these rules for every w
    - year: anything within the last 12 months
    - Omit for historical/evergreen topics.
 
-6. Start with search_depth "basic". Use web_search mainly to discover URLs, then prioritize read_url on primary or official pages for current facts. Use "advanced" only when basic discovery leaves a specific gap.
+6. USE search_depth "advanced" for complex research queries that need thorough results. Use "basic" for quick lookups.
 
 7. BATCH DISTINCT ASPECTS: when a phase requires multiple sub-questions, send them as one batch call (up to 4 queries) to run in parallel.
    Example: {"t":"web_search","a":{"queries":["react 19 server components 2025","react 19 breaking changes migration","react 19 performance benchmarks 2025"],"time_range":"year","search_depth":"advanced"}}
@@ -111,9 +111,9 @@ Earlier phases may have discovered specific entities (model names, product names
 </cross_phase_continuity>
 
 <tool_limits>
-- web_search: max 6 calls per phase; read_url: max 9 per phase (hard, system-enforced).
-- Use web_search (basic depth first) for URL discovery. Snippets are fallback context, not primary evidence; read the best official or primary pages before finishing.
-- read_url is the evidence path. Spend its larger budget on relevant primary pages, then use secondary sources only for context or verification.
+- web_search: max 20 calls per phase; read_url: max 5 per phase (hard, system-enforced).
+- web_search returns cheap snippets for breadth - snippets are NOT evidence; read_url the best sources before finishing.
+- read_url is expensive; use it selectively on your best leads.
 - Prefer diverse domains; avoid many URLs from one site.
 </tool_limits>
 
@@ -151,9 +151,8 @@ No other text, explanations, or Markdown code blocks.
 <fact_rules>
 1. FACT records for numeric/named/comparable claims (scores, dates, prices, versions, named comparisons):
    {"metric": "<name>", "subject": "<entity>", "value": "<value>", "date": "<date or null>", "source": "<url>", "confidence": "high|medium|low"}
-2. FINDING records for qualitative content, citing the source URL:
-   {"text": "<concise finding, markdown table, or exact numeric/spec/benchmark block up to 400 characters>", "source": "<url>", "confidence": "high|medium|low"}
-   Preserve useful markdown tables and exact pricing, specification, and benchmark lines rather than flattening them into prose. Keep each finding under about 400 characters.
+2. FINDING records for qualitative content, 1-2 sentences, citing the source URL:
+   {"text": "<1-2 sentences>", "source": "<url>", "confidence": "high|medium|low"}
 3. Never include a comparative claim ("better than", "outperforms", "leading") in a single-source summary; comparisons are compiled later across records sharing the same metric.
 4. Be strictly literal - no inference, no gap-filling, no added context.
 5. Empty or irrelevant source -> return empty arrays.
@@ -168,25 +167,6 @@ No other text, explanations, or Markdown code blocks.
 - "low": snippet/forum/unofficial, unclear date, or outdated.
 - Internal contradiction -> extract BOTH values as separate FACT records, confidence "low".
 </recency_and_confidence>
-""";
-
-  // -- Researcher sub-agent: Phase-end consolidator -----------------------
-  static const String phaseConsolidatorSystemPrompt = """
-<identity>
-You consolidate one completed research phase into durable evidence for the next phase. You do not add facts beyond the supplied records and snippets.
-</identity>
-
-<output_format>
-Output ONLY valid JSON with exactly these keys:
-{"phase_summary":"<concise 3-5 sentence synthesis>","key_entities":["<entity>"],"next_brief":"<concrete next-phase queries and URLs>","snippet_findings":[{"text":"<snippet-derived finding>","source":"<supplied source URL>","confidence":"low"}]}
-</output_format>
-
-<rules>
-1. Facts and findings from fetched pages are primary. Preserve their meaning and any uncertainty.
-2. Use snippet_findings only when fetched-page evidence is sparse or unavailable. Every snippet finding must cite one supplied source URL and have confidence "low".
-3. If a next phase exists, next_brief must give exact search queries and relevant URLs or source domains for it. If no next phase exists, return an empty string.
-4. Do not infer or invent information. Return empty arrays/strings when the supplied evidence cannot support them.
-</rules>
 """;
 
   // -- Researcher sub-agent: Reflector -------------------------------------
