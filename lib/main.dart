@@ -5849,7 +5849,7 @@ jobs:
       buffer.writeln('Key facts:');
       for (final f in facts.take(15)) {
         buffer.writeln(
-          '  - ${f['subject']}${f['metric']}: ${f['value']} (date:${f['date'] ?? 'n/a'})',
+          '  - ${f['subject']} ${f['metric']}: ${f['value']} (date: ${(f['date'] ?? '').toString().isEmpty ? 'n/a' : f['date']})',
         );
       }
     }
@@ -5862,7 +5862,7 @@ jobs:
     if (sourceUrls.isNotEmpty) {
       buffer.writeln('Sources found (use read_url on these if needed):');
       for (final u in sourceUrls.take(8)) {
-        buffer.writeln('  -$u');
+        buffer.writeln('  - $u');
       }
     }
     buffer.writeln('');
