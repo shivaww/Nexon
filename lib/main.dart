@@ -1028,60 +1028,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     }
   }
 
-  /// Normalize batch evidence with per-source attribution.
-  /// Unlike single-source normalization, this preserves the source field from
-  /// each fact/finding record instead of overwriting with a single URL.
-  Map<String, dynamic> _normalizeBatchEvidence(
-    Map<String, dynamic>? parsed,
-    List<String> expectedSources,
-  ) {
-    final facts = <Map<String, dynamic>>[];
-    final findings = <Map<String, dynamic>>[];
-    if (parsed == null) {
-      return {'facts': facts, 'findings': findings};
-    }
-    final rawFacts = parsed['facts'] is List ? parsed['facts'] as List : const [];
-    final rawFindings =
-        parsed['findings'] is List ? parsed['findings'] as List : const [];
-    
-    String _normUrl(String u) {
-      var s = u.trim().toLowerCase();
-      if (s.endsWith('/') && s.length > 8) s = s.substring(0, s.length - 1);
-      s = s.replaceAll('http://', 'https://');
-      return s;
-    }
-    String _matchSource(String url) {
-      final norm = _normUrl(url);
-      for (final expected in expectedSources) {
-        if (_normUrl(expected) == norm) return expected;
-      }
-      return expectedSources.first;
-    }
-    for (final item in rawFacts) {
-      if (item is! Map) continue;
-      final sourceUrl = item['source']?.toString() ?? '';
-      facts.add({
-        'metric': item['metric']?.toString() ?? '',
-        'subject': item['subject']?.toString() ?? '',
-        'value': item['value']?.toString() ?? '',
-        'date': item['date']?.toString() ?? '',
-        'source': _matchSource(sourceUrl),
-        'confidence': item['confidence']?.toString() ?? 'high',
-      });
-    }
-    for (final item in rawFindings) {
-      if (item is! Map) continue;
-      final sourceUrl = item['source']?.toString() ?? '';
-      findings.add({
-        // Findings may carry compact markdown tables or verbatim spec lines.
-        'text': _clampFindingText(item['text']?.toString() ?? ''),
-        'source': _matchSource(sourceUrl),
-        'confidence': item['confidence']?.toString() ?? 'high',
-      });
-    }
-    return {'facts': facts, 'findings': findings};
-  }
-
   /// Bound one finding to ~400 characters without destroying structure.
   /// Markdown tables and verbatim spec/pricing lines are kept intact: when
   /// the text overflows, trim at the last complete line, never mid-row.
@@ -1125,73 +1071,6 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
       }
     }
     return '';
-  }
-
-  /// Batch summarizer: extract facts/findings from multiple sources in ONE LLM call.
-  /// This cuts API usage by ~80% compared to per-URL summarization.
-  Future<Map<String, dynamic>> _summarizeBatchInline({
-    required Map<String, String> sources,
-    required String query,
-    required ProviderDefinition provider,
-    required ProviderSettings settings,
-    required String model,
-  }) async {
-    if (sources.isEmpty) return {'facts': [], 'findings': []};
-
-    // Build combined content with source markers
-    final StringBuffer combinedContent = StringBuffer();
-    combinedContent.writeln('Research Query: $query');
-    combinedContent.writeln();
-    for (final entry in sources.entries) {
-      combinedContent.writeln('=== SOURCE: ${entry.key} ===');
-      final content = entry.value;
-      // The bridge cleaner already relevance-filters fetched pages to
-      // ~6000 chars; apply this second, wider budget only to outliers so
-      // the two trims never stack on typical content.
-      if (content.length > 12000) {
-        combinedContent.writeln(content.substring(0, 9000));
-        combinedContent.writeln('\n...[${content.length - 11000} chars omitted]...\n');
-        combinedContent.writeln(content.substring(content.length - 2000));
-      } else {
-        combinedContent.writeln(content);
-      }
-      combinedContent.writeln();
-    }
-
-    final summarizerMessages = [
-      ChatMessage(
-        role: MessageRole.system,
-        text: DeepResearchPrompts.summarizerSystemPrompt +
-            '\n\nYou are summarizing MULTIPLE sources. ' +
-            'Each source is marked with === SOURCE: <url> ===. ' +
-            'Extract facts and findings from ALL sources. ' +
-            'Tag each fact and finding with its source URL. ' +
-            'Deduplicate across sources — if two sources report the same fact, ' +
-            'keep only one with the more authoritative source.',
-      ),
-      ChatMessage(
-        role: MessageRole.user,
-        text: combinedContent.toString(),
-      ),
-    ];
-
-    final nonReasoningSettings = settings.copyWith(reasoningEnabled: false);
-    final responseText = await _retryLlmCall(
-      provider: provider,
-      settings: nonReasoningSettings,
-      model: model,
-      messages: summarizerMessages,
-      maxRetries: 2,
-    );
-    final parsed = DeepResearchHelpers.parseJsonObject(responseText);
-    if (parsed == null) {
-      throw const FormatException(
-        'Summarizer returned empty or unparseable JSON.',
-      );
-    }
-    // Parse evidence with per-source attribution instead of tagging all
-    // records with the first source URL.
-    return _normalizeBatchEvidence(parsed, sources.keys.toList());
   }
 
   Future<Map<String, dynamic>> _exportDeepResearchForWriter(
@@ -6734,6 +6613,121 @@ jobs:
             // are never dropped when step_complete is present in the same turn.
             final List<String> turnToolOutputs = [];
 
+            // Evidence recorded by the researcher itself (replaces the old
+            // separate summarizer call). Runs first so the grounding checks
+            // below already see the new evidence.
+            final evidenceCalls = nativeCalls
+                .where((c) => c['t'] == 'record_evidence')
+                .toList();
+            if (evidenceCalls.isNotEmpty) {
+              int addedFacts = 0;
+              int addedFindings = 0;
+              final seenFactKeys = phaseFacts
+                  .map((f) => '${f['metric']}|${f['subject']}|${f['value']}')
+                  .toSet();
+              final seenFindingKeys = phaseFindings
+                  .map((f) => '${f['text']}|${f['source']}')
+                  .toSet();
+              for (final evCall in evidenceCalls) {
+                final evArgs = evCall['a'] is Map ? evCall['a'] as Map : const {};
+                final rawFacts =
+                    evArgs['facts'] is List ? evArgs['facts'] as List : const [];
+                final rawFindings = evArgs['findings'] is List
+                    ? evArgs['findings'] as List
+                    : const [];
+                for (final item in rawFacts.whereType<Map>()) {
+                  final source = (item['source'] ?? '').toString().trim();
+                  final value = (item['value'] ?? '').toString().trim();
+                  if (source.isEmpty || value.isEmpty) continue;
+                  var dateStr = (item['date'] ?? '').toString().trim();
+                  if (dateStr.toLowerCase() == 'null') dateStr = '';
+                  final fact = <String, dynamic>{
+                    'metric': (item['metric'] ?? '').toString().trim(),
+                    'subject': (item['subject'] ?? '').toString().trim(),
+                    'value': value,
+                    'date': dateStr,
+                    'source': source,
+                    'confidence': (item['confidence'] ?? 'medium')
+                        .toString()
+                        .trim()
+                        .toLowerCase(),
+                  };
+                  final factKey =
+                      '${fact['metric']}|${fact['subject']}|${fact['value']}';
+                  if (!seenFactKeys.add(factKey)) continue;
+                  phaseFacts.add(fact);
+                  addedFacts++;
+                  final bucket = runUrlSummaries[_normalizeQueryOrUrl(source)];
+                  if (bucket != null) (bucket['facts'] as List).add(fact);
+                }
+                for (final item in rawFindings.whereType<Map>()) {
+                  final source = (item['source'] ?? '').toString().trim();
+                  final findingText =
+                      _clampFindingText((item['text'] ?? '').toString());
+                  if (source.isEmpty || findingText.isEmpty) continue;
+                  if (!seenFindingKeys.add('$findingText|$source')) continue;
+                  final finding = <String, dynamic>{
+                    'text': findingText,
+                    'source': source,
+                    'confidence': (item['confidence'] ?? 'medium')
+                        .toString()
+                        .trim()
+                        .toLowerCase(),
+                  };
+                  phaseFindings.add(finding);
+                  addedFindings++;
+                  final bucket = runUrlSummaries[_normalizeQueryOrUrl(source)];
+                  if (bucket != null) (bucket['findings'] as List).add(finding);
+                }
+              }
+
+              // Cap at 30 facts per phase, drop lowest confidence first.
+              if (phaseFacts.length > 30) {
+                const ranks = {'high': 0, 'medium': 1, 'low': 2};
+                phaseFacts.sort((x, y) {
+                  final rx =
+                      x['confidence']?.toString().toLowerCase() ?? 'medium';
+                  final ry =
+                      y['confidence']?.toString().toLowerCase() ?? 'medium';
+                  return (ranks[rx] ?? 1).compareTo(ranks[ry] ?? 1);
+                });
+                phaseFacts.removeRange(30, phaseFacts.length);
+              }
+
+              try {
+                await _updateDeepResearchPhase(
+                  stageId: stageId,
+                  phaseTitle: phaseTitle,
+                  facts: phaseFacts,
+                  findings: phaseFindings,
+                  skippedPdfs: phaseSkippedPdfs,
+                  failedFetches: phaseFailedFetches,
+                );
+              } catch (e) {
+                debugPrint('Evidence persistence failed: $e');
+              }
+
+              // Raw page text from earlier turns is no longer needed once the
+              // researcher has recorded what it learned from it.
+              for (var pm = 2; pm < stepMessages.length; pm++) {
+                final pruneMsg = stepMessages[pm];
+                if (pruneMsg.role == MessageRole.user &&
+                    pruneMsg.text.contains('PAGE TEXT (')) {
+                  stepMessages[pm] = const ChatMessage(
+                    role: MessageRole.user,
+                    text:
+                        'Earlier read_url page text was removed after you recorded evidence from it. The recorded evidence is stored for this phase.',
+                  );
+                }
+              }
+
+              turnToolOutputs.add(
+                addedFacts + addedFindings == 0
+                    ? 'record_evidence added nothing new (empty, duplicate, or missing source/value). Every record needs the source URL and a value or text.'
+                    : 'Evidence recorded: $addedFacts facts and $addedFindings findings added. Phase totals: ${phaseFacts.length} facts, ${phaseFindings.length} findings.',
+              );
+            }
+
             if (searchCalls.isNotEmpty) {
               final List<Future<String>> searchFutures = [];
               final List<String> eventIds = [];
@@ -7071,9 +7065,7 @@ jobs:
                 return buf.toString();
               }
 
-              // Batch summarization: track by index so events can never collide
-              final Map<String, String> fetchedTexts = {};
-              final Map<int, String> fetchedTargetByIdx = {};
+              // Pages are returned to the researcher as text; it records evidence.
 
               await Future.wait(
                 Iterable<int>.generate(urls.length).map((idx) async {
@@ -7143,7 +7135,7 @@ jobs:
 
                   if (overLimit[idx]) {
                     const capMsg =
-                        'Read URL limit reached for this phase (5/5 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
+                        'Read URL limit reached for this phase (9/9 used). No further read_url calls are available this phase — proceed to reflection/summary with what has been gathered, or move to the next phase.';
                     finishResearchEvent(
                       eventId,
                       status: 'error',
@@ -7396,150 +7388,43 @@ jobs:
                     return;
                   }
 
-                  updateResearchEventStatus(
+                  runFetchedUrls.add(normUrl);
+                  runUrlSummaries[normUrl] = {
+                    'facts': <_JsonMap>[],
+                    'findings': <_JsonMap>[],
+                    'isPdf': false,
+                    'skipped': false,
+                  };
+                  finishResearchEvent(
                     eventId,
-                    'ingesting',
-                    details: {'url': targetUrl, 'parse_format': 'html'},
+                    status: 'done',
+                    stopwatch: eventWatch,
+                    details: {
+                      'url': targetUrl,
+                      'parse_format': 'html',
+                      'result_payload': {
+                        'summary': 'Read ${text.length} chars',
+                      },
+                    },
                   );
-
-                  fetchedTexts[targetUrl] = text;
-                  fetchedTargetByIdx[idx] = targetUrl;
-                  urlResults[idx] = 'Fetched: ${text.length} chars';
+                  urlResults[idx] =
+                      'PAGE TEXT (${text.length} chars, relevance-filtered):\n$text';
                 }),
               );
 
-              // ── BATCH SUMMARIZATION ──
-              // Summarize all fetched URLs in ONE LLM call to cut API usage by ~80%
-              if (fetchedTexts.isNotEmpty) {
-                try {
-                  final summaries = await _summarizeBatchInline(
-                    sources: fetchedTexts,
-                    query: queryText,
-                    provider: provider,
-                    settings: settings,
-                    model: model,
-                  );
-                  final List<dynamic> facts =
-                      summaries['facts'] as List? ?? const <dynamic>[];
-                  final List<dynamic> findings =
-                      summaries['findings'] as List? ?? const <dynamic>[];
-
-                  // Deduplicate facts (metric|subject|value)
-                  final existingKeys = phaseFacts.map(factDedupKey).toSet();
-                  for (final fact in facts.whereType<_JsonMap>()) {
-                    if (existingKeys.add(factDedupKey(fact))) {
-                      phaseFacts.add(fact);
-                    }
-                  }
-                  // Deduplicate findings (text + source)
-                  final existingFindingKeys = phaseFindings
-                      .map((f) => '${f['text']}\u007C${f['source']}')
-                      .toSet();
-                  for (final finding in findings.whereType<_JsonMap>()) {
-                    final key = '${finding['text']}\u007C${finding['source']}';
-                    if (existingFindingKeys.add(key)) {
-                      phaseFindings.add(finding);
-                    }
-                  }
-
-                  // Cap at 30 facts per phase, drop lowest confidence first
-                  if (phaseFacts.length > 30) {
-                    phaseFacts.sort((a, b) {
-                      final ra =
-                          a['confidence']?.toString().toLowerCase() ?? 'medium';
-                      final rb =
-                          b['confidence']?.toString().toLowerCase() ?? 'medium';
-                      const ranks = {'high': 0, 'medium': 1, 'low': 2};
-                      return (ranks[ra] ?? 1).compareTo(ranks[rb] ?? 1);
-                    });
-                    phaseFacts.removeRange(30, phaseFacts.length);
-                  }
-
-                  for (final entry in fetchedTexts.entries) {
-                    final url = entry.key;
-                    final normUrl = _normalizeQueryOrUrl(url);
-                    runFetchedUrls.add(normUrl);
-                    final urlFacts = facts
-                        .where((f) => f is Map && f['source']?.toString() == url)
-                        .toList();
-                    final urlFindings = findings
-                        .where((f) => f is Map && f['source']?.toString() == url)
-                        .toList();
-                    runUrlSummaries[normUrl] = {
-                      'facts': urlFacts,
-                      'findings': urlFindings,
-                      'isPdf': false,
-                      'skipped': false,
-                    };
-                  }
-
-                  try {
-                    await _updateDeepResearchPhase(
-                      stageId: stageId,
-                      phaseTitle: phaseTitle,
-                      facts: phaseFacts,
-                      findings: phaseFindings,
-                      skippedPdfs: phaseSkippedPdfs,
-                      failedFetches: phaseFailedFetches,
-                    );
-                  } catch (e) {
-                    debugPrint('Intermediate batch-summary persistence failed: $e');
-                  }
-
-                  for (final entry in fetchedTargetByIdx.entries) {
-                    final idx = entry.key;
-                    final url = entry.value;
-                    final urlFactsList = facts
-                        .where((f) => f is Map && f['source']?.toString() == url)
-                        .toList();
-                    final urlFindingsList = findings
-                        .where((f) => f is Map && f['source']?.toString() == url)
-                        .toList();
-                    urlResults[idx] = formatUrlDigest(
-                      urlFactsList,
-                      urlFindingsList,
-                    );
-                    finishResearchEvent(
-                      eventIds[idx],
-                      status: 'done',
-                      stopwatch: stopwatches[idx],
-                      details: {
-                        'url': url,
-                        'parse_format': 'html',
-                        'facts_count': urlFactsList.length,
-                        'findings_count': urlFindingsList.length,
-                        'new_chunks_added':
-                            urlFactsList.length + urlFindingsList.length,
-                        'result_payload': {
-                          'summary': 'Batch summarized',
-                        },
-                      },
-                    );
-                  }
-                } catch (e) {
-                  final errStr = 'Batch summarization failed: $e';
-                  for (final entry in fetchedTargetByIdx.entries) {
-                    final idx = entry.key;
-                    final url = entry.value;
-                    finishResearchEvent(
-                      eventIds[idx],
-                      status: 'error',
-                      stopwatch: stopwatches[idx],
-                      details: {'url': url, 'parse_format': 'html'},
-                      error: errStr,
-                    );
-                    urlResults[idx] = errStr;
-                  }
-                }
-              }
 
               final StringBuffer combinedResults = StringBuffer();
+              var fetchedAny = false;
               for (var k = 0; k < urls.length; k++) {
-                combinedResults.writeln("URL: ${urls[k]}");
-                combinedResults.writeln(
-                  "Summarization Result:\n${urlResults[k]}",
-                );
+                combinedResults.writeln('URL: ${urls[k]}');
+                combinedResults.writeln(urlResults[k]);
                 combinedResults.writeln();
+                if (urlResults[k].startsWith('PAGE TEXT (')) fetchedAny = true;
+              }
+              if (fetchedAny) {
+                combinedResults.writeln(
+                  'NEXT STEP: extract evidence from the page text above. Emit one record_evidence block now (facts and findings, each with its source URL) before any further web_search or read_url.',
+                );
               }
 
               if (combinedResults.isNotEmpty) {
@@ -7600,7 +7485,9 @@ jobs:
                   ? contentClean
                   : '$stepContent\n\n$contentClean';
               stepDone = true;
-            } else if (searchCalls.isEmpty && readUrlCalls.isEmpty) {
+            } else if (searchCalls.isEmpty &&
+                readUrlCalls.isEmpty &&
+                evidenceCalls.isEmpty) {
               // No tool call this turn. If the phase still has zero evidence,
               // push the model back to work instead of marking it complete.
               if (phaseFacts.isEmpty &&

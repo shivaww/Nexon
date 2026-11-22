@@ -74,7 +74,7 @@ String formatTokenUsage(int tokens, int maxTokens) {
 bool isKnownToolNameGlobal(String t) {
   const extra = {
     'web_search', 'search_web', 'read_url',
-    'quiz', 'quiz_request', 'step_complete',
+    'quiz', 'quiz_request', 'step_complete', 'record_evidence',
     'run_background',
     'todo_create', 'todo_done',
   };
@@ -98,6 +98,7 @@ bool isQuietToolName(String t) {
     'quiz',
     'quiz_request',
     'step_complete',
+    'record_evidence',
     'todo_create',
     'todo_done',
   };
