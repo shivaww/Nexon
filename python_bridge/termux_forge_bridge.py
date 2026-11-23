@@ -1055,6 +1055,8 @@ class TermuxForgeBridge:
             headers=headers,
             connector=connector,
             timeout=timeout,
+            max_line_size=32768,
+            max_field_size=32768,
         )
         return self._read_url_session
 
