@@ -177,8 +177,8 @@ import time
 #   %env HF_FILENAME=Qwen3.8-27B-UD-Q4_K_XL.gguf
 # Default is the abliterated (uncensored) Q4_K_M quant, about 16 GB, which
 # fits dual T4. It is a third-party build, not an official Qwen release.
-REPO_ID  = os.environ.get("HF_REPO_ID", "douyamv/Qwen3.8-27B-abliterated-GGUF")
-FILENAME = os.environ.get("HF_FILENAME", "qwen3.8-27b-abliterated-q4_k_m.gguf")
+REPO_ID  = os.environ.get("HF_REPO_ID", "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF")
+FILENAME = os.environ.get("HF_FILENAME", "Qwen3.8-27B-Uncensored-noMTP-Q4_K_M.gguf")
 
 LOCAL_DIR = Path("/kaggle/tmp/models")   # /kaggle/working caps at 20GiB; use scratch space instead
 LOCAL_DIR.mkdir(parents=True, exist_ok=True)
