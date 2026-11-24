@@ -268,7 +268,7 @@ class ChatSurface extends StatelessWidget {
                         if (currentVersionIndex == -1) currentVersionIndex = 0;
                       }
 
-                      return MessageBubble(
+                      return RepaintBoundary(child: MessageBubble(
                         key: ValueKey<int>(index),
                         message: messages[index],
                         index: index,
@@ -306,7 +306,7 @@ class ChatSurface extends StatelessWidget {
                                   branchIndicesForVersions[vIdx],
                                 );
                               },
-                      );
+                      ));
                     },
                   ),
                 ),

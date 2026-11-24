@@ -1035,6 +1035,22 @@ bool _foldedRoundHasCards(String text) {
     );
   }
 
+  static final Map<String, List<ContentBlock>> _blockCache = {};
+
+  /// Finished messages never change, so parse them once. The live
+  /// (streaming) message is always parsed fresh.
+  static List<ContentBlock> _cachedBlocks(String text, bool live) {
+    if (live) return parseContentBlocks(text);
+    final hit = _blockCache[text];
+    if (hit != null) return hit;
+    final parsed = parseContentBlocks(text);
+    if (_blockCache.length >= 64) {
+      _blockCache.remove(_blockCache.keys.first);
+    }
+    _blockCache[text] = parsed;
+    return parsed;
+  }
+
   List<Widget> _buildBlocks(BuildContext context, String text) {
     if (text.startsWith("Tool Result [") && text.contains("\n\n")) {
       final resultContent = text.substring(text.indexOf("\n\n") + 2);
@@ -1067,7 +1083,10 @@ bool _foldedRoundHasCards(String text) {
         ),
       ];
     }
-    final blocks = parseContentBlocks(text);
+    final blocks = _cachedBlocks(
+      text,
+      animationState != AvatarAnimationState.idle,
+    );
     // While streaming, the last ``` fence is still open — render that final
     // block as a lightweight streaming view so tokens flow in smoothly, and
     // swap to the rich artifact widget once the fence closes.

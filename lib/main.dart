@@ -1979,7 +1979,9 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
           ? loadedWorkspace
           : '/data/data/com.termux/files/home';
       _customMcpUrl = customMcpUrlRaw ?? '';
-      _deepResearchEnabled = deepResearchRaw ?? false;
+      // Deep research is per-session and always reset on session start,
+      // so never restore it from prefs (caused a startup flash of the card).
+      _deepResearchEnabled = false;
       _studyModeEnabled = prefs.getBool('study_mode_enabled_v1') ?? false;
       _userName = prefs.getString('user_name_v1') ?? '';
       // Enforce mode exclusivity at load: prefs may predate the toggle guards,
@@ -2751,7 +2753,7 @@ jobs:
               }
             }
 
-            if (updateStopwatch.elapsedMilliseconds > 80) {
+            if (updateStopwatch.elapsedMilliseconds > 150) {
               setState(() {
                 final idx = _sessions.indexWhere(
                   (s) => s.id == targetSessionId,
@@ -2805,7 +2807,9 @@ jobs:
         } finally {
           _activeSubscriptions.remove(targetSessionId);
           _activeCompleters.remove(targetSessionId);
-          await subscription.cancel();
+          // Do not await: cancel() on an async* stream blocks until the
+          // generator reaches its next yield, which stalls Stop.
+          unawaited(subscription.cancel());
         }
 
         if (!_sendingSessionIds.contains(targetSessionId)) {
@@ -3661,6 +3665,12 @@ jobs:
             if (verification != null) mcpResult += verification;
             toolOutputs.add("Tool Result [${toolMethod}]:\n\n$mcpResult");
           }
+        }
+
+        if (!_sendingSessionIds.contains(targetSessionId)) {
+          // Stop pressed while tools were running: do not start another round.
+          shouldContinue = false;
+          break;
         }
 
         if (executedTools) {
@@ -5747,7 +5757,7 @@ jobs:
       if (identical(_activeCompleters[sessionId], completer)) {
         _activeCompleters.remove(sessionId);
       }
-      await subscription.cancel();
+      unawaited(subscription.cancel());
     }
   }
 

@@ -175,12 +175,10 @@ import time
 # Override these via env vars if you swap models, e.g.:
 #   %env HF_REPO_ID=unsloth/Qwen3.8-27B-GGUF
 #   %env HF_FILENAME=Qwen3.8-27B-UD-Q4_K_XL.gguf
-# Default is Unsloth's "Dynamic" 4-bit quant (UD-Q4_K_XL) -- their mixed-precision
-# quant that preserves noticeably more accuracy than a plain Q4_K_M at the same
-# bit-width. Use plain Q4_K_M/Q4_0 only if you specifically want the smaller
-# uniform quant instead.
-REPO_ID  = os.environ.get("HF_REPO_ID", "unsloth/Qwen3.8-27B-GGUF")
-FILENAME = os.environ.get("HF_FILENAME", "Qwen3.8-27B-UD-Q4_K_XL.gguf")
+# Default is the abliterated (uncensored) Q4_K_M quant, about 16 GB, which
+# fits dual T4. It is a third-party build, not an official Qwen release.
+REPO_ID  = os.environ.get("HF_REPO_ID", "douyamv/Qwen3.8-27B-abliterated-GGUF")
+FILENAME = os.environ.get("HF_FILENAME", "qwen3.8-27b-abliterated-q4_k_m.gguf")
 
 LOCAL_DIR = Path("/kaggle/tmp/models")   # /kaggle/working caps at 20GiB; use scratch space instead
 LOCAL_DIR.mkdir(parents=True, exist_ok=True)
@@ -494,7 +492,7 @@ if __name__ == "__main__":
     KaggleStep(
       number: 3,
       title: 'Download the model',
-      description: 'Downloads the Qwen3.8-27B GGUF model from HuggingFace. This is the largest download (~15 GB).',
+      description: 'Downloads the Qwen3.8-27B abliterated (uncensored) GGUF model from HuggingFace. This is the largest download (~16 GB).',
       script: _script3,
     ),
     KaggleStep(
