@@ -1112,19 +1112,24 @@ class TermuxForgeBridge:
                 body_chunks.append(chunk)
             body = b"".join(body_chunks).decode(resp.charset or "utf-8", errors="replace")
             from deep_research.cleaner import TextCleaner
-            text = TextCleaner().clean(body, query=query)
+            cleaned = TextCleaner().extract(body, query=query)
+            text = cleaned["text"]
+            status = cleaned.get("status", "success")
+            method = cleaned.get("method", "html")
+            
             # Defensive: log if cleaning stripped too much content
-            if len(text) < 500 and len(body) > 5000:
+            if text and len(text) < 500 and len(body) > 5000:
                 logger.warning(
                     "read_url: TextCleaner stripped aggressively. "
-                    "host=%s, original=%d chars, cleaned=%d chars",
-                    resp.url.host, len(body), len(text)
+                    "host=%s, original=%d chars, cleaned=%d chars, method=%s",
+                    resp.url.host, len(body), len(text), method
                 )
             return {
-                "status": "success",
+                "status": status,
                 "content": text,
                 "url": target_url,
-                "parse_format": "html",
+                "parse_format": method,
+                "title": cleaned.get("title", ""),
             }
         except Exception as e:
             logger.error("read_url extraction_failed error_type=%s", type(e).__name__)

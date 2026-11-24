@@ -64,7 +64,7 @@ FORBIDDEN \u2014 these formats are INVALID and will NOT execute:
 - Fetch Page: ```json
 {"t":"read_url","a":{"url":"https://example.com/guide"}}
 ```
-Never mix web_search and read_url in the same block. Batch only web_search calls together.
+Never mix web_search and read_url in the same block. You CAN batch read_url calls together using {"calls":[{"t":"read_url","a":{"url":"..."}}, {"t":"read_url","a":{"url":"..."}}]}.
 - Record Evidence (REQUIRED right after every read_url batch, in its own block, before any further tool call): ```json
 {\"t\":\"record_evidence\",\"a\":{\"facts\":[{\"metric\":\"...\",\"subject\":\"...\",\"value\":\"...\",\"date\":\"YYYY-MM-DD or empty\",\"source\":\"https://...\",\"confidence\":\"high|medium|low\"}],\"findings\":[{\"text\":\"...\",\"source\":\"https://...\",\"confidence\":\"high|medium|low\"}]}}
 ```

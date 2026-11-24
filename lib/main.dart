@@ -7350,9 +7350,13 @@ jobs:
                       throw HttpException(fetched['error'].toString());
                     }
                     text = fetched['content']?.toString() ?? '';
-                    if (text.isEmpty) {
-                      throw const HttpException(
-                        'Fetch returned no readable content',
+                    final fetchStatus = fetched['status']?.toString() ?? 'success';
+                    final parseFormat = fetched['parse_format']?.toString() ?? 'html';
+                    
+                    if (text.isEmpty || fetchStatus == 'empty' || fetchStatus == 'blocked') {
+                      final reason = fetchStatus == 'blocked' ? 'blocked by anti-bot' : 'returned 0 chunks';
+                      throw HttpException(
+                        'Fetch $reason. This page is likely empty or JavaScript-rendered. Do NOT retry this URL. Find a different source or use search snippets.',
                       );
                     }
                   } catch (e) {
@@ -7401,14 +7405,17 @@ jobs:
                     stopwatch: eventWatch,
                     details: {
                       'url': targetUrl,
-                      'parse_format': 'html',
+                      'parse_format': parseFormat,
                       'result_payload': {
                         'summary': 'Read ${text.length} chars',
                       },
                     },
                   );
+                  final statusPrefix = fetchStatus == 'shell_only' 
+                      ? 'METADATA ONLY (JS-rendered shell)' 
+                      : 'PAGE TEXT';
                   urlResults[idx] =
-                      'PAGE TEXT (${text.length} chars, relevance-filtered):\n$text';
+                      '$statusPrefix (${text.length} chars, format: $parseFormat):\n$text';
                 }),
               );
 

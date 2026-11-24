@@ -1,146 +1,138 @@
-"""Lightweight, deterministic text cleaner for boilerplate stripping."""
+"""Extracts text, including JSON-LD and meta fallbacks for JS-rendered sites."""
 
 from __future__ import annotations
 
 import re
-
+import json
+import html
 
 class TextCleaner:
-    """Regex-based text normalization to remove web scraping noise/boilerplate."""
+    """Regex-based text normalization to remove boilerplate and extract JSON-LD."""
 
-    _CSS_BLOCK_RE = re.compile(r"<style[^>]*>.*?</style>", re.DOTALL | re.IGNORECASE)
-    _JS_BLOCK_RE = re.compile(r"<script[^>]*>.*?</script>", re.DOTALL | re.IGNORECASE)
-    _SVG_BLOCK_RE = re.compile(r"<svg[^>]*>.*?</svg>", re.DOTALL | re.IGNORECASE)
-    _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-    _STYLE_ATTR_RE = re.compile(r'\bstyle=(["\']).*?\1', re.IGNORECASE | re.DOTALL)
-    _HTML_TAG_RE = re.compile(r"<[^>]+>")
-    _BOILERPLATE_RE = re.compile(
-        r"<(nav|header|footer|aside|form|noscript)\b[^>]*>.*?</\1>",
-        re.DOTALL | re.IGNORECASE,
-    )
-
-    _NAV_LINKS_RE = re.compile(
-        r"^.*?(?:Home|About|Contact|Login|Register|Privacy|Terms|Terms of Service|FAQ|Sitemap)\s*(?:[\|•·\-\*\/])\s*(?:Home|About|Contact|Login|Register|Privacy|Terms|Terms of Service|FAQ|Sitemap).*?$",
-        re.MULTILINE | re.IGNORECASE,
-    )
-    _COPYRIGHT_RE = re.compile(
-        r"(?:Copyright|©|&copy;)\s*(?:\d{4})?\s*.*?(?:All Rights Reserved|Privacy Policy|Terms of Use|Terms of Service|Terms & Conditions).*?$",
-        re.MULTILINE | re.IGNORECASE,
-    )
-    _RELATED_RE = re.compile(
-        r"^(?:Related Articles|Related Topics|You might also like|Read next|Recommended for you).*?$",
-        re.MULTILINE | re.IGNORECASE,
-    )
-    _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufeff]")
     _BODY_RE = re.compile(r"<body[^>]*>(.*?)</body>", re.DOTALL | re.IGNORECASE)
 
-    def clean(self, text: str, max_chars: int = 120_000, query: str = "") -> str:
+    def extract(self, text: str, max_chars: int = 120_000, query: str = "") -> dict:
         if not text:
-            return ""
+            return {"text": "", "method": "empty", "status": "empty", "title": ""}
 
-        cleaned = self._CSS_BLOCK_RE.sub(" ", text)
-        cleaned = self._JS_BLOCK_RE.sub(" ", cleaned)
-        cleaned = self._SVG_BLOCK_RE.sub(" ", cleaned)
-        cleaned = self._COMMENT_RE.sub(" ", cleaned)
-        cleaned = self._STYLE_ATTR_RE.sub(" ", cleaned)
+        # 1. Extract meta/title (Server-rendered shells have this)
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        title = html.unescape(title_match.group(1).strip()) if title_match else ""
+        
+        desc_match = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']', text, re.IGNORECASE)
+        if not desc_match:
+            desc_match = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']', text, re.IGNORECASE)
+        desc = html.unescape(desc_match.group(1).strip()) if desc_match else ""
 
-        # Strip boilerplate elements (nav, header, footer, aside, form, noscript)
-        # before extracting body — removes navigation menus, cookie notices, etc.
-        cleaned = self._BOILERPLATE_RE.sub(" ", cleaned)
+        # 2. Extract JSON from scripts (Next.js, SvelteKit, JSON-LD)
+        json_texts = []
+        for m in re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', text, re.IGNORECASE | re.DOTALL):
+            try:
+                json_texts.append(self._extract_json_strings(json.loads(m.group(1))))
+            except Exception: pass
+                
+        for m in re.finditer(r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', text, re.IGNORECASE | re.DOTALL):
+            try:
+                json_texts.append(self._extract_json_strings(json.loads(m.group(1))))
+            except Exception: pass
 
-        body_match = self._BODY_RE.search(cleaned)
-        if body_match:
-            cleaned = body_match.group(1)
+        # 3. Extract body text
+        body_match = self._BODY_RE.search(text)
+        body = body_match.group(1) if body_match else text
+        
+        body = re.sub(r"<(script|style|svg|nav|footer|noscript)[^>]*>.*?</\1>", " ", body, flags=re.DOTALL|re.IGNORECASE)
+        body = re.sub(r"<(p|div|br|li|h[1-6]|tr|section|article|pre|blockquote)[^>]*>", "\n", body, flags=re.IGNORECASE)
+        body = re.sub(r"<[^>]+>", " ", body)
+        body = html.unescape(body)
+        
+        lines = [line.strip() for line in body.splitlines()]
+        filtered_lines = [line for line in lines if line and len(line) > 1]
+        body_text = "\n".join(filtered_lines)
+        
+        # 4. Determine best content
+        json_combined = "\n".join(filter(None, json_texts))
+        extracted_text = body_text
+        method = "html"
+        status = "success"
 
-        cleaned = self._HTML_TAG_RE.sub(" ", cleaned)
-        cleaned = self._CONTROL_CHARS_RE.sub(" ", cleaned)
+        if len(body_text) < 400 and len(json_combined) > 200:
+            extracted_text = json_combined
+            method = "json"
+        
+        if not extracted_text.strip():
+            meta_text = f"{title}\n{desc}".strip()
+            if meta_text:
+                extracted_text = meta_text
+                method = "meta"
+                status = "shell_only"
+            else:
+                status = "empty"
+                
+        # 5. Truncate and apply relevance
+        if extracted_text and query and len(extracted_text) > 6000:
+            extracted_text = self._filter_by_relevance(extracted_text, query, max_chars=min(max_chars, 6000))
 
-        lines = [line.strip() for line in cleaned.splitlines()]
-        filtered_lines: list[str] = []
-        consecutive_blanks = 0
+        if max_chars > 0 and len(extracted_text) > max_chars:
+            extracted_text = extracted_text[:max_chars] + "\n...[content truncated]"
 
-        for line in lines:
-            if not line:
-                consecutive_blanks += 1
-                if consecutive_blanks <= 1:
-                    filtered_lines.append("")
-                continue
+        return {
+            "text": extracted_text,
+            "method": method,
+            "status": status,
+            "title": title
+        }
 
-            if len(line) < 500:
-                if self._NAV_LINKS_RE.search(line):
-                    continue
-                if self._COPYRIGHT_RE.search(line):
-                    continue
-                if self._RELATED_RE.search(line):
-                    continue
-
-            consecutive_blanks = 0
-            if len(line) < 10 and all(c in " -_+=*|·•" for c in line):
-                continue
-            filtered_lines.append(line)
-
-        reconstructed = "\n".join(filtered_lines).strip()
-        reconstructed = re.sub(r"[ \t]+", " ", reconstructed)
-        reconstructed = re.sub(r"\n{3,}", "\n\n", reconstructed)
-
-        # Keyword relevance filtering: if a query is provided, score paragraphs
-        # and keep only the most relevant ones to reduce LLM input by ~90%.
-        if query and len(reconstructed) > 6000:
-            # Respect caller's max_chars but cap relevance filter at 6000
-            relevance_budget = min(max_chars, 6000) if max_chars > 0 else 6000
-            reconstructed = self._filter_by_relevance(reconstructed, query, max_chars=relevance_budget)
-
-        if max_chars > 0 and len(reconstructed) > max_chars:
-            # Truncate at sentence boundary to avoid cutting mid-sentence
-            substring = reconstructed[:max_chars]
-            last_period = substring.rfind(". ")
-            end_idx = last_period if last_period > max_chars * 0.8 else max_chars
-            reconstructed = reconstructed[:end_idx] + "\n...[content truncated]"
-
-        return reconstructed
+    def _extract_json_strings(self, data) -> str:
+        results = []
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if k in ("text", "articleBody", "description", "headline", "value", "body"):
+                    if isinstance(v, str) and len(v) > 20:
+                        results.append(v)
+                else:
+                    results.append(self._extract_json_strings(v))
+        elif isinstance(data, list):
+            for item in data:
+                results.append(self._extract_json_strings(item))
+        elif isinstance(data, str):
+            if len(data) > 50 and " " in data and not data.startswith("http") and not data.startswith("/"):
+                results.append(data)
+        return "\n".join(r for r in results if r)
 
     def _filter_by_relevance(self, text: str, query: str, max_chars: int = 6000) -> str:
-        """Score paragraphs by keyword overlap with the query; keep top matches."""
-        import re as _re
-        keywords = set(k.lower() for k in _re.findall(r'\w+', query) if len(k) >= 2)
+        keywords = set(k.lower() for k in re.findall(r'\w+', query) if len(k) >= 2)
         if not keywords:
             return text[:max_chars]
 
         paragraphs = text.split("\n\n")
+        if len(paragraphs) <= 1:
+            paragraphs = text.split("\n")
+            if len(paragraphs) <= 1:
+                paragraphs = re.split(r'(?<=[.!?]) +', text)
+                
         scored = []
         for idx, para in enumerate(paragraphs):
             para_lower = para.lower()
             score = sum(1 for kw in keywords if kw in para_lower)
-            # Bonus for paragraphs near the top (lede/intro usually has key info)
             position_bonus = max(0, 3 - idx // 3)
             scored.append((score + position_bonus, idx, para))
 
-        # Sort by score descending, keep top paragraphs until we hit max_chars
         scored.sort(key=lambda x: (-x[0], x[1]))
         kept = []
         total_len = 0
         for score, orig_idx, para in scored:
-            # Keep low-score paragraphs if they're early in the document
-            # (lede/intro usually has key info) or if we haven't filled 80% of budget
             if score == 0 and orig_idx > 2 and total_len > max_chars * 0.8:
                 continue
             if total_len + len(para) > max_chars:
                 if total_len == 0:
-                    # Oversized single/top paragraph (e.g. minified SPA HTML):
-                    # slice to budget instead of returning an empty kept list.
                     sliced = para[:max_chars]
-                    last_period = sliced.rfind(". ")
-                    if last_period > max_chars * 0.7:
-                        sliced = sliced[: last_period + 1]
                     kept.append((orig_idx, sliced))
                     total_len += len(sliced)
                     break
-                # Skip oversized paragraph and try smaller matching paragraphs.
                 continue
             kept.append((orig_idx, para))
             total_len += len(para)
 
-        # Restore original order
         kept.sort(key=lambda x: x[0])
         result = "\n\n".join(p for _, p in kept)
         if not result:
@@ -148,3 +140,6 @@ class TextCleaner:
         if len(result) < len(text):
             result += "\n\n...[content filtered by relevance to query]"
         return result
+
+    def clean(self, text: str, max_chars: int = 120_000, query: str = "") -> str:
+        return self.extract(text, max_chars, query)["text"]
