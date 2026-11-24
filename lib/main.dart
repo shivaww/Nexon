@@ -7268,6 +7268,8 @@ jobs:
 
                   String text = '';
                   bool fetchFailed = false;
+                  String fetchStatus = 'success';
+                  String parseFormat = 'html';
 
                   try {
                     if (startTime
@@ -7350,8 +7352,8 @@ jobs:
                       throw HttpException(fetched['error'].toString());
                     }
                     text = fetched['content']?.toString() ?? '';
-                    final fetchStatus = fetched['status']?.toString() ?? 'success';
-                    final parseFormat = fetched['parse_format']?.toString() ?? 'html';
+                    fetchStatus = fetched['status']?.toString() ?? 'success';
+                    parseFormat = fetched['parse_format']?.toString() ?? 'html';
                     
                     if (text.isEmpty || fetchStatus == 'empty' || fetchStatus == 'blocked') {
                       final reason = fetchStatus == 'blocked' ? 'blocked by anti-bot' : 'returned 0 chunks';
