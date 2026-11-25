@@ -1,7 +1,7 @@
 name: nexon
 description: "TermuxForge — Mobile Agentic Flutter + Termux IDE"
 publish_to: 'none'
-version: 1.0.24+24
+version: 1.0.25+25
 
 environment:
   sdk: ^3.8.0
