@@ -45,6 +45,7 @@ class MessageBubble extends StatelessWidget {
     this.foldThoughtIntoLater = false,
     this.onRegenerate,
     this.animateIn = false,
+    this.turnStartIndex = 0,
     super.key,
   });
 
@@ -76,6 +77,11 @@ class MessageBubble extends StatelessWidget {
   final bool isSending;
   final VoidCallback? onRegenerate;
   final bool animateIn;
+
+  /// First message index of this assistant turn. Stable across the run, so
+  /// the Thought Process block's row expansion survives the display bubble
+  /// shifting to a new index as tool results append.
+  final int turnStartIndex;
 
   // Messages whose entrance animation already ran. Keeps recycled list items
   // from replaying it when they scroll back into view.
@@ -393,7 +399,7 @@ class MessageBubble extends StatelessWidget {
                       detail: detail,
                     );
                     if (quiet) {
-                      return ThoughtBlock(entries: [
+                      return ThoughtBlock(blockKey: 'thought-tool-$index', entries: [
                         ThoughtEntry(
                           icon: headerIcon,
                           accent: headerColor,
@@ -578,6 +584,7 @@ class MessageBubble extends StatelessWidget {
                     children: [
                       if (thoughtEntries.isNotEmpty)
                         ThoughtBlock(
+                          blockKey: 'thought-$turnStartIndex',
                           entries: thoughtEntries,
                           // Stays open for the entire live turn — across tool
                           // calls, their results, and the re-think after them.

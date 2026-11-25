@@ -52,6 +52,7 @@ class ThoughtBlock extends StatefulWidget {
   const ThoughtBlock({
     this.entries = const [],
     this.active = false,
+    this.blockKey,
     super.key,
   });
 
@@ -63,6 +64,10 @@ class ThoughtBlock extends StatefulWidget {
   /// and stays open for the whole tool loop (call → result → re-think), then
   /// hands control back to the user once the turn finishes.
   final bool active;
+
+  /// Stable identity for this block's rows (e.g. the turn's first message
+  /// index). Lets row expansion survive the block remounting mid-turn.
+  final String? blockKey;
 
   @override
   State<ThoughtBlock> createState() => _ThoughtBlockState();
@@ -136,13 +141,19 @@ class _ThoughtBlockState extends State<ThoughtBlock> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final entry in widget.entries)
-                    ToolCallCard(
-                      icon: entry.icon,
-                      accent: entry.accent,
-                      summary: entry.summary,
-                      detail: entry.detail,
-                    ),
+                  for (final e in widget.entries.asMap().entries)
+                    ...[
+                      ToolCallCard(
+                        key: ValueKey('${widget.blockKey ?? 'thought'}-${e.key}'),
+                        persistKey: widget.blockKey == null
+                            ? null
+                            : '${widget.blockKey}-${e.key}',
+                        icon: e.value.icon,
+                        accent: e.value.accent,
+                        summary: e.value.summary,
+                        detail: e.value.detail,
+                      ),
+                    ],
                 ],
               ),
             ),

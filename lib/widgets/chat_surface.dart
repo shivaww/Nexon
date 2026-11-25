@@ -272,6 +272,7 @@ class ChatSurface extends StatelessWidget {
                         key: ValueKey<int>(index),
                         message: messages[index],
                         index: index,
+                        turnStartIndex: runStart,
                         mergedPrior: mergedPrior,
                         mergedPriorResults: mergedPriorResults,
                         foldThoughtIntoLater: foldThoughtIntoLater,

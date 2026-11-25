@@ -12,6 +12,7 @@ class ToolCallCard extends StatefulWidget {
     required this.summary,
     required this.detail,
     this.initiallyExpanded = false,
+    this.persistKey,
     super.key,
   });
 
@@ -21,12 +22,28 @@ class ToolCallCard extends StatefulWidget {
   final Widget detail;
   final bool initiallyExpanded;
 
+  /// Stable identity for persisting expansion across remounts. When set,
+  /// the open/closed state is stored in a static map keyed by this value, so
+  /// it survives the widget being recreated (e.g. the display bubble shifting
+  /// to a new index mid-turn).
+  final String? persistKey;
+
   @override
   State<ToolCallCard> createState() => _ToolCallCardState();
 }
 
 class _ToolCallCardState extends State<ToolCallCard> {
-  late bool _expanded = widget.initiallyExpanded;
+  static final Map<String, bool> _persisted = {};
+
+  late bool _expanded = widget.persistKey != null
+      ? (_persisted[widget.persistKey] ?? widget.initiallyExpanded)
+      : widget.initiallyExpanded;
+
+  void _setExpanded(bool value) {
+    final key = widget.persistKey;
+    if (key != null) _persisted[key] = value;
+    setState(() => _expanded = value);
+  }
 
   Widget _headerRow() {
     return Row(
@@ -62,7 +79,7 @@ class _ToolCallCardState extends State<ToolCallCard> {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: InkWell(
-          onTap: () => setState(() => _expanded = true),
+          onTap: () => _setExpanded(true),
           borderRadius: BorderRadius.circular(10),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
@@ -84,7 +101,7 @@ class _ToolCallCardState extends State<ToolCallCard> {
           mainAxisSize: MainAxisSize.min,
           children: [
             InkWell(
-              onTap: () => setState(() => _expanded = false),
+              onTap: () => _setExpanded(false),
               borderRadius: BorderRadius.circular(14),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
