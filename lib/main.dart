@@ -257,6 +257,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   bool? _bridgeOnline;
   // True when the current Study Mode turn found the bridge unreachable.
   bool _studyBridgeDown = false;
+  // When the app last went to the background, for new-chat-on-return.
+  DateTime? _backgroundedAt;
   bool _bridgePinging = false;
   Timer? _bridgeTimer;
   String _userName = '';
@@ -1378,12 +1380,22 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
     // Android commonly emits inactive immediately before paused. Backing up
     // on both states can start duplicate full-history uploads.
     if (state == AppLifecycleState.paused) {
+      _backgroundedAt = DateTime.now();
       _bridgeTimer?.cancel();
       _bridgeTimer = null;
       // Flush chats to disk first: Android may kill the app right after pause.
       unawaited(_saveSessions());
       _autoBackup();
     } else if (state == AppLifecycleState.resumed) {
+      final away = _backgroundedAt;
+      _backgroundedAt = null;
+      if (mounted &&
+          away != null &&
+          DateTime.now().difference(away) >= const Duration(minutes: 5) &&
+          _sendingSessionIds.isEmpty &&
+          _messages.any((m) => m.role == MessageRole.user)) {
+        _newChat();
+      }
       _startBridgeTimer();
       _pingBridge();
       unawaited(_maybeShowBackupReminder());
