@@ -595,9 +595,44 @@ class TermuxForgeBridge:
         from workspace import WorkspaceManager
         return WorkspaceManager().ingest_file(file_path)
 
-    async def _workspace_read_page(self, file_path: str = "", page: int = 1) -> dict:
+    async def _workspace_read_page(self, file_path: str = "", page: int = 1, end_page: int = None) -> dict:
         from workspace import WorkspaceManager
-        return WorkspaceManager().read_page(file_path, page=page)
+        mgr = WorkspaceManager()
+        try:
+            start = int(page)
+        except (TypeError, ValueError):
+            start = 1
+        try:
+            end = int(end_page) if end_page is not None else start
+        except (TypeError, ValueError):
+            end = start
+        if end <= start:
+            return mgr.read_page(file_path, page=start)
+        end = min(end, start + 9)
+        pages = []
+        total_chars = 0
+        note = ""
+        for p in range(start, end + 1):
+            r = mgr.read_page(file_path, page=p)
+            if r.get("status") != "success":
+                pages.append({"page": p, "error": r.get("message")})
+                break
+            pages.append(r)
+            total_chars += len(r.get("content") or "")
+            if total_chars > 40000 and p < end:
+                note = f"Stopped at page {p}: response size cap reached. Request the rest in another call."
+                break
+        first_ok = next((x for x in pages if x.get("status") == "success"), {})
+        result = {
+            "status": "success" if first_ok else "error",
+            "file": first_ok.get("file", file_path),
+            "start_page": start,
+            "end_page": pages[-1].get("page", start) if pages else start,
+            "pages": pages,
+        }
+        if note:
+            result["note"] = note
+        return result
 
     async def _workspace_get_outline(self, file_path: str = "") -> dict:
         from workspace import WorkspaceManager

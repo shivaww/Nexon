@@ -48,6 +48,7 @@ import 'package:nexon/services/checkpoint/checkpoint_service.dart';
 import 'package:nexon/services/workspace/workspace_service.dart';
 import 'package:nexon/services/termux_bridge/termux_bridge_service.dart';
 import 'package:nexon/services/termux_bridge/bridge_protocol.dart';
+import 'package:nexon/services/termux_bridge/study_bridge.dart';
 import 'package:uuid/uuid.dart';
 
 // Modules extracted from this file. Imported so the symbols are visible
@@ -1400,36 +1401,10 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   Future<void> _pingBridge() async {
     if (!_studyModeEnabled || _bridgePinging) return;
     _bridgePinging = true;
-    final endpoint = _customMcpUrl.isNotEmpty
-        ? _customMcpUrl
-        : 'http://127.0.0.1:8390/mcp';
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 3)
-      ..findProxy = ((uri) => 'DIRECT');
     var ok = false;
     try {
-      final request = await client
-          .postUrl(Uri.parse(endpoint))
-          .timeout(const Duration(seconds: 3));
-      request.headers.contentType = ContentType.json;
-      final bytes = utf8.encode(jsonEncode({'method': 'ping', 'params': {}}));
-      request.headers.contentLength = bytes.length;
-      request.add(bytes);
-      final response = await request.close().timeout(const Duration(seconds: 3));
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 3));
-      final decoded = jsonDecode(body);
-      ok = response.statusCode >= 200 &&
-          response.statusCode < 300 &&
-          decoded is Map &&
-          decoded['result'] is Map &&
-          (decoded['result'] as Map)['ok'] == true;
-    } catch (_) {
-      ok = false;
+      ok = await probeBridge(_customMcpUrl);
     } finally {
-      client.close(force: true);
       _bridgePinging = false;
     }
     if (mounted && _bridgeOnline != ok) {
@@ -2564,6 +2539,9 @@ jobs:
         final currentDateStr =
             '${monthNames[nowDate.month - 1]} ${nowDate.day}, ${nowDate.year}'
             ' (${nowDate.toString().substring(0, 10)})';
+        // Study Mode: Termux workspace tools only when the bridge is up.
+        final bool studyBridgeAvailable =
+            !_studyModeEnabled || await probeBridge(_customMcpUrl);
         String systemPromptText = "";
 
         if (_deepResearchEnabled &&
@@ -2575,8 +2553,8 @@ jobs:
           _promptEngine.resetToDefaults();
           _promptEngine.setUserInfo(
             userName: _userName,
-            cwd: (_agenticEnabled || _studyModeEnabled) ? _agenticWorkspace : null,
-            os: (_agenticEnabled || _studyModeEnabled) ? 'android with termux' : null,
+            cwd: (_agenticEnabled || (_studyModeEnabled && studyBridgeAvailable)) ? _agenticWorkspace : null,
+            os: (_agenticEnabled || (_studyModeEnabled && studyBridgeAvailable)) ? 'android with termux' : null,
             date: currentDateStr,
             modelName: _settings[_selectedProviderId]?.model ?? '',
           );
@@ -2587,7 +2565,11 @@ jobs:
           if (_studyModeEnabled) {
             _promptEngine.setIdentity(StudyModePrompts.identity);
             _promptEngine.setNarration(StudyModePrompts.narration);
-            _promptEngine.addFeature(StudyModePrompts.features);
+            _promptEngine.addFeature(
+              studyBridgeAvailable
+                  ? StudyModePrompts.features
+                  : StudyModePrompts.featuresNoBridge,
+            );
           } else if (_agenticEnabled) {
             _promptEngine.setIdentity(AgenticPrompts.identity);
             _promptEngine.setNarration(AgenticPrompts.narration);
@@ -2670,6 +2652,7 @@ jobs:
           model: activeModel,
           messages: historyForApi,
           studyModeEnabled: _studyModeEnabled,
+          studyBridgeAvailable: studyBridgeAvailable,
         );
 
         final completer = Completer<void>();

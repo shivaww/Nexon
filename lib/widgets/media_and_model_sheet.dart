@@ -12,6 +12,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:nexon/widgets/glass_widgets.dart';
 import 'package:nexon/widgets/liquid_glass_widgets.dart';
+import 'package:nexon/widgets/glass_picker_field.dart';
 import 'package:nexon/main.dart';
 import 'package:nexon/services/voice/live_voice_engine.dart';
 import 'package:nexon/widgets/live_voice_overlay.dart';
@@ -22,6 +23,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:nexon/services/drive_sync_service.dart';
 import 'package:nexon/services/termux_bridge/native_tools_service.dart';
+import 'package:nexon/services/termux_bridge/study_bridge.dart';
 
 class MediaAndModelSheet extends StatefulWidget {
   const MediaAndModelSheet({
@@ -746,6 +748,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
       if (result == null || result.files.isEmpty) return;
 
+      // Study Mode: files go to Termux only when the bridge is reachable.
+      // Otherwise they are attached inline and sent to the model directly.
+      final bool useWorkspace =
+          _studyModeEnabled && await probeBridge(widget.customMcpUrl);
+      if (_studyModeEnabled && !useWorkspace && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Bridge offline: files will be sent directly to the AI model (5 MB limit per file).',
+            ),
+          ),
+        );
+      }
+
       // Validate files and filter by size limits
       final validFiles = <PlatformFile>[];
       for (final pickedFile in result.files) {
@@ -753,7 +769,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         final file = File(pickedFile.path!);
         final stat = await file.stat();
 
-        if (_studyModeEnabled) {
+        if (useWorkspace) {
           if (stat.size > 150 * 1024 * 1024) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -781,7 +797,7 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
 
       if (validFiles.isEmpty) return;
 
-      if (_studyModeEnabled) {
+      if (useWorkspace) {
         // ── Study mode: batch stream-upload to Termux workspace ──
         final totalFiles = validFiles.length;
         final progressNotifier = ValueNotifier<double?>(0.0);
@@ -1014,18 +1030,46 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
         for (final pickedFile in validFiles) {
           final file = File(pickedFile.path!);
           final ext = pickedFile.extension?.toLowerCase();
+          if (const {'docx', 'odt', 'pptx', 'xlsx', 'epub', 'zip'}
+              .contains(ext)) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    '${pickedFile.name} skipped: .$ext needs Study Mode with the Termux bridge running.',
+                  ),
+                ),
+              );
+            }
+            continue;
+          }
           String text = '';
 
           if (ext == 'pdf') {
             final bytes = await file.readAsBytes();
             final PdfDocument document = PdfDocument(inputBytes: bytes);
             try {
-              text = PdfTextExtractor(document).extractText();
+              text = _studyModeEnabled
+                  ? extractPdfWithPageMarkers(document)
+                  : PdfTextExtractor(document).extractText();
             } finally {
               document.dispose();
             }
           } else {
-            text = await file.readAsString();
+            try {
+              text = await file.readAsString();
+            } catch (_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      '${pickedFile.name} skipped: could not be read as text.',
+                    ),
+                  ),
+                );
+              }
+              continue;
+            }
           }
 
           if (text.length > maxContentChars) {
@@ -1480,92 +1524,37 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               Row(
                 children: [
                   Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child: GlassPickerField<String>(
+                      label: 'AI Provider',
+                      icon: Icons.hub_outlined,
                       value: _isCustomSel ? 'custom' : _selectedProviderId,
-                      dropdownColor: const Color(0xFFFFFBF2),
-                      // Let the field constrain the label instead of the label
-                      // stretching and colliding with the dropdown arrow.
-                      isExpanded: true,
-                      selectedItemBuilder: (context) => providerCatalog
-                          .map(
-                            (p) => Align(
-                              alignment: Alignment.centerLeft,
-                              child: Text(
-                                p.name,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                  height: 1.15,
-                                ),
-                              ),
-                            ),
-                          )
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      maxLines: 2,
+                      items: providerCatalog
+                          .map((p) => GlassPickerItem<String>(p.id, p.name))
                           .toList(),
-                      decoration: const InputDecoration(
-                        labelText: 'AI Provider',
-                        labelStyle: TextStyle(
-                          color: Color(0xFF6C5946),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        border: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                        ),
-                        prefixIcon: Icon(
-                          Icons.hub_outlined,
-                          color: Color(0xFF7B4E2E),
-                          size: 20,
-                        ),
-                      ),
-                      items: providerCatalog.map((p) {
-                        return DropdownMenuItem<String>(
-                          value: p.id,
-                          child: Text(
-                            p.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                        );
-                      }).toList(),
                       onChanged: (val) {
-                        if (val != null) {
-                          final nextProvider = providerCatalog.firstWhere(
-                            (p) => p.id == val,
-                            orElse: () => providerCatalog.first,
+                        final nextProvider = providerCatalog.firstWhere(
+                          (p) => p.id == val,
+                          orElse: () => providerCatalog.first,
+                        );
+                        if (nextProvider.isKaggle) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const KaggleSetupScreen(),
+                            ),
                           );
-                          if (nextProvider.isKaggle) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const KaggleSetupScreen(),
-                              ),
-                            );
-                            return;
-                          }
-                          setState(() {
-                            _selectedProviderId = val as String;
-                            _selectedModel = nextProvider.models.isNotEmpty
-                                ? nextProvider.models.first
-                                : '';
-                          });
-                          widget.onProviderChanged(val as String);
+                          return;
                         }
+                        setState(() {
+                          _selectedProviderId = val;
+                          _selectedModel = nextProvider.models.isNotEmpty
+                              ? nextProvider.models.first
+                              : '';
+                        });
+                        widget.onProviderChanged(val);
                       },
                     ),
                   ),
@@ -1603,57 +1592,20 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
               Row(
                 children: [
                   Expanded(
-                    child: DropdownButtonFormField<String>(
+                    child: GlassPickerField<String>(
+                      label: 'Model Name',
+                      icon: Icons.memory_outlined,
                       value: models.contains(_selectedModel)
                           ? _selectedModel
                           : (models.isNotEmpty ? models.first : null),
-                      isExpanded: true,
-                      dropdownColor: const Color(0xFFFFFBF2),
-                      decoration: const InputDecoration(
-                        labelText: 'Model Name',
-                        labelStyle: TextStyle(
-                          color: Color(0xFF6C5946),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        border: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFFDCCBB8)),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF7B4E2E)),
-                        ),
-                        prefixIcon: Icon(
-                          Icons.memory_outlined,
-                          color: Color(0xFF7B4E2E),
-                          size: 20,
-                        ),
-                      ),
-                      items: models.map((m) {
-                        return DropdownMenuItem<String>(
-                          value: m,
-                          child: Text(
-                            m,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        );
-                      }).toList(),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      items: models
+                          .map((m) => GlassPickerItem<String>(m, m))
+                          .toList(),
                       onChanged: (val) {
-                        if (val != null) {
-                          setState(() => _selectedModel = val as String);
-                          widget.onModelChanged(val as String);
-                        }
+                        setState(() => _selectedModel = val);
+                        widget.onModelChanged(val);
                       },
                     ),
                   ),
@@ -2603,13 +2555,41 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Agentic Deep Research',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF2D241C),
-                        ),
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          Text(
+                            'Agentic Deep Research',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2D241C),
+                            ),
+                          ),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Color(0x267B4E2E),
+                              borderRadius: BorderRadius.all(Radius.circular(8)),
+                            ),
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              child: Text(
+                                'BETA',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.8,
+                                  color: Color(0xFF7B4E2E),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       SizedBox(height: 2),
                       Text(

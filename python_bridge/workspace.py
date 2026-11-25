@@ -748,6 +748,69 @@ class WorkspaceManager:
             "scanned_files": scanned_files,
         }
 
+    _JUNK_TITLE_RE = re.compile(
+        r'^(_Hlk|_Toc|_Ref|_GoBack)\w*$|^blank page\.?$|^page\s*\d+$|^\d+$',
+        re.IGNORECASE,
+    )
+    _HEADING_RE = re.compile(
+        r'^(part|chapter|schedule|annexure|appendix)\s+[0-9ivxlc]+[a-z-]*\b.*',
+        re.IGNORECASE,
+    )
+    _PRINTED_RE = re.compile(
+        r'^(?:page\s+)?[-\s]*(\d{1,4})[-\s]*(?:of\s+\d+)?$',
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _clean_outline(cls, entries):
+        """Drop blank-page entries, Word field-code leaks, null pages, duplicates."""
+        cleaned = []
+        seen = set()
+        for e in entries or []:
+            title = re.sub(r'\s+', ' ', str(e.get("title") or "")).strip()
+            if not title or e.get("page") is None:
+                continue
+            if cls._JUNK_TITLE_RE.match(title):
+                continue
+            key = (title.lower(), e.get("page"))
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(e)
+            item["title"] = title
+            cleaned.append(item)
+        return cleaned
+
+    @classmethod
+    def _heading_index(cls, reader, max_pages: int = 250):
+        """Flat heading list (Part/Chapter/Schedule/...) for PDFs with no bookmarks."""
+        found = []
+        for idx, pg in enumerate(reader.pages):
+            if idx >= max_pages:
+                break
+            try:
+                text = pg.extract_text() or ""
+            except Exception:
+                continue
+            for line in text.split("\n")[:40]:
+                s = line.strip()
+                if 3 <= len(s) <= 100 and not s.endswith((",", ";")) and cls._HEADING_RE.match(s):
+                    found.append({"title": s, "page": idx + 1, "depth": 0})
+                    break
+        return cls._clean_outline(found)
+
+    @classmethod
+    def _detect_printed_page(cls, text):
+        """Best-effort printed folio from the page footer/header; None if not found."""
+        lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+        if not lines:
+            return None
+        for ln in list(reversed(lines[-3:])) + lines[:2]:
+            m = cls._PRINTED_RE.match(ln)
+            if m:
+                return int(m.group(1))
+        return None
+
     def read_page(self, file_path: str, page: int = 1) -> Dict[str, Any]:
         """Read a specific page of a document (text only, images skipped)."""
         path = self._resolve_workspace_path(file_path)
@@ -771,6 +834,8 @@ class WorkspaceManager:
                     "file": path.name,
                     "page": page,
                     "total_pages": total_pages,
+                    "file_page": page,
+                    "printed_page": self._detect_printed_page(page_text),
                     "content": page_text.strip()
                 }
                 if len(page_text.strip()) < 20:
@@ -890,23 +955,23 @@ class WorkspaceManager:
                 if reader.outline:
                     _walk_outline(reader.outline)
 
+                outline = self._clean_outline(outline)
                 if not outline:
-                    # Fallback: generate outline from text content (first lines of each page)
-                    for idx, pg in enumerate(reader.pages):
-                        text = (pg.extract_text() or "").strip()[:200]
-                        if text:
-                            outline.append({
-                                "title": text.split("\n")[0][:100],
-                                "page": idx + 1,
-                                "depth": 0
-                            })
-
-                return {
+                    # No usable bookmarks: build a flat Part/Chapter/Schedule index.
+                    outline = self._heading_index(reader)
+                result = {
                     "status": "success",
                     "file": path.name,
                     "total_pages": total_pages,
                     "outline": outline
                 }
+                if not outline:
+                    result["structure"] = "none"
+                    result["note"] = (
+                        "No usable structure in this file. Use workspace_search "
+                        "for headings, then workspace_read_page."
+                    )
+                return result
             except ImportError:
                 return {"status": "error", "message": "pypdf unavailable for outline"}
         elif ext == ".docx":

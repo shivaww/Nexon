@@ -251,6 +251,7 @@ class ChatClient {
     required String model,
     required List<ChatMessage> messages,
     bool studyModeEnabled = false,
+    bool studyBridgeAvailable = true,
   }) async {
     final isManagedMode = provider.id == 'nexon';
     final token =
@@ -285,8 +286,9 @@ class ChatClient {
                 .map((f) => f.name)
                 .toList();
             if (workspaceNames.isNotEmpty) {
-              finalText +=
-                  '\n\n[Attached workspace files: ${workspaceNames.join(', ')} — use workspace tools to read/search]';
+              finalText += studyBridgeAvailable
+                  ? '\n\n[Attached workspace files: ${workspaceNames.join(', ')}. Use workspace tools to read/search]'
+                  : '\n\n[Files stored in Termux and unreadable now because the bridge is offline: ${workspaceNames.join(', ')}. Tell the user to start the bridge to use them]';
             }
           }
           if (message.images.isNotEmpty) {
@@ -420,6 +422,7 @@ class ChatClient {
     required String model,
     required List<ChatMessage> messages,
     bool studyModeEnabled = false,
+    bool studyBridgeAvailable = true,
   }) async* {
     final isManagedMode = provider.id == 'nexon';
     final token =
@@ -453,8 +456,9 @@ class ChatClient {
                 .map((f) => f.name)
                 .toList();
             if (workspaceNames.isNotEmpty) {
-              finalText +=
-                  '\n\n[Attached workspace files: ${workspaceNames.join(', ')} — use workspace tools to read/search]';
+              finalText += studyBridgeAvailable
+                  ? '\n\n[Attached workspace files: ${workspaceNames.join(', ')}. Use workspace tools to read/search]'
+                  : '\n\n[Files stored in Termux and unreadable now because the bridge is offline: ${workspaceNames.join(', ')}. Tell the user to start the bridge to use them]';
             }
           }
           if (message.images.isNotEmpty) {
