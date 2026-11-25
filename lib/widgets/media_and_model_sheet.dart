@@ -2681,13 +2681,8 @@ class _MediaAndModelSheetState extends State<MediaAndModelSheet> {
                       _showExclusivitySnackBar('Study Mode', 'Deep Research');
                       return;
                     }
-                    final bridgeResult = await _checkBridgeAlive();
-                    if (bridgeResult['ok'] != true) {
-                      await widget.onSystemMessage(
-                        'Study Mode requires the Python bridge. Start it from Settings or run the bridge manually.',
-                      );
-                      return; // keep Study Mode off until the bridge is reachable
-                    }
+                    // Study Mode works without the bridge (inline attach, quiz
+                    // tool only), so no bridge check gates the switch.
                   }
                   setState(() => _studyModeEnabled = val);
                   await _saveStudyMode(val);

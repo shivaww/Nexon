@@ -255,6 +255,8 @@ class _ChatHomePageState extends State<ChatHomePage> with WidgetsBindingObserver
   bool _studyModeEnabled = false;
   // Live bridge status for the Study Mode pill: null until the first ping.
   bool? _bridgeOnline;
+  // True when the current Study Mode turn found the bridge unreachable.
+  bool _studyBridgeDown = false;
   bool _bridgePinging = false;
   Timer? _bridgeTimer;
   String _userName = '';
@@ -2542,6 +2544,7 @@ jobs:
         // Study Mode: Termux workspace tools only when the bridge is up.
         final bool studyBridgeAvailable =
             !_studyModeEnabled || await probeBridge(_customMcpUrl);
+        _studyBridgeDown = _studyModeEnabled && !studyBridgeAvailable;
         String systemPromptText = "";
 
         if (_deepResearchEnabled &&
@@ -3234,6 +3237,15 @@ jobs:
               // run_command / delete_path / git_push / service_* / dart_* stay
               // agentic-only; plain chat is rejected further below.
               final bool studyOnly = _studyModeEnabled && !_agenticEnabled;
+              if (_studyModeEnabled &&
+                  _studyBridgeDown &&
+                  toolName.startsWith('workspace_')) {
+                executedTools = true;
+                toolOutputs.add(
+                  'Tool Result [$toolName]:\n\n{"error":"No workspace in this chat: the Python bridge is offline, so $toolName is unavailable. Do not retry it. Answer from the files attached inline in this conversation, or tell the user to start the bridge."}',
+                );
+                continue;
+              }
               if (studyOnly && !toolName.startsWith('workspace_')) {
                 executedTools = true;
                 toolOutputs.add(
