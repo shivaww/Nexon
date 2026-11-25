@@ -579,7 +579,7 @@ class FullScreenSvgViewer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D1B2A),
+      backgroundColor: const Color(0xFFFBF6EC),
       body: SafeArea(
         child: Stack(
           children: [
@@ -602,7 +602,7 @@ class FullScreenSvgViewer extends StatelessWidget {
                         child: Text(
                           'Failed to render SVG: the generated code is invalid.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Color(0xFFFCA5A5), fontSize: 14),
+                          style: TextStyle(color: Color(0xFF991B1B), fontSize: 14),
                         ),
                       ),
                     ),
@@ -617,10 +617,10 @@ class FullScreenSvgViewer extends StatelessWidget {
               child: WarmGlassContainer(
                 borderRadius: BorderRadius.circular(16),
                 backgroundColor: const Color(
-                  0xFF0D1B2A,
+                  0xFFFFFBF2,
                 ).withValues(alpha: 0.72),
                 border: Border.all(
-                  color: const Color(0xFF1E3A5F).withValues(alpha: 0.6),
+                  color: const Color(0xFFDCCBB8).withValues(alpha: 0.6),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 sigma: 10.0,
@@ -628,11 +628,11 @@ class FullScreenSvgViewer extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white),
+                      icon: const Icon(Icons.close, color: Color(0xFF6C5946)),
                       onPressed: () => Navigator.pop(context),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.copy_all, color: Colors.white),
+                      icon: const Icon(Icons.copy_all, color: Color(0xFF6C5946)),
                       tooltip: 'Copy SVG code',
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: svgString));

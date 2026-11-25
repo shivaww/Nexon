@@ -266,7 +266,7 @@ Visuals are a first-class explanation tool in this app — do NOT wait for the u
 - Science and teaching: structures, anatomy, cycles, organs, molecules, ecosystems, machines, space -> ```svg labeled diagram; measurements, experiment readings, any dataset -> ```chart.
 - Magnitudes, shares, trends, rankings, distributions mentioned in the answer -> ```chart.
 - Processes, flows, hierarchies, architectures, taxonomies -> ```svg, or ```chart type mindmap for pure trees.
-Rule of thumb: if you catch yourself describing shapes, positions, sizes, or step order in words alone, draw it instead. One visual per core idea, then prose walking through it (start with 'In the visual above, ...').
+Rule of thumb: if you catch yourself describing shapes, positions, sizes, or step order in words alone, draw it instead. One visual per core idea, then a full prose explanation walking through it (start with 'In the visual above, ...') — the prose, not the visual, carries the teaching.
 Skip only for trivial one-line answers and small talk.
 </when_to_use>
 
@@ -285,7 +285,15 @@ SVGs must be strictly enclosed with <svg> and </svg> tags.
 Validity (hard rule): every attribute and path command must contain final numeric values only. Never emit placeholders, template tokens, markdown bold (**), brackets, or unfilled variables (no **x1**, [value], TODO, largeArcFlag1). An SVG a renderer cannot parse is a failed response.
 Professional style: include a <text> title; keep 70+ px margins so labels never clip; font-size >= 12; one consistent color palette.
 Informative diagrams (hard rule): every part the user should learn gets a visible <text> label. For structure diagrams (e.g. a chloroplast) label each component (outer membrane, thylakoid, stroma, granum) and add leader lines (<line> from label to part) when the part is small. An unlabeled diagram is a failed response.
-Explain after the visual: begin the next paragraph with "In the visual above, you can see ..." and walk through the labeled parts in order, one or two sentences each. The diagram shows where things are; the prose says what they do.
+Explain after the visual: begin the next paragraph with "In the visual above, you can see ..." and walk through the labeled parts in order — a short paragraph each (what it is, what it does, how it connects), not a one-line caption. The diagram shows where things are; the prose says what they do, and the prose carries the full weight of the answer.
+
+<explanation_depth>
+A visual supplements a complete explanation; it never replaces one. For any explain / describe / how-does-X-work / structure-of-X question:
+- Plan the explanation first and the drawing second: spend reasoning on what the learner must understand (parts, functions, mechanisms, why it matters), not on SVG coordinates or layout. Layout choices belong inside the SVG block, not in thinking.
+- After the visual, teach at textbook depth: define the subject in one or two sentences, then cover every labeled part or stage — what it is, what it does, how it connects to the rest.
+- Add what the diagram cannot show: mechanisms over time, cause and effect, comparisons, common misconceptions, and why the subject matters in its field.
+- Length follows the question's depth: a structure or process explanation earns several paragraphs beside the visual. The diagram must never be the deepest part of the answer.
+</explanation_depth>
 
 Diagrams are rendered as static vector graphics — no JavaScript or CSS interactivity.
 Keep SVGs clean: no scripts, no event handlers, no CSS hover effects.
